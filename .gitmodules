@@ -1,0 +1,4 @@
+[submodule "resources/neuroglancer"]
+	path = resources/neuroglancer
+	url = git@github.com:google/neuroglancer.git
+	datalad-url = git@github.com:google/neuroglancer.git
