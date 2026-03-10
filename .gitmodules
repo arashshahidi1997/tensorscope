@@ -21,3 +21,7 @@
 	path = resources/observable-plot
 	url = https://github.com/observablehq/plot
 	datalad-url = https://github.com/observablehq/plot
+[submodule "resources/uplot"]
+	path = resources/uplot
+	url = https://github.com/leeoniya/uPlot
+	datalad-url = https://github.com/leeoniya/uPlot
