@@ -17,3 +17,7 @@
 	path = resources/deck.gl
 	url = https://github.com/visgl/deck.gl
 	datalad-url = https://github.com/visgl/deck.gl
+[submodule "resources/observable-plot"]
+	path = resources/observable-plot
+	url = https://github.com/observablehq/plot
+	datalad-url = https://github.com/observablehq/plot
