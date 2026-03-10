@@ -25,3 +25,7 @@
 	path = resources/uplot
 	url = https://github.com/leeoniya/uPlot
 	datalad-url = https://github.com/leeoniya/uPlot
+[submodule "resources/perspective"]
+	path = resources/perspective
+	url = https://github.com/finos/perspective
+	datalad-url = https://github.com/finos/perspective
