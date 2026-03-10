@@ -6,3 +6,10 @@
 	path = resources/higlass
 	url = git@github.com:higlass/higlass.git
 	datalad-url = git@github.com:higlass/higlass.git
+[submodule "resources/nivo"]
+	path = resources/nivo
+	url = https://github.com/plouc/nivo
+[submodule "resources/visx"]
+	path = resources/visx
+	url = https://github.com/airbnb/visx
+	datalad-url = https://github.com/airbnb/visx
