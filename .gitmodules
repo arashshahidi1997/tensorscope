@@ -13,3 +13,7 @@
 	path = resources/visx
 	url = https://github.com/airbnb/visx
 	datalad-url = https://github.com/airbnb/visx
+[submodule "resources/deck.gl"]
+	path = resources/deck.gl
+	url = https://github.com/visgl/deck.gl
+	datalad-url = https://github.com/visgl/deck.gl
