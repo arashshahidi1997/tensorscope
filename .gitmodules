@@ -2,3 +2,7 @@
 	path = resources/neuroglancer
 	url = git@github.com:google/neuroglancer.git
 	datalad-url = git@github.com:google/neuroglancer.git
+[submodule "resources/higlass"]
+	path = resources/higlass
+	url = git@github.com:higlass/higlass.git
+	datalad-url = git@github.com:higlass/higlass.git
