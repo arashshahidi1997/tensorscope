@@ -29,3 +29,7 @@
 	path = resources/perspective
 	url = https://github.com/finos/perspective
 	datalad-url = https://github.com/finos/perspective
+[submodule "resources/jupyterlab"]
+	path = resources/jupyterlab
+	url = https://github.com/jupyterlab/jupyterlab
+	datalad-url = https://github.com/jupyterlab/jupyterlab
