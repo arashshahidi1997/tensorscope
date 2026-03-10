@@ -1,0 +1,827 @@
+openapi: 3.1.0
+info:
+  title: TensorScope API
+  version: 0.2.0
+paths:
+  /api/v1/state:
+    get:
+      tags:
+      - state
+      summary: Get State
+      operationId: get_state_api_v1_state_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StateDTO'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorDTO'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorDTO'
+  /api/v1/tensors:
+    get:
+      tags:
+      - tensors
+      summary: List Tensors
+      operationId: list_tensors_api_v1_tensors_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/TensorSummaryDTO'
+                type: array
+                title: Response List Tensors Api V1 Tensors Get
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorDTO'
+  /api/v1/tensors/{name}:
+    get:
+      tags:
+      - tensors
+      summary: Get Tensor
+      operationId: get_tensor_api_v1_tensors__name__get
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Name
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TensorMetaDTO'
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorDTO'
+          description: Not Found
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/tensors/{name}/slice:
+    post:
+      tags:
+      - tensors
+      summary: Get Tensor Slice
+      operationId: get_tensor_slice_api_v1_tensors__name__slice_post
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TensorSliceRequestDTO'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TensorSliceDTO'
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorDTO'
+          description: Not Found
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorDTO'
+          description: Bad Request
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/selection:
+    get:
+      tags:
+      - selection
+      summary: Get Selection
+      operationId: get_selection_api_v1_selection_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SelectionDTO'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorDTO'
+    put:
+      tags:
+      - selection
+      summary: Update Selection
+      operationId: update_selection_api_v1_selection_put
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectionDTO'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SelectionDTO'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorDTO'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/layout:
+    get:
+      tags:
+      - layout
+      summary: Get Layout
+      operationId: get_layout_api_v1_layout_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LayoutDTO'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorDTO'
+    put:
+      tags:
+      - layout
+      summary: Update Layout
+      operationId: update_layout_api_v1_layout_put
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LayoutUpdateDTO'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LayoutDTO'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorDTO'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/events:
+    get:
+      tags:
+      - events
+      summary: List Event Streams
+      operationId: list_event_streams_api_v1_events_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/EventStreamMetaDTO'
+                type: array
+                title: Response List Event Streams Api V1 Events Get
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorDTO'
+  /api/v1/events/{name}:
+    get:
+      tags:
+      - events
+      summary: Get Event Stream
+      operationId: get_event_stream_api_v1_events__name__get
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Name
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventStreamMetaDTO'
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorDTO'
+          description: Not Found
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/events/{name}/window:
+    get:
+      tags:
+      - events
+      summary: Get Event Window
+      operationId: get_event_window_api_v1_events__name__window_get
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Name
+      - name: t0
+        in: query
+        required: true
+        schema:
+          type: number
+          minimum: 0.0
+          title: T0
+      - name: t1
+        in: query
+        required: true
+        schema:
+          type: number
+          minimum: 0.0
+          title: T1
+      - name: ap
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            minimum: 0
+          - type: 'null'
+          title: Ap
+      - name: ml
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            minimum: 0
+          - type: 'null'
+          title: Ml
+      - name: channel
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            minimum: 0
+          - type: 'null'
+          title: Channel
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EventRecordDTO'
+                title: Response Get Event Window Api V1 Events  Name  Window Get
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorDTO'
+          description: Not Found
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorDTO'
+          description: Bad Request
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+components:
+  schemas:
+    ApiErrorDTO:
+      properties:
+        code:
+          type: string
+          title: Code
+        message:
+          type: string
+          title: Message
+        details:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Details
+      type: object
+      required:
+      - code
+      - message
+      title: ApiErrorDTO
+      description: Structured API error payload.
+    CoordSummaryDTO:
+      properties:
+        name:
+          type: string
+          title: Name
+        dtype:
+          type: string
+          title: Dtype
+        length:
+          type: integer
+          minimum: 0.0
+          title: Length
+        min:
+          anyOf:
+          - type: string
+          - type: number
+          - type: integer
+          - type: 'null'
+          title: Min
+        max:
+          anyOf:
+          - type: string
+          - type: number
+          - type: integer
+          - type: 'null'
+          title: Max
+        values:
+          anyOf:
+          - items:
+              anyOf:
+              - type: string
+              - type: number
+              - type: integer
+            type: array
+          - type: 'null'
+          title: Values
+      type: object
+      required:
+      - name
+      - dtype
+      - length
+      title: CoordSummaryDTO
+      description: Lightweight coordinate metadata.
+    DownsampleMethod:
+      type: string
+      enum:
+      - none
+      - minmax
+      - lttb
+      title: DownsampleMethod
+    EventRecordDTO:
+      properties:
+        record:
+          additionalProperties: true
+          type: object
+          title: Record
+      type: object
+      required:
+      - record
+      title: EventRecordDTO
+      description: Single event record.
+    EventStreamMetaDTO:
+      properties:
+        name:
+          type: string
+          title: Name
+        time_col:
+          type: string
+          title: Time Col
+        id_col:
+          type: string
+          title: Id Col
+        n_events:
+          type: integer
+          minimum: 0.0
+          title: N Events
+        time_range:
+          prefixItems:
+          - anyOf:
+            - type: number
+            - type: 'null'
+          - anyOf:
+            - type: number
+            - type: 'null'
+          type: array
+          maxItems: 2
+          minItems: 2
+          title: Time Range
+        columns:
+          items:
+            type: string
+          type: array
+          title: Columns
+      type: object
+      required:
+      - name
+      - time_col
+      - id_col
+      - n_events
+      - time_range
+      - columns
+      title: EventStreamMetaDTO
+      description: Event stream metadata.
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    LayoutDTO:
+      properties:
+        title:
+          type: string
+          title: Title
+        theme:
+          type: string
+          title: Theme
+        current_preset:
+          type: string
+          title: Current Preset
+        grid_assignments:
+          additionalProperties:
+            prefixItems:
+            - type: integer
+            - type: integer
+            - type: integer
+            - type: integer
+            type: array
+            maxItems: 4
+            minItems: 4
+          type: object
+          title: Grid Assignments
+        sidebar_panels:
+          items:
+            type: string
+          type: array
+          title: Sidebar Panels
+        available_presets:
+          items:
+            type: string
+          type: array
+          title: Available Presets
+      type: object
+      required:
+      - title
+      - theme
+      - current_preset
+      - grid_assignments
+      - sidebar_panels
+      - available_presets
+      title: LayoutDTO
+      description: Current layout descriptor.
+    LayoutUpdateDTO:
+      properties:
+        preset:
+          type: string
+          minLength: 1
+          title: Preset
+      type: object
+      required:
+      - preset
+      title: LayoutUpdateDTO
+      description: Request to switch layout presets.
+    SelectionDTO:
+      properties:
+        time:
+          type: number
+          minimum: 0.0
+          title: Time
+        freq:
+          type: number
+          minimum: 0.0
+          title: Freq
+        ap:
+          type: integer
+          minimum: 0.0
+          title: Ap
+        ml:
+          type: integer
+          minimum: 0.0
+          title: Ml
+        channel:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Channel
+      additionalProperties: false
+      type: object
+      required:
+      - time
+      - freq
+      - ap
+      - ml
+      title: SelectionDTO
+      description: Serialized selection state.
+    StateDTO:
+      properties:
+        session_id:
+          type: string
+          title: Session Id
+        active_tensor:
+          type: string
+          title: Active Tensor
+        selection:
+          $ref: '#/components/schemas/SelectionDTO'
+        layout:
+          $ref: '#/components/schemas/LayoutDTO'
+        tensors:
+          items:
+            $ref: '#/components/schemas/TensorSummaryDTO'
+          type: array
+          title: Tensors
+        events:
+          items:
+            $ref: '#/components/schemas/EventStreamMetaDTO'
+          type: array
+          title: Events
+      type: object
+      required:
+      - session_id
+      - active_tensor
+      - selection
+      - layout
+      - tensors
+      - events
+      title: StateDTO
+      description: Top-level state payload.
+    TensorMetaDTO:
+      properties:
+        name:
+          type: string
+          title: Name
+        dims:
+          items:
+            type: string
+          type: array
+          title: Dims
+        shape:
+          items:
+            type: integer
+          type: array
+          title: Shape
+        dtype:
+          type: string
+          title: Dtype
+        transform:
+          type: string
+          title: Transform
+        source:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Source
+        available_views:
+          items:
+            type: string
+          type: array
+          title: Available Views
+        coords:
+          items:
+            $ref: '#/components/schemas/CoordSummaryDTO'
+          type: array
+          title: Coords
+      type: object
+      required:
+      - name
+      - dims
+      - shape
+      - dtype
+      - transform
+      - available_views
+      - coords
+      title: TensorMetaDTO
+      description: Detailed tensor metadata.
+    TensorSliceDTO:
+      properties:
+        name:
+          type: string
+          title: Name
+        view_type:
+          type: string
+          title: View Type
+        dims:
+          items:
+            type: string
+          type: array
+          title: Dims
+        shape:
+          items:
+            type: integer
+          type: array
+          title: Shape
+        encoding:
+          type: string
+          title: Encoding
+        payload:
+          type: string
+          title: Payload
+        meta:
+          additionalProperties: true
+          type: object
+          title: Meta
+      type: object
+      required:
+      - name
+      - view_type
+      - dims
+      - shape
+      - encoding
+      - payload
+      - meta
+      title: TensorSliceDTO
+      description: Arrow-backed slice response.
+    TensorSliceRequestDTO:
+      properties:
+        view_type:
+          type: string
+          minLength: 1
+          title: View Type
+        selection:
+          $ref: '#/components/schemas/SelectionDTO'
+        time_range:
+          anyOf:
+          - prefixItems:
+            - type: number
+            - type: number
+            type: array
+            maxItems: 2
+            minItems: 2
+          - type: 'null'
+          title: Time Range
+        freq_range:
+          anyOf:
+          - prefixItems:
+            - type: number
+            - type: number
+            type: array
+            maxItems: 2
+            minItems: 2
+          - type: 'null'
+          title: Freq Range
+        channels:
+          anyOf:
+          - items:
+              type: integer
+            type: array
+          - type: 'null'
+          title: Channels
+        ap_range:
+          anyOf:
+          - prefixItems:
+            - type: integer
+            - type: integer
+            type: array
+            maxItems: 2
+            minItems: 2
+          - type: 'null'
+          title: Ap Range
+        ml_range:
+          anyOf:
+          - prefixItems:
+            - type: integer
+            - type: integer
+            type: array
+            maxItems: 2
+            minItems: 2
+          - type: 'null'
+          title: Ml Range
+        max_points:
+          anyOf:
+          - type: integer
+            minimum: 1.0
+          - type: 'null'
+          title: Max Points
+        downsample:
+          $ref: '#/components/schemas/DownsampleMethod'
+          default: minmax
+      additionalProperties: false
+      type: object
+      required:
+      - view_type
+      - selection
+      title: TensorSliceRequestDTO
+      description: Slice request body.
+    TensorSummaryDTO:
+      properties:
+        name:
+          type: string
+          title: Name
+        dims:
+          items:
+            type: string
+          type: array
+          title: Dims
+        shape:
+          items:
+            type: integer
+          type: array
+          title: Shape
+        dtype:
+          type: string
+          title: Dtype
+        transform:
+          type: string
+          title: Transform
+        source:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Source
+      type: object
+      required:
+      - name
+      - dims
+      - shape
+      - dtype
+      - transform
+      title: TensorSummaryDTO
+      description: Summary view used by GET /state and GET /tensors.
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
