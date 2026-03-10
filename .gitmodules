@@ -33,3 +33,7 @@
 	path = resources/jupyterlab
 	url = https://github.com/jupyterlab/jupyterlab
 	datalad-url = https://github.com/jupyterlab/jupyterlab
+[submodule "resources/jupyterlite"]
+	path = resources/jupyterlite
+	url = https://github.com/jupyterlite/jupyterlite
+	datalad-url = https://github.com/jupyterlite/jupyterlite
