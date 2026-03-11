@@ -5,11 +5,21 @@ type LayoutShellProps = PropsWithChildren<{
   title: string;
   sessionId: string;
   layout: LayoutDTO;
-  sidebar: ReactNode;
-  details: ReactNode;
+  /**
+   * Left navigation/control rail.
+   * Owns shared navigation controls (selection, layout preset, processing).
+   * Should not contain view-specific tool controls.
+   */
+  nav: ReactNode;
+  /**
+   * Right inspector/details rail.
+   * Owns context-sensitive detail panels (event table, tensor inspector).
+   * Content changes based on the active selection, not on which view is focused.
+   */
+  inspector: ReactNode;
 }>;
 
-export function LayoutShell({ title, sessionId, layout, sidebar, details, children }: LayoutShellProps) {
+export function LayoutShell({ title, sessionId, layout, nav, inspector, children }: LayoutShellProps) {
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -18,9 +28,9 @@ export function LayoutShell({ title, sessionId, layout, sidebar, details, childr
         <span className="topbar-chip muted">{sessionId.slice(0, 8)}</span>
       </header>
       <div className="workspace">
-        <aside className="sidebar-col">{sidebar}</aside>
+        <aside className="sidebar-col">{nav}</aside>
         <main className="main-col">{children}</main>
-        <section className="details-col">{details}</section>
+        <section className="details-col">{inspector}</section>
       </div>
     </div>
   );

@@ -64,6 +64,25 @@ export function useSetProcessing() {
   });
 }
 
+/**
+ * Clamp a time window to known data bounds.
+ *
+ * Prevents sending out-of-range slice requests that would return 0 samples
+ * and cause a 400 ("slice request returned no data") from the server.
+ * Falls back to the original window if timeCoord bounds are not available.
+ */
+export function clampWindow(
+  window: [number, number],
+  timeCoord: CoordSummary | undefined,
+): [number, number] {
+  const lo = typeof timeCoord?.min === "number" ? timeCoord.min : -Infinity;
+  const hi = typeof timeCoord?.max === "number" ? timeCoord.max : Infinity;
+  const clo = Math.max(window[0], lo);
+  const chi = Math.min(window[1], hi);
+  // If the window is entirely outside the data range, fall back to data bounds.
+  return clo < chi ? [clo, chi] : [lo === -Infinity ? window[0] : lo, hi === Infinity ? window[1] : hi];
+}
+
 /** Build a slice request for a given view type. Returns null if the view cannot be served. */
 export function makeDefaultSliceRequest(
   viewType: string,

@@ -11,6 +11,8 @@ Use this file for:
 
 Related docs:
 
+- [ADR index](../adr/index.md)
+- [Architecture invariants](./invariants.md)
 - [Prompt usage guide](../prompts/README.md)
 - [Context snapshot](../prompts/context_snapshot.md)
 - [Stable prompt context](../prompts/tensorscope/00_context.md)
@@ -28,13 +30,15 @@ A tensor is a named, typed `xarray.DataArray` with stable dims, coords, and meta
 
 ### Shared selection state
 
-Selection is the cross-view coordination contract. It should eventually represent:
+Selection is the cross-view coordination contract. It represents:
 
-- navigation state: time cursor, time range/window, channel selection, AP/ML selection, frequency selection, selected event
+- navigation state: time cursor, time range/window, channel selection, AP/ML selection, frequency selection, selected event identity
 - not view-local UI toggles
 - not processing configuration
 
-Current backend selection is a single validated object with `time`, `freq`, `ap`, `ml`, and optional `channel`. The frontend does not yet have a dedicated shared navigation store; [frontend/src/store/appStore.ts](/storage2/arash/projects/tensorscope/frontend/src/store/appStore.ts) still mixes app-shell state and navigation state.
+The frontend now has a dedicated navigation store in [frontend/src/store/selectionStore.ts](/storage2/arash/projects/tensorscope/frontend/src/store/selectionStore.ts) with a canonical `SelectionState` type: `{ timeCursor, timeWindow, spatial, freq, event }`. The app-shell store [frontend/src/store/appStore.ts](/storage2/arash/projects/tensorscope/frontend/src/store/appStore.ts) owns only shell-level state: `selectedTensor`, `activeViews`, `layoutDraft`.
+
+`toSelectionDTO(s: SelectionState): SelectionDTO` converts store state to the server wire format. `initFromDTO` bootstraps the store from the first API response.
 
 ### View
 
@@ -42,12 +46,10 @@ A view renders a projection or summary of a tensor for a specific task. Views sh
 
 ### Registries
 
-Near-term planned abstractions:
-
-- `TensorRegistry`: what tensors exist and what schema they follow
-- `ViewRegistry`: what views can render which tensor schemas
-
-The repo already has backend view mapping logic in [src/tensorscope/server/state.py](/storage2/arash/projects/tensorscope/src/tensorscope/server/state.py) and a frontend component registry in [frontend/src/registry/viewRegistry.ts](/storage2/arash/projects/tensorscope/frontend/src/registry/viewRegistry.ts), but these are still thin lookups rather than the full target abstraction.
+- `TensorRegistry` (backend): `TensorScopeState.tensors` in [src/tensorscope/core/state.py](/storage2/arash/projects/tensorscope/src/tensorscope/core/state.py) — named tensor nodes, list/add/get operations.
+- `ViewRegistry` (backend): `_VIEW_REGISTRY` in [src/tensorscope/server/state.py](/storage2/arash/projects/tensorscope/src/tensorscope/server/state.py) — maps dim tuples to available view types. `available_views(data)` and `tensor_meta()` expose this to the frontend via `TensorMetaDTO.available_views`.
+- `ViewRegistry` (frontend): [frontend/src/registry/viewRegistry.ts](/storage2/arash/projects/tensorscope/frontend/src/registry/viewRegistry.ts) — now contains both `VIEW_DESCRIPTORS: ViewDescriptor[]` (schema-compatibility declarations, mirrors backend) and `viewRegistry` (component lookup). `getAvailableViews(schema)` filters by `requiredDims`.
+- `ViewDescriptor` type in [frontend/src/types/view.ts](/storage2/arash/projects/tensorscope/frontend/src/types/view.ts): `{ id, label, requiredDims, canRender? }`.
 
 ## Current architecture
 
@@ -91,15 +93,18 @@ Current anchor files:
 
 ### 3. Workspace shell layer
 
-- top bar / session identity
-- navigation controls
-- main linked views
-- detail panel slot
+- top bar / session identity (`LayoutShell`)
+- left nav/control rail (`NavRail`) — shared navigation controls and processing settings
+- central linked workspace (`WorkspaceMain`) — all 5 view queries + tensor/overview
+- right inspector rail (`InspectorPanel`) — tensor summary, selection summary, event table
 
 Current anchor files:
 
-- [frontend/src/App.tsx](/storage2/arash/projects/tensorscope/frontend/src/App.tsx)
-- [frontend/src/components/layout/LayoutShell.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/layout/LayoutShell.tsx)
+- [frontend/src/App.tsx](/storage2/arash/projects/tensorscope/frontend/src/App.tsx) — bootstrap + selection mutation + event inspector assembly
+- [frontend/src/components/layout/LayoutShell.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/layout/LayoutShell.tsx) — `nav`, `inspector`, `children` slots
+- [frontend/src/components/layout/NavRail.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/layout/NavRail.tsx)
+- [frontend/src/components/layout/InspectorPanel.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/layout/InspectorPanel.tsx)
+- [frontend/src/components/views/WorkspaceMain.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/WorkspaceMain.tsx)
 
 ### 4. View/rendering layer
 
@@ -116,24 +121,29 @@ Current anchor files:
 - [frontend/src/components/views/NavigatorView.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/NavigatorView.tsx)
 - [frontend/src/components/views/SpatialMapSliceView.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/SpatialMapSliceView.tsx)
 
-## Near-term target architecture
+## M1 implementation (complete as of 2026-03-11)
 
-The near-term goal is not a new product architecture from scratch. It is a cleanup pass that makes the current prototype safer to extend.
+The M1 milestone introduced the following architecture changes over the initial prototype:
 
-Expected near-term changes:
+**Implemented:**
 
-- introduce a dedicated shared frontend navigation store
-- keep view-local tool state outside that shared store
-- keep processing settings separate from navigation state
-- formalize lightweight tensor and view registry contracts
-- preserve the current workspace-shell layout while clarifying panel responsibilities
+- canonical `SelectionState` in [frontend/src/types/selection.ts](/storage2/arash/projects/tensorscope/frontend/src/types/selection.ts): `{ timeCursor, timeWindow, spatial, freq, event }`
+- `useSelectionStore` (Zustand) as dedicated navigation store, replacing the mixed `appStore`
+- `toSelectionDTO` / `initFromDTO` bridge between store and wire format
+- `useChartTools(chartRef)` hook + `ChartToolbar` for view-local tool state
+- `attachGestures` / `attachNavigatorGestures` as module-level functions outside React
+- `useOverviewDetail()` hook — overview↔detail navigation contract
+- `useEventNavigation()` hook — event identity in the store, separate from time cursor
+- `NavRail` / `WorkspaceMain` / `InspectorPanel` components extracted from App.tsx
+- `VIEW_DESCRIPTORS` + `getAvailableViews(schema)` in [frontend/src/registry/viewRegistry.ts](/storage2/arash/projects/tensorscope/frontend/src/registry/viewRegistry.ts)
+- 39 frontend unit tests (Vitest + jsdom) covering stores and hooks
+- `InspectorPanel` with tensor summary, selection summary, event table
 
-Planned, not yet implemented:
+**Planned (M2 and beyond):**
 
-- canonical frontend `SelectionState` module
-- first-class `TensorRegistry` abstraction shared across frontend/backend concerns
-- first-class `ViewRegistry` abstraction richer than the current lookup tables
-- event-centric navigation model beyond the current event window and overlay behavior
+- multi-tensor session orchestration with ViewRegistry-driven layout
+- GPU-accelerated spectrogram rendering
+- richer event-centric exploration (event segments, epoch views)
 
 ## State model
 
@@ -185,7 +195,7 @@ Recommended structure:
 - central linked workspace
 - right inspector/details rail
 
-Current implementation already approximates this via `sidebar`, `main`, and `details` slots in [frontend/src/components/layout/LayoutShell.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/layout/LayoutShell.tsx). The details slot currently behaves more like a general side panel than a mature inspector.
+Implemented in M1 via `nav`, `children`, and `inspector` slots in [frontend/src/components/layout/LayoutShell.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/layout/LayoutShell.tsx). The inspector slot is now `InspectorPanel` showing tensor metadata, selection summary, and event table.
 
 Guardrail: move view-specific controls out of the global sidebar when they start multiplying. Keep the shell centered on navigation, layout, and shared inspection.
 
@@ -223,6 +233,8 @@ Guardrail: a view should publish selection intent into shared state, not call an
 
 ## Guardrails
 
+The cross-milestone rules are collected in [invariants.md](./invariants.md). The list below is the short operational summary inside this architecture overview.
+
 - Do not let views coordinate by directly mutating each other.
 - Do not push hot pointer-move rendering through React state if an imperative chart API can handle it.
 - Do not collapse navigation state, processing state, and view-local state into one untyped store.
@@ -233,37 +245,30 @@ Guardrail: a view should publish selection intent into shared state, not call an
 
 ## Current milestone
 
-As of March 11, 2026, the repo is between an early frontend prototype and the intended M1 linked multiscale explorer.
+As of March 11, 2026, M1 is complete.
 
-Already present:
+Implemented in M1:
 
-- backend tensor/session API
-- frontend workspace shell
-- linked timeseries and spatial selection
-- navigator overview
-- initial view registry mapping
-- `uPlot` use for timeseries and navigator
+- dedicated shared frontend `SelectionState` store (`useSelectionStore`)
+- navigation state separated from shell state and view-local state
+- `VIEW_DESCRIPTORS` + `getAvailableViews(schema)` frontend view registry
+- workspace-shell with `NavRail`, `WorkspaceMain`, `InspectorPanel`
+- timeseries zoom feedback loop closes via `setScale` hook → `setTimeWindow`
+- event-centric navigation: event identity in store, decoupled from time cursor
+- 39 unit tests across stores and hooks
 
-Not yet complete:
+Next: M2 (multi-tensor orchestration, richer event semantics, GPU path exploration)
 
-- dedicated shared frontend `SelectionState` store with a clean navigation contract
-- mature tensor and view registries
-- formal workspace-shell separation between navigation, inspector, and per-view tools
-- event track and richer linked event semantics
-- architecture docs that future agents can use as a stable contract
+## Open design questions (M2 scope)
 
-## Open design questions
-
-- What should the canonical frontend `SelectionState` include beyond the current backend fields: visible window, selected event, frequency band, or all of them?
-- Should the visible time window live inside shared navigation state or beside it?
-- How much of the future registry model should be authored by the server versus the frontend?
-- What is the cleanest way to represent event-centric navigation without coupling the event table, overlays, and timeseries view?
+- Should `getAvailableViews` on the frontend replace the server `available_views` call, or do both serve different purposes?
+- Multi-tensor workspace: how do views bind to specific tensors when more than one is active?
+- Event segments: should epoch/segment selection enter `SelectionState` or stay outside shared nav?
 
 ## Current known gaps
 
-- The frontend store is still an app-shell store, not yet the canonical navigation architecture.
-- The backend and frontend each encode parts of the view capability model.
-- The current timeseries implementation works, but lifecycle and tool concerns are still tightly coupled inside one component.
-- Existing notes such as [docs/frontend-phase3.md](/storage2/arash/projects/tensorscope/docs/frontend-phase3.md) contain stale statements about placeholder rendering, so newer docs should prefer the hand-off note and direct code inspection.
+- The `InspectorPanel` selection summary shows only live store values; coord ranges (e.g., freq bounds) are not yet shown.
+- `getAvailableViews` is implemented but not yet wired to the tensor chooser UI in `WorkspaceMain`.
+- Existing notes such as [docs/frontend-phase3.md](/storage2/arash/projects/tensorscope/docs/frontend-phase3.md) contain stale statements about placeholder rendering; prefer direct code inspection for current view state.
 
 When this document changes materially, also update [../prompts/context_snapshot.md](../prompts/context_snapshot.md) and the scoped prompts under [../prompts/tensorscope/](../prompts/tensorscope/).

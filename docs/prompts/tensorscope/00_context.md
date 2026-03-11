@@ -24,22 +24,23 @@ TensorScope is a tensor-centric neurophysiology exploration workspace with linke
 - `uPlot` is the preferred renderer for dense timeseries and overview timelines
 - GPU acceleration is optional future work, not a prerequisite for current milestones
 
-## Near-term target architecture
+## M1 implementation (complete as of 2026-03-11)
 
-- shared `SelectionState` store
-- `TensorRegistry`
-- `ViewRegistry`
-- workspace-shell UI architecture
-- overview/detail multiscale navigation
-- event-aware linked views
+- `useSelectionStore` — dedicated navigation store: `{ timeCursor, timeWindow, spatial, freq, event }`
+- `useAppStore` — shell only: `selectedTensor`, `activeViews`, `layoutDraft`
+- `toSelectionDTO` / `initFromDTO` — store ↔ server wire format
+- `useChartTools(chartRef)` + `ChartToolbar` — view-local tool state
+- `useOverviewDetail()` / `useEventNavigation()` — named contracts for navigation flows
+- `NavRail` / `WorkspaceMain` / `InspectorPanel` — workspace shell components
+- `VIEW_DESCRIPTORS` + `getAvailableViews(schema)` in `frontend/src/registry/viewRegistry.ts`
 
 ## Current repo reality
 
-- backend core and server already exist in `src/tensorscope/`
-- frontend prototype already exists in `frontend/`
-- `uPlot` is already used in the navigator and timeseries views
-- frontend architecture is not yet fully aligned with the target shared-state model
-- the current frontend store is [frontend/src/store/appStore.ts](/storage2/arash/projects/tensorscope/frontend/src/store/appStore.ts), not yet a dedicated shared navigation store
+- M1 linked multiscale explorer complete
+- backend core and server in `src/tensorscope/`
+- frontend in `frontend/`, anchored on `selectionStore` + workspace shell components
+- 39 unit tests; `npm run test` passes
+- next milestone is M2: multi-tensor orchestration and richer event semantics
 
 ## Default guardrails for future tasks
 

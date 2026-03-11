@@ -3,6 +3,7 @@
 ## Core docs
 
 - [Architecture](./architecture/tensorscope.md)
+- [ADR index](./adr/index.md)
 - [Prompt docs guide](./prompts/README.md)
 - [Prompt roadmap](./prompts/roadmap.md)
 - [Context snapshot](./prompts/context_snapshot.md)

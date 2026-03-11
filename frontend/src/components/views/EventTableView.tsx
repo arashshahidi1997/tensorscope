@@ -5,7 +5,14 @@ type Props = {
   streamMeta: EventStreamMetaDTO | null;
   events: EventRecordDTO[];
   selectedTime: number;
+  /** Identity of the currently active event row (from selectionStore.event.eventId). */
+  selectedEventId?: string | number | null;
   onSelectTime: (t: number) => void;
+  /**
+   * Called when the user clicks an event row.
+   * The caller should update selectionStore.event AND commit the time cursor.
+   */
+  onSelectEvent?: (eventId: string | number, streamName: string, t: number) => void;
   onPrev: () => void;
   onNext: () => void;
 };
@@ -14,7 +21,9 @@ export function EventTableView({
   streamMeta,
   events,
   selectedTime,
+  selectedEventId,
   onSelectTime,
+  onSelectEvent,
   onPrev,
   onNext,
 }: Props) {
@@ -26,7 +35,7 @@ export function EventTableView({
     );
   }
 
-  const cols = streamMeta.columns.slice(0, 6); // cap displayed columns
+  const cols = streamMeta.columns.slice(0, 6);
 
   return (
     <div className="control-stack">
@@ -60,13 +69,25 @@ export function EventTableView({
               {events.map((ev, idx) => {
                 const record = ev.record as Record<string, unknown>;
                 const t = toNumber(record.t ?? record[streamMeta.time_col]);
-                const isActive =
-                  t !== null && Math.abs(t - selectedTime) < 0.05;
+                const eventId = record[streamMeta.id_col];
+
+                // Prefer explicit event identity match; fall back to time proximity
+                // so the row still highlights when navigating via prev/next before
+                // the event ID is captured in the store.
+                const isActive = selectedEventId != null
+                  ? eventId === selectedEventId
+                  : t !== null && Math.abs(t - selectedTime) < 0.05;
+
                 return (
                   <tr
                     key={idx}
                     className={isActive ? "event-row active" : "event-row"}
-                    onClick={() => { if (t !== null) onSelectTime(t); }}
+                    onClick={() => {
+                      if (t === null) return;
+                      const id = eventId as string | number;
+                      onSelectEvent?.(id, streamMeta.name, t);
+                      onSelectTime(t);
+                    }}
                   >
                     {cols.map((col) => (
                       <td key={col}>
