@@ -27,7 +27,7 @@ The repo also contains design studies, hand-off notes, and reference-study mater
 
 ## Current TensorScope status
 
-M1 linked multiscale explorer complete as of 2026-03-11.
+M1 complete. M2 in progress as of 2026-03-11 (Prompt 12 done).
 
 Implemented:
 
@@ -45,7 +45,17 @@ Implemented:
 
 ## Current milestone
 
-**M1 complete.** Next milestone is M2: multi-tensor orchestration, GPU path exploration, richer event semantics.
+**M2 in progress.** M1 complete. M2 goal: scalable data access (chunked/LOD-aware),
+worker-backed rendering, and core scientific views (spectrogram improvements, channel
+grid, event browser, peri-event views, renderer contracts).
+
+M2 completed so far:
+
+- **Prompt 12** — `DataSource` contract formalized:
+  - `DataSource` interface + `SliceOptions` + `createTensorDataSource` factory
+    in [frontend/src/api/dataSource.ts](../../frontend/src/api/dataSource.ts)
+  - `useSliceQuery` / `makeDefaultSliceRequest` cross-referenced to the interface
+  - `SliceOptions.maxPoints` named as the pixel-budget anchor for Prompt 13 (LOD)
 
 ## Inspect these files first
 
@@ -65,6 +75,8 @@ Implemented:
 
 ### Frontend architecture anchors
 
+- [frontend/src/api/dataSource.ts](/storage2/arash/projects/tensorscope/frontend/src/api/dataSource.ts) — DataSource interface + SliceOptions + factory (M2 Prompt 12)
+- [frontend/src/api/queries.ts](/storage2/arash/projects/tensorscope/frontend/src/api/queries.ts) — useSliceQuery, makeDefaultSliceRequest, clampWindow
 - [frontend/src/App.tsx](/storage2/arash/projects/tensorscope/frontend/src/App.tsx) — bootstrap + selection mutation
 - [frontend/src/store/appStore.ts](/storage2/arash/projects/tensorscope/frontend/src/store/appStore.ts) — shell state only
 - [frontend/src/store/selectionStore.ts](/storage2/arash/projects/tensorscope/frontend/src/store/selectionStore.ts) — navigation state

@@ -4,9 +4,13 @@ import "uplot/dist/uPlot.min.css";
 import { decodeArrowSlice, extractFreqCurve } from "../../api/arrow";
 import type { SliceViewProps } from "./viewTypes";
 
-export function PSDSliceView({ slice, selection }: SliceViewProps) {
+export function PSDSliceView({ slice, selection, onSelectFreq }: SliceViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<uPlot | null>(null);
+
+  // Stable ref — updated every render, never causes chart recreation
+  const onSelectFreqRef = useRef(onSelectFreq);
+  useEffect(() => { onSelectFreqRef.current = onSelectFreq; });
 
   // Decode once per payload
   const { freqs, values } = useMemo(() => {
@@ -44,7 +48,19 @@ export function PSDSliceView({ slice, selection }: SliceViewProps) {
 
     chartRef.current = new uPlot(opts, data, containerRef.current);
 
+    // Gap 5: click → onSelectFreq. Reads stable ref so chart doesn't need recreating
+    // when the callback changes. Completes the bidirectional freq link:
+    //   store.freq → chart cursor  (existing setCursor effect below)
+    //   chart click → store.freq   (new)
+    const handleFreqClick = (e: MouseEvent) => {
+      const rect = chartRef.current!.over.getBoundingClientRect();
+      const freq = chartRef.current!.posToVal(e.clientX - rect.left, "x");
+      if (Number.isFinite(freq)) onSelectFreqRef.current?.(freq);
+    };
+    chartRef.current.over.addEventListener("click", handleFreqClick);
+
     return () => {
+      chartRef.current?.over.removeEventListener("click", handleFreqClick);
       chartRef.current?.destroy();
       chartRef.current = null;
     };

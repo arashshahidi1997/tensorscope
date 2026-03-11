@@ -9,7 +9,7 @@
  * (e.g. clicking a time point or a spatial cell commits the new selection to the
  * server and invalidates dependent queries).
  */
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import {
   clampWindow,
   makeDefaultSliceRequest,
@@ -34,7 +34,11 @@ type WorkspaceMainProps = {
 export function WorkspaceMain({ onCommitSelection }: WorkspaceMainProps) {
   const { selectedTensor, activeViews, setSelectedTensor, toggleView } = useAppStore();
   const selectionState = useSelectionStore();
-  const { timeWindow, setTimeWindow } = selectionState;
+  const { timeWindow, setTimeWindow, setFreq } = selectionState;
+
+  // Store-local freq update — no server round-trip; spectrogram and PSD already
+  // render the full freq range and project the cursor client-side.
+  const handleSelectFreq = useCallback((freq: number) => setFreq({ freq }), [setFreq]);
   const selectionDraft = toSelectionDTO(selectionState);
 
   const stateQuery = useStateQuery();
@@ -153,6 +157,8 @@ export function WorkspaceMain({ onCommitSelection }: WorkspaceMainProps) {
         <SpectrogramComponent
           slice={spectrogramSliceQuery.data}
           selection={selectionDraft}
+          onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
+          onSelectFreq={handleSelectFreq}
         />
       ) : null}
 
@@ -161,6 +167,7 @@ export function WorkspaceMain({ onCommitSelection }: WorkspaceMainProps) {
         <PSDComponent
           slice={psdSliceQuery.data}
           selection={selectionDraft}
+          onSelectFreq={handleSelectFreq}
         />
       ) : null}
     </div>

@@ -48,6 +48,7 @@ Primary focus:
 9. [19_perievent_views.md](./19_perievent_views.md)
 10. [20_spatial_propagation.md](./20_spatial_propagation.md)
 11. [21_renderer_abstraction.md](./21_renderer_abstraction.md)
+12. [22_m2_code_revision.md](./22_m2_code_revision.md)
 
 ## Recommended workflow for agents
 

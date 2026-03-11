@@ -264,7 +264,19 @@ export function TimeseriesSliceView({
     });
     ro.observe(el);
 
+    // Correct the size once after the browser has finished laying out the
+    // container. clientWidth can be 0 at effect time (the parent grid column
+    // may not have been measured yet), so the chart is created at the fallback
+    // width. The rAF fires after the next paint, when the true CSS width is known.
+    const rafId = requestAnimationFrame(() => {
+      const w = el.clientWidth || el.getBoundingClientRect().width;
+      if (w && chartRef.current && w !== chartRef.current.width) {
+        chartRef.current.setSize({ width: w, height: 260 });
+      }
+    });
+
     return () => {
+      cancelAnimationFrame(rafId);
       ro.disconnect();
       detachGestures();
       chartRef.current = null;

@@ -120,6 +120,8 @@ Current anchor files:
 - [frontend/src/components/views/TimeseriesSliceView.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/TimeseriesSliceView.tsx)
 - [frontend/src/components/views/NavigatorView.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/NavigatorView.tsx)
 - [frontend/src/components/views/SpatialMapSliceView.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/SpatialMapSliceView.tsx)
+- [frontend/src/components/views/SpectrogramView.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/SpectrogramView.tsx) — Canvas 2D, inferno colormap, time-cursor overlay; wired in `WorkspaceMain`
+- [frontend/src/components/views/PSDSliceView.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/PSDSliceView.tsx)
 
 ## M1 implementation (complete as of 2026-03-11)
 
@@ -231,6 +233,34 @@ Nominal flow:
 
 Guardrail: a view should publish selection intent into shared state, not call another view directly.
 
+### DataSource contract (M2, Prompt 12)
+
+The step "shared navigation state → slice request → server response" is formalized
+as a `DataSource` interface in [frontend/src/api/dataSource.ts](../../frontend/src/api/dataSource.ts).
+
+```
+SelectionState (store)
+  → toSelectionDTO()
+  → DataSource.slice(viewType, selection, options?)
+      → makeDefaultSliceRequest()     [queries.ts]   ← per-view pixel-budget defaults
+      → useSliceQuery(name, request)  [queries.ts]   ← React Query cache + dedup
+      → api.getTensorSlice()          [client.ts]    ← HTTP POST
+      → apply_slice_request()         [server/state.py] ← window + downsample + project
+      → TensorSliceDTO (Arrow IPC)
+```
+
+Key types in `dataSource.ts`:
+
+- `DataSource` — the interface views code against: `{ name, slice(viewType, selection, options?) }`
+- `SliceOptions` — bounded access parameters: `{ timeRange, freqRange, maxPoints, downsample }`
+- `createTensorDataSource(name, fetchFn)` — factory for the HTTP-backed implementation
+
+`SliceOptions.maxPoints` is the pixel budget for the time axis, analogous to the `width`
+argument in the old cogpy/datashader `rasterize(element, aggregator, width=N)` call —
+it controls output resolution, not the data window. Prompt 13 (LOD pipeline) will wire
+`maxPoints` to actual viewport pixel width. Prompt 14 (worker) will move Arrow decode
+off the UI thread behind the same interface.
+
 ## Guardrails
 
 The cross-milestone rules are collected in [invariants.md](./invariants.md). The list below is the short operational summary inside this architecture overview.
@@ -245,7 +275,7 @@ The cross-milestone rules are collected in [invariants.md](./invariants.md). The
 
 ## Current milestone
 
-As of March 11, 2026, M1 is complete.
+M1 is complete. M2 is in progress as of 2026-03-11.
 
 Implemented in M1:
 
@@ -257,7 +287,14 @@ Implemented in M1:
 - event-centric navigation: event identity in store, decoupled from time cursor
 - 39 unit tests across stores and hooks
 
-Next: M2 (multi-tensor orchestration, richer event semantics, GPU path exploration)
+Implemented in M2 so far (Prompt 12):
+
+- `DataSource` interface + `SliceOptions` + `createTensorDataSource` factory
+  in [frontend/src/api/dataSource.ts](../../frontend/src/api/dataSource.ts)
+
+Next in M2: LOD pipeline (Prompt 13), worker-backed Arrow decode (Prompt 14),
+spectrogram improvements (Prompt 15), channel grid (Prompt 16), linked crosshair
+(Prompt 17), event browser (Prompt 18), peri-event views (Prompt 19).
 
 ## Open design questions (M2 scope)
 

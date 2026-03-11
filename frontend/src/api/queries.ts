@@ -1,3 +1,21 @@
+/**
+ * React Query hooks and slice-request factories for TensorScope views.
+ *
+ * ## DataSource contract
+ *
+ * The functions in this file implement the `DataSource` contract defined in
+ * `./dataSource.ts`. Views that call `useSliceQuery(name, makeDefaultSliceRequest(...))`
+ * already satisfy that contract; the interface in `dataSource.ts` makes it explicit
+ * so that Prompt 13 (LOD pipeline) and Prompt 14 (worker) can introduce
+ * alternative implementations behind the same typed interface.
+ *
+ * Relationship:
+ *   - `useSliceQuery`           → cached transport layer (React Query + HTTP)
+ *   - `makeDefaultSliceRequest` → per-view pixel-budget defaults
+ *   - `makeNavigatorRequest`    → full-range navigator variant
+ *   - `clampWindow`             → guard against out-of-range slice requests
+ *   - `DataSource` (dataSource.ts) → the interface all of the above implicitly implement
+ */
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type { CoordSummary, ProcessingParamsDTO, SelectionDTO, TensorSliceRequestDTO } from "./types";
@@ -17,6 +35,16 @@ export function useTensorQuery(name: string | null) {
   });
 }
 
+/**
+ * Cached slice query — the transport layer of the `DataSource` contract.
+ *
+ * React Query provides deduplication, stale-while-revalidate, and
+ * `keepPreviousData` to avoid blank frames during navigation.
+ * The query key `["slice", name, request]` uses the full request object,
+ * so any navigation change fires a new fetch.
+ *
+ * See `DataSource` in `./dataSource.ts` for the interface this implements.
+ */
 export function useSliceQuery(name: string | null, request: TensorSliceRequestDTO | null) {
   return useQuery({
     queryKey: ["slice", name, request],
@@ -83,7 +111,17 @@ export function clampWindow(
   return clo < chi ? [clo, chi] : [lo === -Infinity ? window[0] : lo, hi === Infinity ? window[1] : hi];
 }
 
-/** Build a slice request for a given view type. Returns null if the view cannot be served. */
+/**
+ * Build a slice request for a given view type.
+ *
+ * This function encodes the per-view pixel budgets (`max_points`) and default
+ * downsampling strategies. These defaults are the concrete values behind the
+ * `SliceOptions.maxPoints` and `SliceOptions.downsample` fields described in
+ * `./dataSource.ts`.
+ *
+ * Prompt 13 (LOD pipeline) will replace or supplement these hardcoded budgets
+ * with values derived from actual viewport pixel width.
+ */
 export function makeDefaultSliceRequest(
   viewType: string,
   selection: SelectionDTO,
