@@ -89,6 +89,7 @@ export type TensorSliceDTO = {
     coords?: CoordSummary[];
     axis_labels?: string[];
     units?: string | null;
+    selected_time?: string | number | null;
     downsampling?: {
       method: DownsampleMethod;
       max_points: number | null;
@@ -96,6 +97,21 @@ export type TensorSliceDTO = {
       returned_shape: number[];
     };
   };
+};
+
+export type ProcessingParamsDTO = {
+  cmr: boolean;
+  bandpass_lo: number | null;
+  bandpass_hi: number | null;
+  bandpass_order: number;
+  notch_freq: number | null;
+  notch_harmonics: number;
+  notch_freqs_list: number[] | null;
+  notch_q: number;
+  spatial_median: boolean;
+  spatial_median_size: number;
+  zscore: boolean;
+  zscore_robust: boolean;
 };
 
 export type ApiErrorDTO = {

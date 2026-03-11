@@ -1,11 +1,8 @@
 import { decodeArrowSlice } from "../../api/arrow";
-import type { TensorSliceDTO } from "../../api/types";
+import { SliceMeta } from "./SliceMeta";
+import type { SliceViewProps } from "./viewTypes";
 
-type PlaceholderSliceViewProps = {
-  slice: TensorSliceDTO;
-};
-
-export function PlaceholderSliceView({ slice }: PlaceholderSliceViewProps) {
+export function PlaceholderSliceView({ slice }: SliceViewProps) {
   const decoded = decodeArrowSlice(slice);
   const previewRows = decoded.rows.slice(0, 6);
 
@@ -16,24 +13,7 @@ export function PlaceholderSliceView({ slice }: PlaceholderSliceViewProps) {
         <p>Arrow IPC payload decoded client-side.</p>
       </div>
 
-      <div className="meta-grid">
-        <div>
-          <span className="meta-label">Encoding</span>
-          <strong>{slice.encoding}</strong>
-        </div>
-        <div>
-          <span className="meta-label">Shape</span>
-          <strong>{slice.shape.join(" × ")}</strong>
-        </div>
-        <div>
-          <span className="meta-label">Downsample</span>
-          <strong>{slice.meta.downsampling?.method ?? "n/a"}</strong>
-        </div>
-        <div>
-          <span className="meta-label">Rows</span>
-          <strong>{decoded.rows.length}</strong>
-        </div>
-      </div>
+      <SliceMeta slice={slice} />
 
       <div className="table-wrap">
         <table>

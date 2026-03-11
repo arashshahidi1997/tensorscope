@@ -112,10 +112,12 @@ class TensorSliceRequestDTO(BaseModel):
 
     @model_validator(mode="after")
     def validate_request(self) -> "TensorSliceRequestDTO":
-        time_like = self.view_type in {"timeseries", "navigator", "spectrogram", "psd_average", "psd_spatial"}
-        if time_like and self.time_range is None:
+        # psd_average / psd_spatial may be requested against pre-computed freq-only tensors
+        # that have no time dimension, so time_range is optional for those view types.
+        time_required = self.view_type in {"timeseries", "navigator", "spectrogram"}
+        if time_required and self.time_range is None:
             raise ValueError("time_range is required for time-based slice requests")
-        if time_like and self.max_points is None:
+        if time_required and self.max_points is None:
             raise ValueError("max_points is required for time-based slice requests")
 
         for value in (self.time_range, self.freq_range, self.ap_range, self.ml_range):
@@ -135,6 +137,32 @@ class TensorSliceDTO(BaseModel):
     encoding: str
     payload: str
     meta: dict[str, Any]
+
+
+class ProcessingParamsDTO(BaseModel):
+    """Processing pipeline parameters (applied to raw tensor before slicing)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cmr: bool = False
+    bandpass_lo: float | None = Field(default=None, ge=0.1)
+    bandpass_hi: float | None = Field(default=None, ge=0.1)
+    bandpass_order: int = Field(default=4, ge=1, le=8)
+    notch_freq: float | None = Field(default=None, ge=0.1)
+    notch_harmonics: int = Field(default=3, ge=1, le=10)
+    notch_freqs_list: list[float] | None = None  # explicit list mode; overrides notch_freq/harmonics
+    notch_q: float = Field(default=30.0, ge=1.0)
+    spatial_median: bool = False
+    spatial_median_size: int = Field(default=3, ge=1, le=15)
+    zscore: bool = False
+    zscore_robust: bool = False
+
+    @model_validator(mode="after")
+    def validate_bandpass(self) -> "ProcessingParamsDTO":
+        if self.bandpass_lo is not None and self.bandpass_hi is not None:
+            if self.bandpass_hi <= self.bandpass_lo:
+                raise ValueError("bandpass_hi must be greater than bandpass_lo")
+        return self
 
 
 class ApiErrorDTO(BaseModel):

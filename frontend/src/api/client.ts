@@ -3,6 +3,7 @@ import type {
   EventStreamMetaDTO,
   LayoutDTO,
   LayoutUpdateDTO,
+  ProcessingParamsDTO,
   SelectionDTO,
   StateDTO,
   TensorMetaDTO,
@@ -77,5 +78,16 @@ export const api = {
 
   getEventWindow(name: string, params: URLSearchParams): Promise<EventRecordDTO[]> {
     return request<EventRecordDTO[]>(`/api/v1/events/${name}/window?${params.toString()}`);
+  },
+
+  getProcessing(): Promise<ProcessingParamsDTO> {
+    return request<ProcessingParamsDTO>("/api/v1/processing");
+  },
+
+  setProcessing(body: ProcessingParamsDTO): Promise<ProcessingParamsDTO> {
+    return request<ProcessingParamsDTO>("/api/v1/processing", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
   },
 };

@@ -7,16 +7,20 @@ FRONTEND_DIR ?= frontend
 DATA_PATH ?= data/demo_lfp.nc
 HOST ?= 127.0.0.1
 PORT ?= 8000
+RESOURCE_NAME ?=
+RESOURCE_URL ?=
+DATALAD ?= datalad
 
 .PHONY: projio-init projio-config-user projio-config-show projio-status projio-auth
 .PHONY: projio-gh projio-gl projio-ria site-build site-serve mcp
-.PHONY: help dev demo-data dev-ui frontend-install frontend-dev frontend-build test build check publish-test publish clean
+.PHONY: help dev demo-data dev-ui add-resource frontend-install frontend-dev frontend-build test build check publish-test publish clean
 
 help:
 	@printf '%s\n' \
 		'make dev               # install editable package with dev extras' \
 		'make demo-data         # generate a deterministic local demo dataset' \
 		'make dev-ui            # run the TensorScope API and Vite dev server together' \
+		'make add-resource RESOURCE_NAME=name RESOURCE_URL=git-url  # install a reference repo into resources/' \
 		'make frontend-install  # install frontend dependencies' \
 		'make frontend-dev      # run Vite dev server' \
 		'make frontend-build    # build the frontend bundle' \
@@ -37,6 +41,11 @@ dev-ui:
 	api_pid=$$!; \
 	trap "kill $$api_pid" EXIT INT TERM; \
 	cd $(FRONTEND_DIR) && $(NPM) run dev'
+
+add-resource:
+	@test -n "$(RESOURCE_NAME)" || (echo "RESOURCE_NAME is required" && exit 1)
+	@test -n "$(RESOURCE_URL)" || (echo "RESOURCE_URL is required" && exit 1)
+	$(DATALAD) install -d . -D "$(RESOURCE_NAME)" -s "$(RESOURCE_URL)" "resources/$(RESOURCE_NAME)"
 
 frontend-install:
 	cd $(FRONTEND_DIR) && $(NPM) install

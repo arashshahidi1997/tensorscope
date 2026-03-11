@@ -1,0 +1,21 @@
+reference_studies:
+  - name: neuroglancer
+    url: https://github.com/google/neuroglancer
+  - name: higlass
+    url: https://github.com/higlass/higlass
+  - name: nivo
+    url: https://github.com/plouc/nivo
+  - name: visx
+    url: https://github.com/airbnb/visx
+  - name: deck.gl
+    url: https://github.com/visgl/deck.gl
+  - name: observable-plot
+    url: https://github.com/observablehq/plot
+  - name: uplot
+    url: https://github.com/leeoniya/uPlot
+  - name: perspective
+    url: https://github.com/finos/perspective
+  - name: jupyterlab
+    url: https://github.com/jupyterlab/jupyterlab
+  - name: jupyterlite
+    url: https://github.com/jupyterlite/jupyterlite

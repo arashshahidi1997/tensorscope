@@ -155,6 +155,28 @@ def test_tensor_slice_returns_arrow_payload_and_metadata() -> None:
     assert set(frame.columns) == {"time", "AP", "ML", "value"}
 
 
+def test_spatial_map_slice_resolves_to_selected_time_plane() -> None:
+    client = _client()
+    response = client.post(
+        "/api/v1/tensors/signal/slice",
+        json={
+            "view_type": "spatial_map",
+            "selection": {"time": 1.1, "freq": 0.0, "ap": 0, "ml": 0, "channel": None},
+            "time_range": [0.0, 1.5],
+            "max_points": 4,
+            "downsample": "none",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    frame = _decode_arrow_payload(body["payload"])
+
+    assert body["dims"] == ["AP", "ML"]
+    assert body["meta"]["downsampling"]["returned_shape"] == [2, 3]
+    assert set(frame.columns) == {"AP", "ML", "value"}
+
+
 def test_tensor_slice_rejects_missing_bounds() -> None:
     client = _client()
     response = client.post(
