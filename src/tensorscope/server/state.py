@@ -16,6 +16,9 @@ import xarray as xr
 from tensorscope.core.events import EventRegistry, EventStream
 from tensorscope.core.layout import LayoutManager
 from tensorscope.core.state import SelectionState, TensorNode, TensorScopeState
+from tensorscope.core.transforms import TransformCache, TransformExecutor, TransformRegistry
+from tensorscope.core.transforms.builtins import register_builtins
+from tensorscope.core.transforms.model import DerivedTensor
 from tensorscope.server.models import (
     CoordSummaryDTO,
     DownsampleMethod,
@@ -49,10 +52,24 @@ class ServerState:
     layout: LayoutManager
     events: EventRegistry
     processing: ProcessingParamsDTO = None  # type: ignore[assignment]
+    transform_registry: TransformRegistry = None  # type: ignore[assignment]
+    _transform_executor: TransformExecutor = None  # type: ignore[assignment]
+    _transform_cache: TransformCache = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.processing is None:
             self.processing = ProcessingParamsDTO()
+        if self.transform_registry is None:
+            self.transform_registry = TransformRegistry()
+            register_builtins(self.transform_registry)
+        if self._transform_cache is None:
+            self._transform_cache = TransformCache()
+        if self._transform_executor is None:
+            self._transform_executor = TransformExecutor(
+                self.transform_registry,
+                self.app_state.tensors,
+                self._transform_cache,
+            )
 
     def state_dto(self, session_id: str) -> StateDTO:
         return StateDTO(
@@ -127,6 +144,21 @@ class ServerState:
             ap_coords=ap_unique,
             ml_coords=ml_unique,
             n_electrodes=len(ap_vals) if ap_vals.ndim == 1 else len(ap_unique) * len(ml_unique),
+        )
+
+    def execute_transform(
+        self,
+        transform_name: str,
+        input_names: list[str],
+        params: dict[str, Any] | None = None,
+        tensor_id: str | None = None,
+    ) -> DerivedTensor:
+        """Execute a registered transform and return the derived tensor."""
+        return self._transform_executor.execute(
+            transform_name=transform_name,
+            input_names=input_names,
+            params=params or {},
+            tensor_id=tensor_id,
         )
 
     def tensor_slice(self, name: str, request: TensorSliceRequestDTO) -> TensorSliceDTO:

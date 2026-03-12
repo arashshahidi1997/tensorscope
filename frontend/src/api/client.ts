@@ -11,6 +11,11 @@ import type {
   TensorSliceRequestDTO,
   TensorSummaryDTO,
 } from "./types";
+import type {
+  TransformDefinitionDTO,
+  TransformRequestDTO,
+  DerivedTensorDTO,
+} from "../types/transform";
 
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await fetch(input, {
@@ -87,6 +92,25 @@ export const api = {
   setProcessing(body: ProcessingParamsDTO): Promise<ProcessingParamsDTO> {
     return request<ProcessingParamsDTO>("/api/v1/processing", {
       method: "PUT",
+      body: JSON.stringify(body),
+    });
+  },
+
+  listTransforms(): Promise<TransformDefinitionDTO[]> {
+    return request<TransformDefinitionDTO[]>("/api/v1/transforms");
+  },
+
+  getTransform(name: string): Promise<TransformDefinitionDTO> {
+    return request<TransformDefinitionDTO>(`/api/v1/transforms/${name}`);
+  },
+
+  listCompatibleTransforms(tensorName: string): Promise<TransformDefinitionDTO[]> {
+    return request<TransformDefinitionDTO[]>(`/api/v1/transforms/compatible/${tensorName}`);
+  },
+
+  executeTransform(body: TransformRequestDTO): Promise<DerivedTensorDTO> {
+    return request<DerivedTensorDTO>("/api/v1/transforms/execute", {
+      method: "POST",
       body: JSON.stringify(body),
     });
   },

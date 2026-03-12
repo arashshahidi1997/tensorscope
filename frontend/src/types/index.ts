@@ -28,3 +28,11 @@ export type { ViewDescriptor } from "./view";
 
 export type { ElectrodeLayout, ElectrodeCoord } from "./spatialLayout";
 export { buildElectrodeLayout } from "./spatialLayout";
+
+export type {
+  TransformParamSpec,
+  TransformDefinitionDTO,
+  TransformRequestDTO,
+  TransformProvenance,
+  DerivedTensorDTO,
+} from "./transform";

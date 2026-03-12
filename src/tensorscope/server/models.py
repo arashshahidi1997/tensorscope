@@ -183,6 +183,60 @@ class ProcessingParamsDTO(BaseModel):
         return self
 
 
+class TransformParamSpecDTO(BaseModel):
+    """Single transform parameter specification."""
+
+    dtype: str
+    default: Any = None
+    description: str = ""
+    min_value: float | None = None
+    max_value: float | None = None
+    choices: list[str] | None = None
+
+
+class TransformDefinitionDTO(BaseModel):
+    """Public view of a registered transform."""
+
+    name: str
+    description: str = ""
+    required_dims: list[str]
+    param_schema: dict[str, TransformParamSpecDTO]
+    output_dims: list[str]
+    output_dtype: str | None = None
+
+
+class TransformRequestDTO(BaseModel):
+    """Request to execute a transform."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transform_name: str = Field(min_length=1)
+    input_names: list[str] = Field(min_length=1)
+    params: dict[str, Any] = Field(default_factory=dict)
+    tensor_id: str | None = None
+
+
+class TransformProvenanceDTO(BaseModel):
+    """Provenance metadata for a derived tensor."""
+
+    transform_name: str
+    params: dict[str, Any]
+    parent_ids: list[str]
+
+
+class DerivedTensorDTO(BaseModel):
+    """Metadata view of a derived tensor."""
+
+    id: str
+    provenance: TransformProvenanceDTO
+    dims: list[str]
+    shape: list[int]
+    dtype: str
+    status: str
+    cache_key: str | None = None
+    error: str | None = None
+
+
 class ApiErrorDTO(BaseModel):
     """Structured API error payload."""
 

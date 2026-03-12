@@ -19,6 +19,17 @@ from tensorscope.core.state import (
 )
 from tensorscope.core.schema import SchemaError, flatten_grid_to_channels, validate_and_normalize_grid
 from tensorscope.core.layout import LayoutManager, LayoutPreset
+from tensorscope.core.transforms import (
+    DerivedTensor,
+    TransformProvenance,
+    TransformDefinition,
+    TransformRegistry,
+    TransformExecutor,
+    TransformCache,
+    InputSpec,
+    OutputSpec,
+    ParamSpec,
+)
 
 __all__ = [
     "SelectionState",
@@ -41,4 +52,13 @@ __all__ = [
     "EventRegistry",
     "LayoutManager",
     "LayoutPreset",
+    "DerivedTensor",
+    "TransformProvenance",
+    "TransformDefinition",
+    "TransformRegistry",
+    "TransformExecutor",
+    "TransformCache",
+    "InputSpec",
+    "OutputSpec",
+    "ParamSpec",
 ]
