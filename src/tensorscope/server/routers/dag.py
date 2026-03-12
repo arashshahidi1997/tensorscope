@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
 from tensorscope.server.models import (
     DAGNodeVisibilityDTO,
@@ -12,7 +12,7 @@ from tensorscope.server.models import (
     TransformEdgeDTO,
     WorkspaceDAGDTO,
 )
-from tensorscope.server.routers.deps import get_server_state
+from tensorscope.server.routers.deps import SessionState, SessionStateDep
 from tensorscope.server.state import ServerState
 
 router = APIRouter(prefix="/dag", tags=["dag"])
@@ -42,9 +42,10 @@ def _transform_node_dto(node) -> DAGTransformNodeDTO:
 
 @router.get("", response_model=WorkspaceDAGDTO)
 async def get_dag(
-    state: ServerState = Depends(get_server_state),
+    session: SessionState = SessionStateDep,
 ) -> WorkspaceDAGDTO:
     """Return the full workspace DAG."""
+    _sid, state = session
     dag = state.dag
     return WorkspaceDAGDTO(
         tensor_nodes=[_tensor_node_dto(n) for n in dag.list_tensor_nodes()],
@@ -63,9 +64,10 @@ async def get_dag(
 @router.get("/tensors/{node_id}", response_model=DAGTensorNodeDTO)
 async def get_tensor_node(
     node_id: str,
-    state: ServerState = Depends(get_server_state),
+    session: SessionState = SessionStateDep,
 ) -> DAGTensorNodeDTO:
     """Get a specific tensor node."""
+    _sid, state = session
     node = state.dag.get_tensor_node(node_id)
     return _tensor_node_dto(node)
 
@@ -73,9 +75,10 @@ async def get_tensor_node(
 @router.get("/transforms/{node_id}", response_model=DAGTransformNodeDTO)
 async def get_transform_node(
     node_id: str,
-    state: ServerState = Depends(get_server_state),
+    session: SessionState = SessionStateDep,
 ) -> DAGTransformNodeDTO:
     """Get a specific transform node."""
+    _sid, state = session
     node = state.dag.get_transform_node(node_id)
     return _transform_node_dto(node)
 
@@ -84,9 +87,10 @@ async def get_transform_node(
 async def update_tensor_visibility(
     node_id: str,
     body: DAGNodeVisibilityDTO,
-    state: ServerState = Depends(get_server_state),
+    session: SessionState = SessionStateDep,
 ) -> DAGTensorNodeDTO:
     """Update visibility or exploratory state of a tensor node."""
+    _sid, state = session
     dag = state.dag
     if body.visible is not None:
         dag.set_tensor_visible(node_id, body.visible)
@@ -99,9 +103,10 @@ async def update_tensor_visibility(
 @router.get("/upstream/{node_id}", response_model=list[DAGTransformNodeDTO])
 async def get_upstream(
     node_id: str,
-    state: ServerState = Depends(get_server_state),
+    session: SessionState = SessionStateDep,
 ) -> list[DAGTransformNodeDTO]:
     """Get all upstream transform nodes (recursive)."""
+    _sid, state = session
     transforms = state.dag.get_upstream(node_id)
     return [_transform_node_dto(n) for n in transforms]
 
@@ -109,9 +114,10 @@ async def get_upstream(
 @router.get("/downstream/{node_id}", response_model=list[DAGTensorNodeDTO | DAGTransformNodeDTO])
 async def get_downstream(
     node_id: str,
-    state: ServerState = Depends(get_server_state),
+    session: SessionState = SessionStateDep,
 ) -> list[dict]:
     """Get all downstream nodes (recursive)."""
+    _sid, state = session
     from tensorscope.core.transforms.dag import DAGTensorNode
     nodes = state.dag.get_downstream(node_id)
     result = []
@@ -126,9 +132,10 @@ async def get_downstream(
 @router.get("/provenance/{tensor_node_id}", response_model=list[ProvenanceStepDTO])
 async def get_provenance_chain(
     tensor_node_id: str,
-    state: ServerState = Depends(get_server_state),
+    session: SessionState = SessionStateDep,
 ) -> list[ProvenanceStepDTO]:
     """Get the full provenance chain from root to the given tensor."""
+    _sid, state = session
     chain = state.dag.get_provenance_chain(tensor_node_id)
     return [
         ProvenanceStepDTO(

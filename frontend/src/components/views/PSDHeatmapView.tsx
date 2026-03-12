@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { PSDHeatmapData } from "../../api/arrow";
+import { YTicks } from "./AxisTicks";
 
 type PSDHeatmapProps = {
   data: PSDHeatmapData;
   selectedFreq: number;
   onSelectFreq: (freq: number) => void;
+  freqLogScale?: boolean;
 };
 
 /** Inferno-like colormap: black -> purple -> orange -> yellow */
@@ -16,7 +18,7 @@ function infernoColor(t: number): [number, number, number] {
   return [r, g, b];
 }
 
-export function PSDHeatmapView({ data, selectedFreq, onSelectFreq }: PSDHeatmapProps) {
+export function PSDHeatmapView({ data, selectedFreq, onSelectFreq, freqLogScale = false }: PSDHeatmapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const sizeRef = useRef({ w: 0, h: 0 });
@@ -53,57 +55,56 @@ export function PSDHeatmapView({ data, selectedFreq, onSelectFreq }: PSDHeatmapP
 
     const nF = freqs.length;
     const nC = channelLabels.length;
-    const cellW = w / nC;
-    const cellH = h / nF;
 
-    const imgData = ctx.createImageData(nC, nF);
+    const fMin = freqs[0];
+    const fMax = freqs[nF - 1];
+    const useLog = freqLogScale && fMin > 0;
+    const logFMin = useLog ? Math.log10(fMin) : 0;
+    const logFMax = useLog ? Math.log10(fMax) : 0;
+    const logFRange = logFMax - logFMin || 1;
+    const fRange = fMax - fMin || 1;
+
+    // Map frequency to fractional Y (0=top=fMax, 1=bottom=fMin)
+    const freqToYFrac = (f: number) => {
+      if (useLog && f > 0) {
+        return (logFMax - Math.log10(f)) / logFRange;
+      }
+      return (fMax - f) / fRange;
+    };
+
+    // For log scale we need to draw individual rectangles instead of a uniform grid
     for (let fi = 0; fi < nF; fi++) {
-      // freq increases upward: freqs[0] is bottom, freqs[nF-1] is top
-      const pixelRow = nF - 1 - fi;
+      const fLo = fi === 0 ? fMin : (freqs[fi - 1] + freqs[fi]) / 2;
+      const fHi = fi === nF - 1 ? fMax : (freqs[fi] + freqs[fi + 1]) / 2;
+      const yTop = freqToYFrac(fHi) * h;
+      const yBot = freqToYFrac(fLo) * h;
+      const cellH = Math.max(1, yBot - yTop);
+      const cellW = w / nC;
+
       for (let ci = 0; ci < nC; ci++) {
         const v = matrix[fi][ci];
-        const idx = (pixelRow * nC + ci) * 4;
         if (!Number.isFinite(v) || v <= 0) {
-          imgData.data[idx] = 20;
-          imgData.data[idx + 1] = 20;
-          imgData.data[idx + 2] = 20;
-          imgData.data[idx + 3] = 255;
+          ctx.fillStyle = "rgb(20,20,20)";
         } else {
           const t = (Math.log10(v) - logMin) / (logMax - logMin || 1);
           const [r, g, b] = infernoColor(t);
-          imgData.data[idx] = r;
-          imgData.data[idx + 1] = g;
-          imgData.data[idx + 2] = b;
-          imgData.data[idx + 3] = 255;
+          ctx.fillStyle = `rgb(${r},${g},${b})`;
         }
+        ctx.fillRect(Math.floor(ci * cellW), Math.floor(yTop), Math.ceil(cellW), Math.ceil(cellH));
       }
     }
-
-    // Draw image data scaled to canvas
-    const tmpCanvas = document.createElement("canvas");
-    tmpCanvas.width = nC;
-    tmpCanvas.height = nF;
-    tmpCanvas.getContext("2d")!.putImageData(imgData, 0, 0);
-
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(tmpCanvas, 0, 0, w, h);
 
     // Frequency cursor line
-    if (Number.isFinite(selectedFreq) && freqs.length >= 2) {
-      const fMin = freqs[0];
-      const fMax = freqs[freqs.length - 1];
-      if (fMax > fMin) {
-        const yFrac = (fMax - selectedFreq) / (fMax - fMin);
-        const y = yFrac * h;
-        ctx.strokeStyle = "rgba(115, 210, 222, 0.8)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(w, y);
-        ctx.stroke();
-      }
+    if (Number.isFinite(selectedFreq) && nF >= 2 && fMax > fMin) {
+      const y = freqToYFrac(selectedFreq) * h;
+      ctx.strokeStyle = "rgba(115, 210, 222, 0.8)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(w, y);
+      ctx.stroke();
     }
-  }, [selectedFreq]);
+  }, [selectedFreq, freqLogScale]);
 
   // Resize handling
   useLayoutEffect(() => {
@@ -148,7 +149,14 @@ export function PSDHeatmapView({ data, selectedFreq, onSelectFreq }: PSDHeatmapP
       const yFrac = (e.clientY - rect.top) / rect.height;
       const fMin = freqs[0];
       const fMax = freqs[freqs.length - 1];
-      const freq = fMax - yFrac * (fMax - fMin);
+      let freq: number;
+      if (freqLogScale && fMin > 0) {
+        const logFMin = Math.log10(fMin);
+        const logFMax = Math.log10(fMax);
+        freq = Math.pow(10, logFMax - yFrac * (logFMax - logFMin));
+      } else {
+        freq = fMax - yFrac * (fMax - fMin);
+      }
       if (Number.isFinite(freq)) onSelectFreqRef.current(freq);
     };
 
@@ -158,9 +166,18 @@ export function PSDHeatmapView({ data, selectedFreq, onSelectFreq }: PSDHeatmapP
 
   if (data.freqs.length === 0) return null;
 
+  const fMin = data.freqs[0];
+  const fMax = data.freqs[data.freqs.length - 1];
+
   return (
-    <div ref={containerRef} className="psd-canvas-wrap" title="Click to select frequency">
-      <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%", cursor: "crosshair" }} />
+    <div className="axis-canvas-wrap" title="Click to select frequency">
+      <div className="axis-y-label">Freq (Hz)</div>
+      <YTicks lo={fMin} hi={fMax} />
+      <div ref={containerRef} className="axis-canvas-area">
+        <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%", cursor: "crosshair" }} />
+      </div>
+      <div className="axis-x-ticks" />
+      <div className="axis-x-label">Channel</div>
     </div>
   );
 }

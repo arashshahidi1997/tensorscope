@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import type { SidebarTabId } from "../../store/layoutStore";
 import { useLayoutStore } from "../../store/layoutStore";
 import { DAGGraphView } from "./DAGGraphView";
-import { PlaceholderTab } from "./PlaceholderTab";
+import { PipelineTabContent } from "./PipelineTabContent";
 import { TensorBrowserTab } from "./TensorBrowserTab";
 
 type SidebarContentProps = {
@@ -29,7 +29,7 @@ export function SidebarContent({ exploreContent, eventsContent }: SidebarContent
       {renderTab("graph", activeSidebarTab, <DAGGraphView />)}
       {renderTab("tensors", activeSidebarTab, <TensorBrowserTab />)}
       {renderTab("events", activeSidebarTab, eventsContent)}
-      {renderTab("pipeline", activeSidebarTab, <PlaceholderTab label="Pipeline export" />)}
+      {renderTab("pipeline", activeSidebarTab, <PipelineTabContent />)}
     </div>
   );
 }

@@ -48,7 +48,35 @@ def _cmd_info() -> int:
     return 0
 
 
+def _load_lfp(path: Path) -> xr.DataArray:
+    """Load a raw .lfp binary file using cogpy's BIDS iEEG loader."""
+    from cogpy.io import ieeg_io
+
+    print(f"Loading LFP binary: {path}")
+    da = ieeg_io.from_file(path, grid=True, as_float=True)
+    # ieeg_io returns dask-backed; compute into memory for the server.
+    # Use float32 to halve memory usage on large recordings.
+    da = da.astype("float32").compute()
+    print(f"  shape={da.shape}, dims={da.dims}")
+    return da
+
+
 def _load_dataarray(path: Path) -> xr.DataArray:
+    # Handle raw .lfp / .dat binary files with BIDS sidecars
+    if path.suffix in (".lfp", ".dat"):
+        return _load_lfp(path)
+
+    # If path is a directory, look for a .lfp or .nc file inside
+    if path.is_dir():
+        lfp_files = list(path.glob("*.lfp"))
+        if lfp_files:
+            return _load_lfp(lfp_files[0])
+        nc_files = list(path.glob("*.nc"))
+        if nc_files:
+            path = nc_files[0]
+        else:
+            raise ValueError(f"No .lfp or .nc files found in {path}")
+
     try:
         return xr.load_dataarray(path)
     except Exception:

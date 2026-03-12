@@ -349,12 +349,14 @@ export function TimeseriesSliceView({
         },
         axes: [
           {
+            label: "Time (s)",
+            labelSize: 14,
             stroke: "#8b949e",
             ticks: { stroke: "#30363d" },
             grid: { stroke: "#21262d" },
             values: (_u: uPlot, vals: number[]) => vals.map((v) => formatRelativeTime(v)),
           },
-          { stroke: "#8b949e", ticks: { stroke: "#30363d" }, grid: { stroke: "#21262d" } },
+          { label: "Amplitude", labelSize: 14, stroke: "#8b949e", ticks: { stroke: "#30363d" }, grid: { stroke: "#21262d" } },
         ],
         series: [
           {},
@@ -445,18 +447,29 @@ export function TimeseriesSliceView({
     ro.observe(el);
 
     // Correct the size once after the browser has finished laying out the
-    // container. clientWidth can be 0 at effect time.
-    const rafId = requestAnimationFrame(() => {
+    // container. clientWidth can be 0 at effect time. Use a double-RAF to
+    // ensure the flex layout has fully settled before reading dimensions.
+    let rafId1 = 0;
+    let rafId2 = 0;
+    const correctSize = () => {
       const w = el.clientWidth || el.getBoundingClientRect().width;
-      const h = el.clientHeight || 260;
-      if (w && chartRef.current) {
-        chartRef.current.setSize({ width: w, height: h });
+      const h = el.clientHeight || el.getBoundingClientRect().height;
+      if (w > 10 && h > 10 && chartRef.current) {
+        chartRef.current.setSize({ width: Math.round(w), height: Math.round(h) });
       }
-      initialized = true;
+    };
+    rafId1 = requestAnimationFrame(() => {
+      correctSize();
+      // Second RAF catches cases where flex layout settles a frame later
+      rafId2 = requestAnimationFrame(() => {
+        correctSize();
+        initialized = true;
+      });
     });
 
     return () => {
-      cancelAnimationFrame(rafId);
+      cancelAnimationFrame(rafId1);
+      cancelAnimationFrame(rafId2);
       ro.disconnect();
       detachGestures();
       chartRef.current = null;

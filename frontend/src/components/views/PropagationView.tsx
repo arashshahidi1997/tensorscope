@@ -163,18 +163,20 @@ export function PropagationView({
   if (!selection) return null;
 
   return (
-    <div
-      ref={containerRef}
-      style={{ width: "100%", height: "100%", position: "relative" }}
-      title="Spatial propagation frame — click a cell to select AP/ML"
-    >
-      <canvas
-        ref={canvasRef}
-        style={{ display: "block", width: "100%", height: "100%" }}
-        onClick={handleClick}
-        onMouseMove={handleMouseMove}
-        onMouseLeave={handleMouseLeave}
-      />
+    <div className="axis-canvas-wrap" title="Spatial propagation frame — click a cell to select AP/ML">
+      <div className="axis-y-label">AP</div>
+      <div className="axis-y-ticks" />
+      <div ref={containerRef} className="axis-canvas-area">
+        <canvas
+          ref={canvasRef}
+          style={{ display: "block", width: "100%", height: "100%" }}
+          onClick={handleClick}
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
+        />
+      </div>
+      <div className="axis-x-ticks" />
+      <div className="axis-x-label">ML</div>
     </div>
   );
 }

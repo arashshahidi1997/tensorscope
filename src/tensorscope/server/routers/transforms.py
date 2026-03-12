@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
 from tensorscope.server.models import (
     DerivedTensorDTO,
@@ -11,7 +11,7 @@ from tensorscope.server.models import (
     TransformProvenanceDTO,
     TransformRequestDTO,
 )
-from tensorscope.server.routers.deps import get_server_state
+from tensorscope.server.routers.deps import SessionState, SessionStateDep
 from tensorscope.server.state import ServerState
 
 router = APIRouter(prefix="/transforms", tags=["transforms"])
@@ -19,9 +19,10 @@ router = APIRouter(prefix="/transforms", tags=["transforms"])
 
 @router.get("", response_model=list[TransformDefinitionDTO])
 async def list_transforms(
-    state: ServerState = Depends(get_server_state),
+    session: SessionState = SessionStateDep,
 ) -> list[TransformDefinitionDTO]:
     """List all registered transforms."""
+    _sid, state = session
     return [
         TransformDefinitionDTO(
             name=defn.name,
@@ -48,9 +49,10 @@ async def list_transforms(
 @router.get("/{name}", response_model=TransformDefinitionDTO)
 async def get_transform(
     name: str,
-    state: ServerState = Depends(get_server_state),
+    session: SessionState = SessionStateDep,
 ) -> TransformDefinitionDTO:
     """Get a specific transform definition."""
+    _sid, state = session
     defn = state.transform_registry.get(name)
     return TransformDefinitionDTO(
         name=defn.name,
@@ -75,9 +77,10 @@ async def get_transform(
 @router.get("/compatible/{tensor_name}", response_model=list[TransformDefinitionDTO])
 async def list_compatible_transforms(
     tensor_name: str,
-    state: ServerState = Depends(get_server_state),
+    session: SessionState = SessionStateDep,
 ) -> list[TransformDefinitionDTO]:
     """List transforms compatible with a given tensor."""
+    _sid, state = session
     node = state.get_node(tensor_name)
     compatible = state.transform_registry.list_compatible(node)
     return [
@@ -106,9 +109,10 @@ async def list_compatible_transforms(
 @router.post("/execute", response_model=DerivedTensorDTO)
 async def execute_transform(
     request: TransformRequestDTO,
-    state: ServerState = Depends(get_server_state),
+    session: SessionState = SessionStateDep,
 ) -> DerivedTensorDTO:
     """Execute a transform and return the derived tensor metadata."""
+    _sid, state = session
     derived = state.execute_transform(
         transform_name=request.transform_name,
         input_names=request.input_names,

@@ -28,7 +28,7 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
 
   const brainstateMetaQuery = useBrainstateMetaQuery();
   const brainstateAvailable = brainstateMetaQuery.data?.available ?? false;
-  const { brainstateOverlay, showHypnogram, toggleBrainstateOverlay, toggleHypnogram } = useAppStore();
+  const { brainstateOverlay, showHypnogram, toggleBrainstateOverlay, toggleHypnogram, psdFmax, psdNW, freqLogScale, setPsdFmax, setPsdNW, toggleFreqLogScale } = useAppStore();
 
   return (
     <>
@@ -67,6 +67,49 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
           </div>
         </CollapsibleSection>
       )}
+
+      <CollapsibleSection title="PSD Settings" defaultOpen={true}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "4px 0" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+            F<sub>max</sub> (Hz)
+            <input
+              type="number"
+              min={1}
+              max={1000}
+              step={10}
+              value={psdFmax}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (Number.isFinite(v) && v > 0) setPsdFmax(v);
+              }}
+              style={{ width: 60, fontSize: 12 }}
+            />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+            NW
+            <input
+              type="number"
+              min={1}
+              max={20}
+              step={0.5}
+              value={psdNW}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (Number.isFinite(v) && v >= 1) setPsdNW(v);
+              }}
+              style={{ width: 60, fontSize: 12 }}
+            />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={freqLogScale}
+              onChange={toggleFreqLogScale}
+            />
+            Log frequency scale
+          </label>
+        </div>
+      </CollapsibleSection>
 
       <CollapsibleSection title="Selection" defaultOpen={false}>
         <SelectionPanel

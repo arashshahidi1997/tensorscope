@@ -154,30 +154,32 @@ export function SpatialMapSliceView({
   const aspectRatio = nML / nAP;
 
   return (
-    <div
-      style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}
-      title="Click a cell to select AP/ML"
-    >
-      <div
-        ref={containerRef}
-        style={{
-          position: "relative",
-          aspectRatio: `${aspectRatio}`,
-          maxWidth: "100%",
-          maxHeight: "100%",
-          // Fill the dominant dimension
-          width: aspectRatio >= 1 ? "100%" : "auto",
-          height: aspectRatio < 1 ? "100%" : "auto",
-        }}
-      >
-        <canvas
-          ref={canvasRef}
-          style={{ display: "block", width: "100%", height: "100%" }}
-          onClick={handleClick}
-          onMouseMove={handleMouseMove}
-          onMouseLeave={handleMouseLeave}
-        />
+    <div className="axis-canvas-wrap" title="Click a cell to select AP/ML">
+      <div className="axis-y-label">AP</div>
+      <div className="axis-y-ticks" />
+      <div className="axis-canvas-area" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div
+          ref={containerRef}
+          style={{
+            position: "relative",
+            aspectRatio: `${aspectRatio}`,
+            maxWidth: "100%",
+            maxHeight: "100%",
+            width: aspectRatio >= 1 ? "100%" : "auto",
+            height: aspectRatio < 1 ? "100%" : "auto",
+          }}
+        >
+          <canvas
+            ref={canvasRef}
+            style={{ display: "block", width: "100%", height: "100%" }}
+            onClick={handleClick}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
+          />
+        </div>
       </div>
+      <div className="axis-x-ticks" />
+      <div className="axis-x-label">ML</div>
     </div>
   );
 }

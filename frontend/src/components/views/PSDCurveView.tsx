@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { PSDAvgData } from "../../api/arrow";
+import { YTicks } from "./AxisTicks";
 
 type PSDCurveProps = {
   data: PSDAvgData;
   selectedFreq: number;
   onSelectFreq: (freq: number) => void;
+  freqLogScale?: boolean;
 };
 
 /**
  * PSD Curve — Canvas 2D with rotated axes: Y=frequency, X=power.
  * Draws mean line and +/-1 std band.
  */
-export function PSDCurveView({ data, selectedFreq, onSelectFreq }: PSDCurveProps) {
+export function PSDCurveView({ data, selectedFreq, onSelectFreq, freqLogScale = false }: PSDCurveProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dataRef = useRef(data);
@@ -40,6 +42,10 @@ export function PSDCurveView({ data, selectedFreq, onSelectFreq }: PSDCurveProps
     const fMin = freqs[0];
     const fMax = freqs[freqs.length - 1];
     const fRange = fMax - fMin || 1;
+    const useLog = freqLogScale && fMin > 0;
+    const logFMin = useLog ? Math.log10(fMin) : 0;
+    const logFMax = useLog ? Math.log10(fMax) : 0;
+    const logFRange = logFMax - logFMin || 1;
 
     // Log10 scale for power (X-axis)
     const logMean = mean.map((v) => (v > 0 ? Math.log10(v) : -10));
@@ -64,7 +70,12 @@ export function PSDCurveView({ data, selectedFreq, onSelectFreq }: PSDCurveProps
     const xRangePadded = xMax - xMin || 1;
 
     // Map freq to Y (top=fMax, bottom=fMin)
-    const freqToY = (f: number) => MARGIN.top + ((fMax - f) / fRange) * plotH;
+    const freqToY = (f: number) => {
+      if (useLog && f > 0) {
+        return MARGIN.top + ((logFMax - Math.log10(f)) / logFRange) * plotH;
+      }
+      return MARGIN.top + ((fMax - f) / fRange) * plotH;
+    };
     // Map log power to X
     const logToX = (lp: number) => MARGIN.left + ((lp - xMin) / xRangePadded) * plotW;
 
@@ -109,7 +120,7 @@ export function PSDCurveView({ data, selectedFreq, onSelectFreq }: PSDCurveProps
       ctx.lineTo(w, y);
       ctx.stroke();
     }
-  }, [selectedFreq]);
+  }, [selectedFreq, freqLogScale]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -146,13 +157,20 @@ export function PSDCurveView({ data, selectedFreq, onSelectFreq }: PSDCurveProps
       const { freqs } = dataRef.current;
       if (freqs.length < 2) return;
       const rect = canvas.getBoundingClientRect();
-      const yFrac = (e.clientY - rect.top) / rect.height;
       const fMin = freqs[0];
       const fMax = freqs[freqs.length - 1];
       // Account for margins
       const plotH = rect.height - MARGIN.top - MARGIN.bottom;
       const yInPlot = e.clientY - rect.top - MARGIN.top;
-      const freq = fMax - (yInPlot / plotH) * (fMax - fMin);
+      const yFrac = yInPlot / plotH;
+      let freq: number;
+      if (freqLogScale && fMin > 0) {
+        const logFMin = Math.log10(fMin);
+        const logFMax = Math.log10(fMax);
+        freq = Math.pow(10, logFMax - yFrac * (logFMax - logFMin));
+      } else {
+        freq = fMax - yFrac * (fMax - fMin);
+      }
       if (Number.isFinite(freq)) onSelectFreqRef.current(freq);
     };
 
@@ -162,9 +180,18 @@ export function PSDCurveView({ data, selectedFreq, onSelectFreq }: PSDCurveProps
 
   if (data.freqs.length === 0) return null;
 
+  const fMin = data.freqs[0];
+  const fMax = data.freqs[data.freqs.length - 1];
+
   return (
-    <div ref={containerRef} className="psd-canvas-wrap" title="Click to select frequency">
-      <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%", cursor: "crosshair" }} />
+    <div className="axis-canvas-wrap" title="Click to select frequency">
+      <div className="axis-y-label">Freq (Hz)</div>
+      <YTicks lo={fMin} hi={fMax} />
+      <div ref={containerRef} className="axis-canvas-area">
+        <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%", cursor: "crosshair" }} />
+      </div>
+      <div className="axis-x-ticks" />
+      <div className="axis-x-label">Power (log₁₀)</div>
     </div>
   );
 }

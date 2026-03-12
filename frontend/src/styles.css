@@ -883,6 +883,15 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
   width: 220px;
 }
 
+/* ── Content stack (main workspace children) ─────────── */
+.content-stack {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 4px;
+}
+
 /* ── View rows (slot-based layout) ──────────────────── */
 .view-rows {
   display: flex;
@@ -1050,6 +1059,80 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
   font-size: 10px;
   color: var(--muted);
   line-height: 1.3;
+}
+
+/* ── Axis-labeled canvas wrapper ─────────────────────── */
+.axis-canvas-wrap {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-columns: 14px 30px 1fr;
+  grid-template-rows: 1fr 14px 12px;
+  gap: 0;
+}
+
+.axis-canvas-wrap .axis-y-label {
+  grid-column: 1;
+  grid-row: 1;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  text-align: center;
+  font-size: 9px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
+.axis-canvas-wrap .axis-y-ticks {
+  grid-column: 2;
+  grid-row: 1;
+  position: relative;
+  font-size: 9px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.axis-canvas-wrap .axis-y-ticks span {
+  position: absolute;
+  right: 2px;
+  transform: translateY(50%);
+  white-space: nowrap;
+}
+
+.axis-canvas-wrap .axis-canvas-area {
+  grid-column: 3;
+  grid-row: 1;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+.axis-canvas-wrap .axis-x-ticks {
+  grid-column: 3;
+  grid-row: 2;
+  position: relative;
+  font-size: 9px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.axis-canvas-wrap .axis-x-ticks span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.axis-canvas-wrap .axis-x-label {
+  grid-column: 3;
+  grid-row: 3;
+  text-align: center;
+  font-size: 9px;
+  color: var(--muted);
+  user-select: none;
+  line-height: 12px;
 }
 
 /* ── PSD canvas views ────────────────────────────────── */

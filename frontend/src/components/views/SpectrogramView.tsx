@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { decodeArrowSlice, extractSpectrogram } from "../../api/arrow";
 import type { SliceViewProps } from "./viewTypes";
+import { XTicks, YTicks } from "./AxisTicks";
 
 function valueToColor(v: number, min: number, max: number): [number, number, number] {
   if (!Number.isFinite(v)) return [20, 20, 20];
@@ -113,19 +114,14 @@ export function SpectrogramView({ slice, selection, onSelectTime, onSelectFreq }
   const fMax = freqs[freqs.length - 1];
 
   return (
-    <div className="control-stack">
-      <div className="panel-heading">
-        <h2>Spectrogram</h2>
-        <p>
-          {times.length} × {freqs.length} · t={tMin.toFixed(2)}–{tMax.toFixed(2)}s · f={fMin.toFixed(0)}–{fMax.toFixed(0)}Hz
-        </p>
-      </div>
-      <div className="plot-frame" style={{ position: "relative" }}>
+    <div className="axis-canvas-wrap">
+      <div className="axis-y-label">Freq (Hz)</div>
+      <YTicks lo={fMin} hi={fMax} />
+      <div className="axis-canvas-area">
         <canvas
           ref={canvasRef}
-          style={{ width: "100%", height: "200px", imageRendering: "pixelated", display: "block", cursor: "crosshair" }}
+          style={{ width: "100%", height: "100%", imageRendering: "pixelated", display: "block", cursor: "crosshair" }}
         />
-        {/* Gap 4: Time cursor — vertical line (uPlot u-cursor-x pattern, CSS only, no canvas repaint) */}
         {tMax > tMin && (
           <div
             style={{
@@ -139,14 +135,12 @@ export function SpectrogramView({ slice, selection, onSelectTime, onSelectFreq }
             }}
           />
         )}
-        {/* Gap 4: Freq cursor — horizontal line (uPlot u-cursor-y pattern, CSS only, no canvas repaint) */}
         {fMax > fMin && selection.freq != null && (
           <div
             style={{
               position: "absolute",
               left: 0,
               right: 0,
-              // freq=fMax → top=0%; freq=fMin → top=100%
               top: `${((fMax - selection.freq) / (fMax - fMin)) * 100}%`,
               height: "1px",
               background: "rgba(115,210,222,0.7)",
@@ -155,6 +149,8 @@ export function SpectrogramView({ slice, selection, onSelectTime, onSelectFreq }
           />
         )}
       </div>
+      <XTicks lo={tMin} hi={tMax} />
+      <div className="axis-x-label">Time (s)</div>
     </div>
   );
 }

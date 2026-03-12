@@ -13,13 +13,19 @@ DATALAD ?= datalad
 
 .PHONY: projio-init projio-config-user projio-config-show projio-status projio-auth
 .PHONY: projio-gh projio-gl projio-ria site-build site-serve mcp
-.PHONY: help dev demo-data dev-ui add-resource frontend-install frontend-dev frontend-build test build check publish-test publish clean
+.PHONY: help dev demo-data dev-ui kill-ui dev-api dev-web logs-api logs-web ui-status add-resource frontend-install frontend-dev frontend-build test build check publish-test publish clean
+
+WEB_PORT ?= 5173
 
 help:
 	@printf '%s\n' \
 		'make dev               # install editable package with dev extras' \
 		'make demo-data         # generate a deterministic local demo dataset' \
-		'make dev-ui            # run the TensorScope API and Vite dev server together' \
+		'make dev-ui            # start API + Vite in screen (kills stale first)' \
+		'make kill-ui           # stop API + Vite and free ports' \
+		'make logs-api          # attach to API screen session' \
+		'make logs-web          # attach to frontend screen session' \
+		'make ui-status         # check if API and frontend are listening' \
 		'make add-resource RESOURCE_NAME=name RESOURCE_URL=git-url  # install a reference repo into resources/' \
 		'make frontend-install  # install frontend dependencies' \
 		'make frontend-dev      # run Vite dev server' \
@@ -36,11 +42,37 @@ dev:
 demo-data:
 	PYTHONPATH=src $(PYTHON) scripts/generate_demo_data.py --output "$(DATA_PATH)"
 
-dev-ui:
-	@sh -c 'PYTHONPATH=src $(PYTHON) -m tensorscope.cli serve "$(DATA_PATH)" --host "$(HOST)" --port "$(PORT)" & \
-	api_pid=$$!; \
-	trap "kill $$api_pid" EXIT INT TERM; \
-	cd $(FRONTEND_DIR) && $(NPM) run dev'
+kill-ui:
+	-@screen -S tensorscope-api -X quit 2>/dev/null || true
+	-@screen -S tensorscope-web -X quit 2>/dev/null || true
+	-@fuser -k $(PORT)/tcp 2>/dev/null || true
+	-@fuser -k $(WEB_PORT)/tcp 2>/dev/null || true
+
+dev-api:
+	@screen -dmS tensorscope-api sh -c \
+		'PYTHONPATH=src $(PYTHON) -m tensorscope.cli serve "$(DATA_PATH)" --host "$(HOST)" --port "$(PORT)"'
+	@echo "API: http://$(HOST):$(PORT)"
+
+dev-web:
+	@screen -dmS tensorscope-web sh -c \
+		'cd $(FRONTEND_DIR) && $(NPM) run dev -- --host "$(HOST)" --port "$(WEB_PORT)" --strictPort'
+	@echo "Web: http://$(HOST):$(WEB_PORT)"
+
+dev-ui: kill-ui dev-api dev-web
+	@sleep 2 && curl -sf http://$(HOST):$(PORT)/health >/dev/null 2>&1 || true
+	@curl -sf http://$(HOST):$(WEB_PORT) >/dev/null 2>&1 || true
+
+logs-api:
+	@screen -r tensorscope-api
+
+logs-web:
+	@screen -r tensorscope-web
+
+ui-status:
+	@echo "Backend (port $(PORT)):"
+	-@ss -ltnp | grep :$(PORT) || echo "  not listening"
+	@echo "Frontend (port $(WEB_PORT)):"
+	-@ss -ltnp | grep :$(WEB_PORT) || echo "  not listening"
 
 add-resource:
 	@test -n "$(RESOURCE_NAME)" || (echo "RESOURCE_NAME is required" && exit 1)

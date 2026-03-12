@@ -114,16 +114,18 @@ export function PSDSpatialView({ decoded, selectedFreq, onSelectFreq, onSelectCe
   if (rawCells.length === 0) return null;
 
   return (
-    <div
-      ref={containerRef}
-      style={{ width: "100%", height: "100%", position: "relative" }}
-      title="PSD spatial power at selected frequency"
-    >
-      <canvas
-        ref={canvasRef}
-        style={{ display: "block", width: "100%", height: "100%" }}
-        onClick={handleClick}
-      />
+    <div className="axis-canvas-wrap" title="PSD spatial power at selected frequency">
+      <div className="axis-y-label">AP</div>
+      <div className="axis-y-ticks" />
+      <div ref={containerRef} className="axis-canvas-area">
+        <canvas
+          ref={canvasRef}
+          style={{ display: "block", width: "100%", height: "100%" }}
+          onClick={handleClick}
+        />
+      </div>
+      <div className="axis-x-ticks" />
+      <div className="axis-x-label">ML</div>
     </div>
   );
 }

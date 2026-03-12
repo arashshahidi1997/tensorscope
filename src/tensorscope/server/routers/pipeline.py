@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 
 from tensorscope.server.models import (
     PipelineExportRequestDTO,
@@ -10,7 +10,7 @@ from tensorscope.server.models import (
     PipelineSpecDTO,
     WorkflowArtifactDTO,
 )
-from tensorscope.server.routers.deps import get_server_state
+from tensorscope.server.routers.deps import SessionState, SessionStateDep
 from tensorscope.server.state import ServerState
 from tensorscope.core.pipeline.selection import extract_pipeline, PipelineSelectionError
 from tensorscope.core.pipeline.cooker import get_cooker
@@ -22,13 +22,14 @@ router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 @router.post("/export", response_model=PipelineExportResponseDTO)
 def export_pipeline(
     req: PipelineExportRequestDTO,
-    state: ServerState = Depends(get_server_state),
+    session: SessionState = SessionStateDep,
 ) -> PipelineExportResponseDTO:
     """Export a pipeline from the workspace DAG.
 
     Selects the minimal subgraph for the given output tensors,
     builds a PipelineSpec, and optionally generates workflow artifacts.
     """
+    _sid, state = session
     try:
         spec = extract_pipeline(
             dag=state._dag,
@@ -63,9 +64,10 @@ def export_pipeline(
 @router.post("/promote/{tensor_node_id}")
 def promote_tensor(
     tensor_node_id: str,
-    state: ServerState = Depends(get_server_state),
+    session: SessionState = SessionStateDep,
 ) -> dict:
     """Promote a tensor node to pipeline-selected status."""
+    _sid, state = session
     dag = state._dag
     if not dag.has_node(tensor_node_id):
         raise HTTPException(status_code=404, detail=f"Node '{tensor_node_id}' not found")
@@ -86,9 +88,10 @@ def promote_tensor(
 @router.post("/demote/{tensor_node_id}")
 def demote_tensor(
     tensor_node_id: str,
-    state: ServerState = Depends(get_server_state),
+    session: SessionState = SessionStateDep,
 ) -> dict:
     """Remove pipeline-selected status from a tensor node."""
+    _sid, state = session
     dag = state._dag
     if not dag.has_node(tensor_node_id):
         raise HTTPException(status_code=404, detail=f"Node '{tensor_node_id}' not found")

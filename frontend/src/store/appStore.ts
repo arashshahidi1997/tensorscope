@@ -21,6 +21,10 @@ type AppStore = {
   brainstateOverlay: boolean;
   /** Whether to show the hypnogram view. */
   showHypnogram: boolean;
+  /** PSD settings */
+  psdFmax: number;
+  psdNW: number;
+  freqLogScale: boolean;
   setSelectedTensor: (value: string) => void;
   toggleView: (view: string, availableViews: string[]) => void;
   setActiveViews: (views: string[]) => void;
@@ -28,6 +32,9 @@ type AppStore = {
   setTheme: (value: ThemeId) => void;
   toggleBrainstateOverlay: () => void;
   toggleHypnogram: () => void;
+  setPsdFmax: (value: number) => void;
+  setPsdNW: (value: number) => void;
+  toggleFreqLogScale: () => void;
 };
 
 export const useAppStore = create<AppStore>((set) => ({
@@ -58,4 +65,10 @@ export const useAppStore = create<AppStore>((set) => ({
   },
   toggleBrainstateOverlay: () => set((s) => ({ brainstateOverlay: !s.brainstateOverlay })),
   toggleHypnogram: () => set((s) => ({ showHypnogram: !s.showHypnogram })),
+  psdFmax: 100,
+  psdNW: 4,
+  freqLogScale: false,
+  setPsdFmax: (value) => set({ psdFmax: value }),
+  setPsdNW: (value) => set({ psdNW: value }),
+  toggleFreqLogScale: () => set((s) => ({ freqLogScale: !s.freqLogScale })),
 }));

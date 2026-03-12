@@ -59,7 +59,7 @@ type WorkspaceMainProps = {
 };
 
 export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceMainProps) {
-  const { selectedTensor, activeViews, setSelectedTensor, toggleView, brainstateOverlay, showHypnogram } = useAppStore();
+  const { selectedTensor, activeViews, setSelectedTensor, toggleView, brainstateOverlay, showHypnogram, psdFmax, psdNW, freqLogScale } = useAppStore();
   const selectionState = useSelectionStore();
   const { timeWindow, setTimeWindow, setFreq, setHoveredElectrode } = selectionState;
 
@@ -102,10 +102,6 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const hasPSDLive = effectiveActiveViews.some((v) =>
     v === "psd_heatmap" || v === "psd_curve" || v === "psd_spatial",
   );
-
-  // PSD settings — component-local state; changing triggers refetch.
-  const [psdFmax, setPsdFmax] = useState(100);
-  const [psdNW, setPsdNW] = useState(4);
 
   const timeCoord = tensorQuery.data?.coords.find((c) => c.name === "time");
 
@@ -361,6 +357,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         data={heatmapData}
         selectedFreq={selectionDraft.freq}
         onSelectFreq={handleSelectFreq}
+        freqLogScale={freqLogScale}
       />
     );
     viewElements["psd_curve"] = (
@@ -368,6 +365,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         data={avgData}
         selectedFreq={selectionDraft.freq}
         onSelectFreq={handleSelectFreq}
+        freqLogScale={freqLogScale}
       />
     );
     viewElements["psd_spatial"] = (
