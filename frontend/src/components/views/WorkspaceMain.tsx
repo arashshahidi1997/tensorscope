@@ -434,10 +434,17 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       )}
 
       {/* View grid replaces the old hardcoded layout */}
+      {/* TODO: Per-panel tensor overrides currently only update the visual label in
+          the panel header. Actual data fetching for overridden panels requires
+          dynamic hook calls (one useSliceQuery per override) which React doesn't
+          support conditionally. A future enhancement could use a dynamic query
+          component or render-per-tensor pattern to fetch data for pinned panels. */}
       <ViewGrid
         viewElements={viewElements}
         activeViewIds={effectiveActiveViews}
         availableViews={availableViews}
+        globalTensor={activeTensorName ?? ""}
+        tensorNames={(stateQuery.data?.tensors ?? []).map((t) => t.name)}
       />
     </div>
   );

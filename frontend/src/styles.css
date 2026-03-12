@@ -1248,3 +1248,52 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
   }
   .theme-card { grid-template-columns: 1fr; }
 }
+
+/* ── Per-panel tensor selector ──────────────────────── */
+.panel-tensor-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+}
+
+.panel-tensor-dropdown {
+  font-size: 10px;
+  font-family: inherit;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  height: 18px;
+  line-height: 18px;
+  cursor: pointer;
+  max-width: 100px;
+  text-overflow: ellipsis;
+}
+
+.panel-tensor-dropdown:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.panel-tensor-dropdown:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.panel-tensor-pin {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  background: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.panel-tensor-pin:hover {
+  background: var(--alert);
+}

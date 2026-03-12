@@ -16,6 +16,10 @@ type ViewGridProps = {
   viewElements: Record<string, ReactNode>;
   activeViewIds: string[];
   availableViews: string[];
+  /** Global tensor name (used when no per-panel override is set). */
+  globalTensor: string;
+  /** All available tensor names for the per-panel dropdown. */
+  tensorNames: string[];
 };
 
 function getViewLabel(viewId: string): string {
@@ -23,9 +27,15 @@ function getViewLabel(viewId: string): string {
   return desc?.label ?? viewId;
 }
 
-export function ViewGrid({ viewElements, activeViewIds, availableViews }: ViewGridProps) {
+export function ViewGrid({
+  viewElements,
+  activeViewIds,
+  availableViews,
+  globalTensor,
+  tensorNames,
+}: ViewGridProps) {
   const { maximizedView, toggleMaximizeView } = useLayoutStore();
-  const { toggleView } = useAppStore();
+  const { toggleView, panelTensorOverrides, setPanelTensor, clearPanelTensor } = useAppStore();
 
   const layout = DEFAULT_SLOT_LAYOUT;
 
@@ -40,6 +50,12 @@ export function ViewGrid({ viewElements, activeViewIds, availableViews }: ViewGr
   );
 
   const activeSet = useMemo(() => new Set(activeViewIds), [activeViewIds]);
+
+  /** Resolve the tensor name for a given view slot. */
+  const resolveTensor = useCallback(
+    (viewId: string): string => panelTensorOverrides[viewId] ?? globalTensor,
+    [panelTensorOverrides, globalTensor],
+  );
 
   return (
     <>
@@ -81,6 +97,8 @@ export function ViewGrid({ viewElements, activeViewIds, availableViews }: ViewGr
                 const slotClassName = `view-slot${!isActive && !maximizedView ? " view-slot--hidden" : ""}`;
 
                 const el = viewElements[slot.viewId];
+                const resolvedTensor = resolveTensor(slot.viewId);
+                const isPinned = slot.viewId in panelTensorOverrides;
 
                 return (
                   <div key={slot.viewId} className={slotClassName} style={slotStyle}>
@@ -91,6 +109,11 @@ export function ViewGrid({ viewElements, activeViewIds, availableViews }: ViewGr
                         isMaximized={isMaximized}
                         onToggleMaximize={() => toggleMaximizeView(slot.viewId)}
                         onClose={() => handleClose(slot.viewId)}
+                        tensorName={resolvedTensor}
+                        isPinned={isPinned}
+                        tensorNames={tensorNames}
+                        onSetTensor={(name) => setPanelTensor(slot.viewId, name)}
+                        onClearTensor={() => clearPanelTensor(slot.viewId)}
                       >
                         {el}
                       </ViewPanel>
@@ -110,6 +133,8 @@ export function ViewGrid({ viewElements, activeViewIds, availableViews }: ViewGr
             const el = viewElements[viewId];
             if (!el) return null;
             const isHidden = maximizedView != null;
+            const resolvedTensor = resolveTensor(viewId);
+            const isPinned = viewId in panelTensorOverrides;
             return (
               <div
                 key={viewId}
@@ -121,6 +146,11 @@ export function ViewGrid({ viewElements, activeViewIds, availableViews }: ViewGr
                   isMaximized={false}
                   onToggleMaximize={() => toggleMaximizeView(viewId)}
                   onClose={() => handleClose(viewId)}
+                  tensorName={resolvedTensor}
+                  isPinned={isPinned}
+                  tensorNames={tensorNames}
+                  onSetTensor={(name) => setPanelTensor(viewId, name)}
+                  onClearTensor={() => clearPanelTensor(viewId)}
                 >
                   {el}
                 </ViewPanel>
