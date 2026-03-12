@@ -21,11 +21,15 @@ type AppStore = {
   brainstateOverlay: boolean;
   /** Whether to show the hypnogram view. */
   showHypnogram: boolean;
+  /** Per-panel tensor overrides: slotId → tensorName */
+  panelTensorOverrides: Record<string, string>;
   /** PSD settings */
   psdFmax: number;
   psdNW: number;
   freqLogScale: boolean;
   setSelectedTensor: (value: string) => void;
+  setPanelTensor: (slotId: string, tensorName: string) => void;
+  clearPanelTensor: (slotId: string) => void;
   toggleView: (view: string, availableViews: string[]) => void;
   setActiveViews: (views: string[]) => void;
   setLayoutDraft: (value: LayoutDTO) => void;
@@ -40,11 +44,19 @@ type AppStore = {
 export const useAppStore = create<AppStore>((set) => ({
   selectedTensor: null,
   activeViews: [],
+  panelTensorOverrides: {},
   layoutDraft: null,
   theme: getInitialTheme(),
   brainstateOverlay: true,
   showHypnogram: true,
-  setSelectedTensor: (value) => set({ selectedTensor: value, activeViews: [] }),
+  setSelectedTensor: (value) => set({ selectedTensor: value, activeViews: [], panelTensorOverrides: {} }),
+  setPanelTensor: (slotId, tensorName) =>
+    set((s) => ({ panelTensorOverrides: { ...s.panelTensorOverrides, [slotId]: tensorName } })),
+  clearPanelTensor: (slotId) =>
+    set((s) => {
+      const { [slotId]: _, ...rest } = s.panelTensorOverrides;
+      return { panelTensorOverrides: rest };
+    }),
   toggleView: (view, availableViews) =>
     set((state) => {
       // If activeViews is empty it means "all on"; clicking a pill switches to explicit mode
