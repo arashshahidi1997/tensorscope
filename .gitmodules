@@ -37,3 +37,39 @@
 	path = resources/jupyterlite
 	url = https://github.com/jupyterlite/jupyterlite
 	datalad-url = https://github.com/jupyterlite/jupyterlite
+[submodule ".claude/worktrees/agent-a05b1fc3"]
+	path = .claude/worktrees/agent-a05b1fc3
+	url = ./.claude/worktrees/agent-a05b1fc3
+	datalad-id = 695eb2c6-b228-452f-8fe5-c7fd1ae42d67
+[submodule ".claude/worktrees/agent-a210a6cb"]
+	path = .claude/worktrees/agent-a210a6cb
+	url = ./.claude/worktrees/agent-a210a6cb
+	datalad-id = 695eb2c6-b228-452f-8fe5-c7fd1ae42d67
+[submodule ".claude/worktrees/agent-a2266411"]
+	path = .claude/worktrees/agent-a2266411
+	url = ./.claude/worktrees/agent-a2266411
+	datalad-id = 695eb2c6-b228-452f-8fe5-c7fd1ae42d67
+[submodule ".claude/worktrees/agent-a2ebc90d"]
+	path = .claude/worktrees/agent-a2ebc90d
+	url = ./.claude/worktrees/agent-a2ebc90d
+	datalad-id = 695eb2c6-b228-452f-8fe5-c7fd1ae42d67
+[submodule ".claude/worktrees/agent-a4e45805"]
+	path = .claude/worktrees/agent-a4e45805
+	url = ./.claude/worktrees/agent-a4e45805
+	datalad-id = 695eb2c6-b228-452f-8fe5-c7fd1ae42d67
+[submodule ".claude/worktrees/agent-a8e86797"]
+	path = .claude/worktrees/agent-a8e86797
+	url = ./.claude/worktrees/agent-a8e86797
+	datalad-id = 695eb2c6-b228-452f-8fe5-c7fd1ae42d67
+[submodule ".claude/worktrees/agent-ac58e7d7"]
+	path = .claude/worktrees/agent-ac58e7d7
+	url = ./.claude/worktrees/agent-ac58e7d7
+	datalad-id = 695eb2c6-b228-452f-8fe5-c7fd1ae42d67
+[submodule ".claude/worktrees/agent-aecf1dbe"]
+	path = .claude/worktrees/agent-aecf1dbe
+	url = ./.claude/worktrees/agent-aecf1dbe
+	datalad-id = 695eb2c6-b228-452f-8fe5-c7fd1ae42d67
+[submodule ".claude/worktrees/agent-af36b89c"]
+	path = .claude/worktrees/agent-af36b89c
+	url = ./.claude/worktrees/agent-af36b89c
+	datalad-id = 695eb2c6-b228-452f-8fe5-c7fd1ae42d67
