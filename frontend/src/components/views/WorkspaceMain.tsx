@@ -9,7 +9,7 @@
  * (e.g. clicking a time point or a spatial cell commits the new selection to the
  * server and invalidates dependent queries).
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   clampWindow,
   makeDefaultSliceRequest,
@@ -30,12 +30,15 @@ import { AnimationController } from "../controls/AnimationController";
 import { SpatialEventView } from "./SpatialEventView";
 import { TensorChooser } from "./TensorChooser";
 import { TensorOverview } from "./TensorOverview";
+import { ViewGrid } from "./ViewGrid";
 
 type WorkspaceMainProps = {
   onCommitSelection: (dto: SelectionDTO) => void;
+  /** Render prop: receives the navigator element to be placed in the bottom panel. */
+  renderNavigator?: (node: ReactNode) => void;
 };
 
-export function WorkspaceMain({ onCommitSelection }: WorkspaceMainProps) {
+export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceMainProps) {
   const { selectedTensor, activeViews, setSelectedTensor, toggleView } = useAppStore();
   const selectionState = useSelectionStore();
   const { timeWindow, setTimeWindow, setFreq, setHoveredElectrode } = selectionState;
@@ -184,6 +187,112 @@ export function WorkspaceMain({ onCommitSelection }: WorkspaceMainProps) {
   const PSDComponent = viewRegistry.psd_average;
   const SpectrogramComponent = viewRegistry.spectrogram;
 
+  // ── Lift navigator to bottom panel via render prop ──────────────────────
+  const navigatorRef = useRef(renderNavigator);
+  navigatorRef.current = renderNavigator;
+
+  useEffect(() => {
+    if (!navigatorRef.current) return;
+    if (navigatorData) {
+      navigatorRef.current(
+        <NavigatorView
+          slice={navigatorData}
+          selection={selectionDraft}
+          onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
+          timeWindow={timeWindow}
+          onTimeWindowChange={setTimeWindow}
+        />,
+      );
+    } else {
+      navigatorRef.current(null);
+    }
+  });
+
+  // ── Build view elements map ────────────────────────────────────────────
+  const viewElements: Record<string, ReactNode> = {};
+
+  if (hasTimeseries) {
+    viewElements["timeseries"] = timeseriesData ? (
+      <TimeseriesComponent
+        slice={timeseriesData}
+        selection={selectionDraft}
+        events={eventWindowQuery.data ?? []}
+        onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
+        onTimeWindowChange={setTimeWindow}
+      />
+    ) : (
+      <div className="placeholder">Loading…</div>
+    );
+  }
+
+  if (hasSpatial) {
+    viewElements["spatial_map"] = spatialSliceQuery.data ? (
+      <SpatialMapComponent
+        slice={spatialSliceQuery.data}
+        selection={selectionDraft}
+        onSelectCell={(ap, ml) =>
+          onCommitSelection({ ...selectionDraft, ap, ml, channel: null })
+        }
+        onHoverElectrode={setHoveredElectrode}
+      />
+    ) : (
+      <div className="placeholder">Loading…</div>
+    );
+  }
+
+  if (hasPropagation) {
+    viewElements["propagation_frame"] = (
+      <div className="propagation-panel">
+        {timeCoord && (
+          <AnimationController
+            timeRange={[timeCoord.min as number ?? 0, timeCoord.max as number ?? 10]}
+            fps={10}
+          />
+        )}
+        {propagationFrame ? (
+          <PropagationView
+            slice={propagationFrame}
+            selection={selectionDraft}
+            onSelectCell={(ap, ml) =>
+              onCommitSelection({ ...selectionDraft, ap, ml, channel: null })
+            }
+            onHoverElectrode={setHoveredElectrode}
+          />
+        ) : null}
+      </div>
+    );
+  }
+
+  if (hasSpectrogram && spectrogramSliceQuery.data) {
+    viewElements["spectrogram"] = (
+      <SpectrogramComponent
+        slice={spectrogramSliceQuery.data}
+        selection={selectionDraft}
+        onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
+        onSelectFreq={handleSelectFreq}
+      />
+    );
+  }
+
+  if (hasPSD && psdSliceQuery.data) {
+    viewElements["psd_average"] = (
+      <PSDComponent
+        slice={psdSliceQuery.data}
+        selection={selectionDraft}
+        onSelectFreq={handleSelectFreq}
+      />
+    );
+  }
+
+  if (firstEventStream && hasSpatial) {
+    viewElements["spatial_event"] = (
+      <SpatialEventView
+        tensorName={selectedTensor}
+        periEventWindow={0.05}
+      />
+    );
+  }
+
   return (
     <div className="content-stack">
       {/* Tensor + view selector */}
@@ -200,8 +309,8 @@ export function WorkspaceMain({ onCommitSelection }: WorkspaceMainProps) {
         />
       ) : null}
 
-      {/* Navigator — always shown when the tensor has a navigator view */}
-      {navigatorData && (
+      {/* Navigator inline fallback — shown when no bottom panel render prop */}
+      {!renderNavigator && navigatorData && (
         <NavigatorView
           slice={navigatorData}
           selection={selectionDraft}
@@ -211,93 +320,12 @@ export function WorkspaceMain({ onCommitSelection }: WorkspaceMainProps) {
         />
       )}
 
-      {/* Main canonical panels: timeseries + spatial map side by side.
-          Panel containers are always rendered when the view is toggled on so
-          the flex layout never collapses and then re-expands during data loads. */}
-      {(hasTimeseries || hasSpatial) && (
-        <div className="main-panels">
-          {hasTimeseries && (
-            <div className="panel-primary">
-              {timeseriesData ? (
-                <TimeseriesComponent
-                  slice={timeseriesData}
-                  selection={selectionDraft}
-                  events={eventWindowQuery.data ?? []}
-                  onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
-                  onTimeWindowChange={setTimeWindow}
-                />
-              ) : (
-                <div className="placeholder">Loading…</div>
-              )}
-            </div>
-          )}
-          {hasSpatial && (
-            <div className="panel-secondary">
-              {spatialSliceQuery.data ? (
-                <SpatialMapComponent
-                  slice={spatialSliceQuery.data}
-                  selection={selectionDraft}
-                  onSelectCell={(ap, ml) =>
-                    onCommitSelection({ ...selectionDraft, ap, ml, channel: null })
-                  }
-                  onHoverElectrode={setHoveredElectrode}
-                />
-              ) : (
-                <div className="placeholder">Loading…</div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Propagation frame */}
-      {hasPropagation && (
-        <div className="propagation-panel">
-          {timeCoord && (
-            <AnimationController
-              timeRange={[timeCoord.min as number ?? 0, timeCoord.max as number ?? 10]}
-              fps={10}
-            />
-          )}
-          {propagationFrame ? (
-            <PropagationView
-              slice={propagationFrame}
-              selection={selectionDraft}
-              onSelectCell={(ap, ml) =>
-                onCommitSelection({ ...selectionDraft, ap, ml, channel: null })
-              }
-              onHoverElectrode={setHoveredElectrode}
-            />
-          ) : null}
-        </div>
-      )}
-
-      {/* Spectrogram */}
-      {hasSpectrogram && spectrogramSliceQuery.data ? (
-        <SpectrogramComponent
-          slice={spectrogramSliceQuery.data}
-          selection={selectionDraft}
-          onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
-          onSelectFreq={handleSelectFreq}
-        />
-      ) : null}
-
-      {/* PSD average */}
-      {hasPSD && psdSliceQuery.data ? (
-        <PSDComponent
-          slice={psdSliceQuery.data}
-          selection={selectionDraft}
-          onSelectFreq={handleSelectFreq}
-        />
-      ) : null}
-
-      {/* Spatial event view — peri-event spatial heatmap */}
-      {firstEventStream && hasSpatial && (
-        <SpatialEventView
-          tensorName={selectedTensor}
-          periEventWindow={0.05}
-        />
-      )}
+      {/* View grid replaces the old hardcoded layout */}
+      <ViewGrid
+        viewElements={viewElements}
+        activeViewIds={effectiveActiveViews}
+        availableViews={availableViews}
+      />
     </div>
   );
 }

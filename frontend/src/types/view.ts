@@ -23,5 +23,7 @@ export type ViewDescriptor = {
   id: string;
   label: string;
   requiredDims: string[];
+  /** Lower number = higher priority for grid placement. */
+  priority?: number;
   canRender?: (schema: TensorSchema) => boolean;
 };

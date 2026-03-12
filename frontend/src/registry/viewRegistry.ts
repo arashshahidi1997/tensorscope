@@ -14,14 +14,14 @@ import type { TensorSchema, ViewDescriptor } from "../types";
  * view to be applicable. `getAvailableViews(schema)` uses these to filter.
  */
 export const VIEW_DESCRIPTORS: ViewDescriptor[] = [
-  { id: "timeseries",  label: "Timeseries",  requiredDims: ["time"] },
-  { id: "navigator",   label: "Navigator",   requiredDims: ["time"] },
-  { id: "spatial_map",        label: "Spatial Map",  requiredDims: ["AP", "ML"] },
-  { id: "propagation_frame", label: "Propagation",  requiredDims: ["time", "AP", "ML"] },
-  { id: "spectrogram", label: "Spectrogram", requiredDims: ["time", "freq"] },
-  { id: "psd_average", label: "PSD Average", requiredDims: ["freq"] },
-  { id: "psd_spatial", label: "PSD Spatial", requiredDims: ["freq", "AP", "ML"] },
-  { id: "table",       label: "Table",       requiredDims: [] },
+  { id: "timeseries",        label: "Timeseries",   requiredDims: ["time"],              priority: 1 },
+  { id: "spatial_map",       label: "Spatial Map",  requiredDims: ["AP", "ML"],          priority: 2 },
+  { id: "spectrogram",       label: "Spectrogram",  requiredDims: ["time", "freq"],      priority: 3 },
+  { id: "psd_average",       label: "PSD Average",  requiredDims: ["freq"],              priority: 4 },
+  { id: "navigator",         label: "Navigator",    requiredDims: ["time"],              priority: 5 },
+  { id: "propagation_frame", label: "Propagation",  requiredDims: ["time", "AP", "ML"], priority: 6 },
+  { id: "psd_spatial",       label: "PSD Spatial",  requiredDims: ["freq", "AP", "ML"], priority: 7 },
+  { id: "table",             label: "Table",        requiredDims: [],                    priority: 8 },
 ];
 
 /**

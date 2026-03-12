@@ -1,17 +1,9 @@
 import { useSelectionStore } from "../../store/selectionStore";
-import { EventTableView } from "../views/EventTableView";
-import type { EventRecordDTO, EventStreamMetaDTO, TensorSummaryDTO } from "../../api/types";
+import type { TensorSummaryDTO } from "../../api/types";
 
 type InspectorPanelProps = {
   /** Summary of the currently selected tensor, from StateDTO.tensors. */
   tensorSummary: TensorSummaryDTO | null;
-  streamMeta: EventStreamMetaDTO | null;
-  events: EventRecordDTO[];
-  selectedEventId: string | number | null;
-  onSelectTime: (t: number) => void;
-  onSelectEvent: (eventId: string | number, streamName: string) => void;
-  onPrev: () => void;
-  onNext: () => void;
 };
 
 /**
@@ -26,13 +18,6 @@ type InspectorPanelProps = {
  */
 export function InspectorPanel({
   tensorSummary,
-  streamMeta,
-  events,
-  selectedEventId,
-  onSelectTime,
-  onSelectEvent,
-  onPrev,
-  onNext,
 }: InspectorPanelProps) {
   const { timeCursor, timeWindow, freq, spatial } = useSelectionStore();
 
@@ -90,16 +75,6 @@ export function InspectorPanel({
         </dl>
       </section>
 
-      <EventTableView
-        streamMeta={streamMeta}
-        events={events}
-        selectedTime={timeCursor}
-        selectedEventId={selectedEventId}
-        onSelectTime={onSelectTime}
-        onSelectEvent={onSelectEvent}
-        onPrev={onPrev}
-        onNext={onNext}
-      />
     </div>
   );
 }

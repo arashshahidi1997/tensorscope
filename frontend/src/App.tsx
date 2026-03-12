@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState } from "react";
+import { useEffect, useCallback, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
 import { useEventWindowQuery, useStateQuery } from "./api/queries";
@@ -6,8 +6,11 @@ import type { EventRecordDTO, SelectionDTO } from "./api/types";
 import { WorkspaceMain } from "./components/views/WorkspaceMain";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { LayoutShell } from "./components/layout/LayoutShell";
-import { NavRail } from "./components/layout/NavRail";
 import { InspectorPanel } from "./components/layout/InspectorPanel";
+import { SidebarTabBar } from "./components/layout/SidebarTabBar";
+import { SidebarContent } from "./components/layout/SidebarContent";
+import { ExploreTabContent } from "./components/layout/ExploreTabContent";
+import { EventsTabContent } from "./components/layout/EventsTabContent";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
 import { useEventNavigation } from "./components/views/useEventNavigation";
 import { useAppStore } from "./store/appStore";
@@ -17,6 +20,7 @@ function App() {
   const queryClient = useQueryClient();
   const stateQuery = useStateQuery();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [navigatorElement, setNavigatorElement] = useState<ReactNode>(null);
 
   // Shell state
   const {
@@ -113,24 +117,42 @@ function App() {
           <span aria-hidden="true">⚙</span>
         </button>
       )}
-      nav={<NavRail onCommitSelection={commitSelection} />}
+      nav={
+        <>
+          <SidebarTabBar />
+          <SidebarContent
+            exploreContent={
+              <ExploreTabContent onCommitSelection={commitSelection} />
+            }
+            eventsContent={
+              <EventsTabContent
+                streamMeta={firstEventStream}
+                events={eventWindowQuery.data ?? []}
+                selectedTime={selectionState.timeCursor}
+                selectedEventId={eventNav.selectedEventId}
+                onSelectTime={(t) => commitSelection({ ...selectionDraft, time: t })}
+                onSelectEvent={(eventId, streamName) => eventNav.selectEvent(eventId, streamName)}
+                onPrev={() => goToEvent("prev")}
+                onNext={() => goToEvent("next")}
+              />
+            }
+          />
+        </>
+      }
       inspector={
         <InspectorPanel
           tensorSummary={
             stateQuery.data?.tensors.find((t) => t.name === selectedTensor) ?? null
           }
-          streamMeta={firstEventStream}
-          events={eventWindowQuery.data ?? []}
-          selectedEventId={eventNav.selectedEventId}
-          onSelectTime={(t) => commitSelection({ ...selectionDraft, time: t })}
-          onSelectEvent={(eventId, streamName) => eventNav.selectEvent(eventId, streamName)}
-          onPrev={() => goToEvent("prev")}
-          onNext={() => goToEvent("next")}
         />
       }
+      bottomPanel={navigatorElement}
     >
       <ErrorBoundary label="WorkspaceMain">
-        <WorkspaceMain onCommitSelection={commitSelection} />
+        <WorkspaceMain
+          onCommitSelection={commitSelection}
+          renderNavigator={setNavigatorElement}
+        />
       </ErrorBoundary>
       <SettingsDialog
         open={settingsOpen}
