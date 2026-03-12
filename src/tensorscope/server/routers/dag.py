@@ -25,6 +25,7 @@ def _tensor_node_dto(node) -> DAGTensorNodeDTO:
         node_type=node.node_type,
         visible=node.visible,
         exploratory=node.exploratory,
+        pipeline_selected=node.pipeline_selected,
         display_name=node.display_name,
     )
 

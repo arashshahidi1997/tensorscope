@@ -23,6 +23,10 @@ import type {
   ProvenanceStepDTO,
   WorkspaceDAGDTO,
 } from "../types/dag";
+import type {
+  PipelineExportRequest,
+  PipelineExportResponse,
+} from "../types/pipeline";
 
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await fetch(input, {
@@ -154,5 +158,27 @@ export const api = {
 
   getDAGProvenance(tensorNodeId: string): Promise<ProvenanceStepDTO[]> {
     return request<ProvenanceStepDTO[]>(`/api/v1/dag/provenance/${tensorNodeId}`);
+  },
+
+  // Pipeline API (M6)
+  exportPipeline(body: PipelineExportRequest): Promise<PipelineExportResponse> {
+    return request<PipelineExportResponse>("/api/v1/pipeline/export", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  },
+
+  promoteTensor(tensorNodeId: string): Promise<{ status: string; tensor_node_id: string }> {
+    return request<{ status: string; tensor_node_id: string }>(
+      `/api/v1/pipeline/promote/${encodeURIComponent(tensorNodeId)}`,
+      { method: "POST" },
+    );
+  },
+
+  demoteTensor(tensorNodeId: string): Promise<{ status: string; tensor_node_id: string }> {
+    return request<{ status: string; tensor_node_id: string }>(
+      `/api/v1/pipeline/demote/${encodeURIComponent(tensorNodeId)}`,
+      { method: "POST" },
+    );
   },
 };

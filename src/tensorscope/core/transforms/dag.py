@@ -42,6 +42,8 @@ class DAGTensorNode:
     exploratory
         Temporary/experimental flag; exploratory nodes are not eligible
         for pipeline export (M6).
+    pipeline_selected
+        Whether this tensor is selected for pipeline export (M6).
     display_name
         Human-readable label (defaults to tensor_id).
     """
@@ -51,6 +53,7 @@ class DAGTensorNode:
     node_type: Literal["source", "derived"] = "source"
     visible: bool = True
     exploratory: bool = False
+    pipeline_selected: bool = False
     display_name: str = ""
 
     def __post_init__(self) -> None:
@@ -64,6 +67,7 @@ class DAGTensorNode:
             "node_type": self.node_type,
             "visible": self.visible,
             "exploratory": self.exploratory,
+            "pipeline_selected": self.pipeline_selected,
             "display_name": self.display_name,
         }
 
@@ -283,6 +287,11 @@ class WorkspaceDAG:
         """Mark tensor as exploratory or curated."""
         node = self.get_tensor_node(tensor_node_id)
         node.exploratory = exploratory
+
+    def set_tensor_pipeline_selected(self, tensor_node_id: str, selected: bool) -> None:
+        """Mark tensor as selected for pipeline export."""
+        node = self.get_tensor_node(tensor_node_id)
+        node.pipeline_selected = selected
 
     # -- Lineage queries ---------------------------------------------------
 

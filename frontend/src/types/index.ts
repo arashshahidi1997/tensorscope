@@ -45,3 +45,14 @@ export type {
   WorkspaceDAGDTO,
   DAGNodeVisibilityDTO,
 } from "./dag";
+
+export type {
+  PipelineSourceTensor,
+  PipelineTransformNode,
+  PipelineDerivedTensor,
+  ExecutionMetadata,
+  PipelineSpec,
+  PipelineExportRequest,
+  WorkflowArtifact,
+  PipelineExportResponse,
+} from "./pipeline";

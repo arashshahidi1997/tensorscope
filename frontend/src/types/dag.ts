@@ -13,6 +13,7 @@ export type DAGTensorNodeDTO = {
   visible: boolean;
   exploratory: boolean;
   display_name: string;
+  pipeline_selected: boolean;
 };
 
 /** Transform node in the workspace DAG. */

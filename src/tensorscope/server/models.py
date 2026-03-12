@@ -245,6 +245,7 @@ class DAGTensorNodeDTO(BaseModel):
     node_type: str  # "source" | "derived"
     visible: bool = True
     exploratory: bool = False
+    pipeline_selected: bool = False
     display_name: str = ""
 
 
@@ -309,3 +310,52 @@ class StateDTO(BaseModel):
     layout: LayoutDTO
     tensors: list[TensorSummaryDTO]
     events: list[EventStreamMetaDTO]
+
+
+# --- Pipeline DTOs (M6) ---
+
+class PipelineSourceTensorDTO(BaseModel):
+    tensor_id: str
+    data_ref: str = ""
+
+class PipelineTransformNodeDTO(BaseModel):
+    node_id: str
+    transform_name: str
+    params: dict[str, Any] = {}
+    inputs: list[str] = []
+    output: str = ""
+
+class PipelineDerivedTensorDTO(BaseModel):
+    tensor_id: str
+    dims: list[str] = []
+    dtype: str = ""
+
+class ExecutionMetadataDTO(BaseModel):
+    created_at: str = ""
+    session_id: str = ""
+    description: str = ""
+
+class PipelineSpecDTO(BaseModel):
+    version: str = "1.0"
+    name: str = ""
+    id: str = ""
+    source_tensors: list[PipelineSourceTensorDTO] = []
+    transforms: list[PipelineTransformNodeDTO] = []
+    derived_tensors: list[PipelineDerivedTensorDTO] = []
+    outputs: list[str] = []
+    execution_metadata: ExecutionMetadataDTO = ExecutionMetadataDTO()
+    cooker_profile: str | None = None
+
+class PipelineExportRequestDTO(BaseModel):
+    output_tensor_ids: list[str]
+    name: str = ""
+    cooker_profile: str | None = None
+    description: str = ""
+
+class WorkflowArtifactDTO(BaseModel):
+    filename: str
+    content: str
+
+class PipelineExportResponseDTO(BaseModel):
+    spec: PipelineSpecDTO
+    workflow_artifacts: list[WorkflowArtifactDTO] = []

@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from tensorscope.core.events import EventRegistry, EventStream
 from tensorscope.server.models import ApiErrorDTO
-from tensorscope.server.routers import dag, events, layout, processing, selection, state, tensors, transforms
+from tensorscope.server.routers import dag, events, layout, pipeline, processing, selection, state, tensors, transforms
 from tensorscope.server.session import SESSION_COOKIE_NAME, SessionManager
 from tensorscope.server.state import ServerState, create_server_state
 
@@ -38,6 +38,7 @@ def create_app(
     app.include_router(processing.router, prefix="/api/v1")
     app.include_router(transforms.router, prefix="/api/v1")
     app.include_router(dag.router, prefix="/api/v1")
+    app.include_router(pipeline.router, prefix="/api/v1")
     return app
 
 
