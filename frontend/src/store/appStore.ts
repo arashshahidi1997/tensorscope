@@ -17,11 +17,17 @@ type AppStore = {
   activeViews: string[];
   layoutDraft: LayoutDTO | null;
   theme: ThemeId;
+  /** Whether to show brainstate color overlay on timeseries/navigator. */
+  brainstateOverlay: boolean;
+  /** Whether to show the hypnogram view. */
+  showHypnogram: boolean;
   setSelectedTensor: (value: string) => void;
   toggleView: (view: string, availableViews: string[]) => void;
   setActiveViews: (views: string[]) => void;
   setLayoutDraft: (value: LayoutDTO) => void;
   setTheme: (value: ThemeId) => void;
+  toggleBrainstateOverlay: () => void;
+  toggleHypnogram: () => void;
 };
 
 export const useAppStore = create<AppStore>((set) => ({
@@ -29,6 +35,8 @@ export const useAppStore = create<AppStore>((set) => ({
   activeViews: [],
   layoutDraft: null,
   theme: getInitialTheme(),
+  brainstateOverlay: true,
+  showHypnogram: true,
   setSelectedTensor: (value) => set({ selectedTensor: value, activeViews: [] }),
   toggleView: (view, availableViews) =>
     set((state) => {
@@ -48,4 +56,6 @@ export const useAppStore = create<AppStore>((set) => ({
     }
     set({ theme: value });
   },
+  toggleBrainstateOverlay: () => set((s) => ({ brainstateOverlay: !s.brainstateOverlay })),
+  toggleHypnogram: () => set((s) => ({ showHypnogram: !s.showHypnogram })),
 }));

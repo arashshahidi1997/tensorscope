@@ -148,19 +148,36 @@ export function SpatialMapSliceView({
   // Guard: must come AFTER all hooks.
   if (!selection) return null;
 
+  // Maintain aspect ratio: nML columns / nAP rows
+  const nAP = nAPRef.current || 1;
+  const nML = nMLRef.current || 1;
+  const aspectRatio = nML / nAP;
+
   return (
     <div
-      ref={containerRef}
-      style={{ width: "100%", height: "100%", position: "relative" }}
+      style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}
       title="Click a cell to select AP/ML"
     >
-      <canvas
-        ref={canvasRef}
-        style={{ display: "block", width: "100%", height: "100%" }}
-        onClick={handleClick}
-        onMouseMove={handleMouseMove}
-        onMouseLeave={handleMouseLeave}
-      />
+      <div
+        ref={containerRef}
+        style={{
+          position: "relative",
+          aspectRatio: `${aspectRatio}`,
+          maxWidth: "100%",
+          maxHeight: "100%",
+          // Fill the dominant dimension
+          width: aspectRatio >= 1 ? "100%" : "auto",
+          height: aspectRatio < 1 ? "100%" : "auto",
+        }}
+      >
+        <canvas
+          ref={canvasRef}
+          style={{ display: "block", width: "100%", height: "100%" }}
+          onClick={handleClick}
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
+        />
+      </div>
     </div>
   );
 }

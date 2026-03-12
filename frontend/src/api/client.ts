@@ -1,4 +1,6 @@
 import type {
+  BrainstateIntervalDTO,
+  BrainstateMetaDTO,
   EventRecordDTO,
   EventStreamMetaDTO,
   LayoutDTO,
@@ -158,6 +160,19 @@ export const api = {
 
   getDAGProvenance(tensorNodeId: string): Promise<ProvenanceStepDTO[]> {
     return request<ProvenanceStepDTO[]>(`/api/v1/dag/provenance/${tensorNodeId}`);
+  },
+
+  // Brainstates API
+  getBrainstateMeta(): Promise<BrainstateMetaDTO> {
+    return request<BrainstateMetaDTO>("/api/v1/brainstates");
+  },
+
+  getBrainstateIntervals(t0?: number, t1?: number): Promise<BrainstateIntervalDTO[]> {
+    const params = new URLSearchParams();
+    if (t0 != null) params.set("t0", String(t0));
+    if (t1 != null) params.set("t1", String(t1));
+    const qs = params.toString();
+    return request<BrainstateIntervalDTO[]>(`/api/v1/brainstates/intervals${qs ? `?${qs}` : ""}`);
   },
 
   // Pipeline API (M6)

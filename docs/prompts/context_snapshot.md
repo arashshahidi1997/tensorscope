@@ -27,101 +27,144 @@ The repo also contains design studies, hand-off notes, and reference-study mater
 
 ## Current TensorScope status
 
-M1, M2, M3 complete as of 2026-03-12.
+M1–M8 complete as of 2026-03-12.
 
 Implemented:
 
 ### Core / server
-- tensor registry and validated selection model in the Python core
-- session-backed API state and tensor slice endpoints
+
+- Tensor registry and validated selection model in the Python core
+- Session-backed API state and tensor slice endpoints
 - `ElectrodeLayoutDTO` + `ServerState.electrode_layout()` for spatial tensors
 - `propagation_frame` view type: returns a single `(AP, ML)` frame at `frame_time`
-- 40 backend tests passing
+- `psd_live` view type: on-the-fly multitaper PSD via `cogpy.core.spectral.psd.psd_multitaper`; returns `(freq, AP, ML)` or `(freq, channel)` from raw `(time, ...)` tensors
+- Processing pipeline with server-side cache: full-tensor processing runs once, slices read from cache
+- `ProcessingParamsDTO` has `enabled: bool` toggle to disable the pipeline
+- Brainstate support: `GET /api/v1/brainstates` (meta) + `GET /api/v1/brainstates/intervals?t0=&t1=` (merged intervals)
+- 9 FastAPI routers (state, tensors, selection, layout, events, processing, transforms, dag, brainstates)
+- 126 backend tests passing
 
 ### Frontend foundation (M1)
-- `useSelectionStore` — dedicated navigation store: `{ timeCursor, timeWindow, spatial, freq, event }`; app-shell state in `useAppStore`
-- `SpatialSelection` now carries `hoveredId: number | null` and `selectedIds: number[]`
-- new store setters: `setHoveredElectrode`, `setSelectedElectrodes`, `toggleElectrodeSelection`, `setSpatialBrush`
-- `toSelectionDTO` / `initFromDTO` — store ↔ wire-format bridge (hoveredId/selectedIds not serialized to server)
-- `useChartTools(chartRef)` + `ChartToolbar` — view-local tool state outside shared store
-- `useOverviewDetail()` — navigator drag and timeseries zoom both call `setTimeWindow`
-- `useEventNavigation()` — event identity in store, decoupled from timeCursor
-- `NavRail` / `WorkspaceMain` / `InspectorPanel` — workspace shell extracted; App.tsx is ~100 lines
-- `VIEW_DESCRIPTORS` + `getAvailableViews(schema)` — frontend view registry mirrors backend `_VIEW_REGISTRY`
-- `InspectorPanel` — tensor summary + selection summary + event table in right rail
+
+- `useSelectionStore` — navigation store: `{ timeCursor, timeWindow, spatial, freq, event }`
+- `useAppStore` — shell: `selectedTensor`, `activeViews`, `layoutDraft`, `theme`, `brainstateOverlay`, `showHypnogram`
+- `useLayoutStore` — persistent layout state (sidebar/inspector/bottom panel widths, collapsed state) with Zustand `persist` middleware
+- `toSelectionDTO` / `initFromDTO` — store ↔ wire-format bridge
+- `useChartTools(chartRef)` + `ChartToolbar` — view-local tool state
+- `useOverviewDetail()` / `useEventNavigation()` — navigation contracts
 - 39 frontend unit tests: selectionStore (31) + useChartTools (8)
 
-### Scientific views (M2)
-- `DataSource` interface + `SliceOptions` + `createTensorDataSource` factory in `frontend/src/api/dataSource.ts`
-- `useSliceQuery` / `makeDefaultSliceRequest` / `clampWindow` in `frontend/src/api/queries.ts`
-- Arrow IPC decode + `extractTimeseriesColumnar`, `extractSpatialCells`, `extractFreqCurve`, `extractSpectrogram` in `frontend/src/api/arrow.ts`
-- `timeseries` → uPlot multichannel, event markers via canvas hook
-- `spatial_map` → Canvas heatmap (ChannelGridRenderer) with click-to-select and hover
+### Dynamic workspace layout (M7)
+
+- `LayoutShell` with `ResizeHandle` (pointer-capture drag) for sidebar, inspector, bottom panel
+- `SidebarTabBar` — 36px vertical icon strip with 5 tabs (Explore, Graph, Tensors, Events, Pipeline)
+- `SidebarContent` — tab routing with display toggling for state preservation
+- `ExploreTabContent` — Processing (expanded) + Selection (collapsed) in `CollapsibleSection` wrappers
+- `DAGGraphView` — SVG-based DAG visualization in Graph tab; layered layout, click-to-select tensor
+- `TensorBrowserTab` — tensor list with name/dims/shape/badge, expanded detail on active
+- `EventsTabContent` — event table migrated from InspectorPanel
+- `LayoutPresetPicker` — topbar dropdown with 4 presets (Signal Inspection, Spatial Exploration, Spectral Analysis, Overview)
+- `useLayoutShortcuts` — Ctrl+B/Ctrl+Shift+B/Ctrl+J/Escape keyboard handlers
+- Layout persistence via localStorage (Zustand persist)
+
+### Stable slot-based view grid (M8)
+
+- `DEFAULT_SLOT_LAYOUT` — fixed 3-row layout: signal (timeseries + spatial_map), PSD (heatmap + curve + spatial), spectrogram (spectrogram + propagation_frame)
+- `ViewPanel` — 24px header chrome with label, maximize (⤢/⊡), close (×)
+- `ViewGrid` — row-based flex layout; views toggle visibility in-place without reflowing neighbors
+
+### Scientific views (M2 + M8)
+
+- `timeseries` → uPlot multichannel, event markers via canvas hook, brainstate overlay bands, persistent time cursor, relative time labels, Y-zoom + amplitude gain modes
+- `spatial_map` → Canvas heatmap (ChannelGridRenderer) with click-to-select, hover, aspect-ratio constraint
 - `psd_average` → uPlot freq curve (mean over spatial)
+- `psd_heatmap` → Canvas 2D (channels × freq), inferno colormap, log10 scaling
+- `psd_curve` → Canvas 2D rotated (Y=freq, X=power), mean±std band
+- `psd_spatial` → ChannelGridRenderer for AP×ML power at selected freq
 - `spectrogram` → Canvas 2D heatmap, inferno-like colormap
-- `navigator` → thin uPlot overview with drag-to-zoom → updates timeWindow
+- `navigator` → thin uPlot overview with drag-to-zoom, brainstate overlay bands
+- `hypnogram` → Canvas 2D step chart for brainstate visualization
 - `EventTableView` with prev/next navigation
+- `TimeScaleBar` — horizontal preset pills (10ms–10s) below timeseries chart
 
 ### Spatial dynamics (M3)
-- `ElectrodeLayout` / `ElectrodeCoord` / `buildElectrodeLayout` in `frontend/src/types/spatialLayout.ts`
-- `SpatialRendererBackend` interface in `frontend/src/components/views/SpatialRenderer.ts`
-- `ChannelGridRenderer` (Canvas CPU impl) in `frontend/src/components/views/ChannelGridRenderer.ts` — sequential + cyclical colormaps, 1px-gap grid, hit-testing, hover/select borders
-- `SpatialMapSliceView` rewritten to use `ChannelGridRenderer` + `ResizeObserver`; wires `onHoverElectrode`
-- `PropagationView` — spatial heatmap with time overlay (`t = N.NNNs`), same renderer stack
-- `AnimationController` — rAF loop driving `timeCursor` via `getState()`, play/pause/step/speed controls
-- `SpatialEventView` — peri-event spatial heatmap driven by selected event + timeCursor
-- `propagation_frame` registered in `VIEW_DESCRIPTORS` and `viewRegistry`
-- `WorkspaceMain` wired: hover → `setHoveredElectrode`, propagation panel with `AnimationController`, spatial event view
+
+- `ElectrodeLayout` / `ElectrodeCoord` / `buildElectrodeLayout` in types
+- `SpatialRendererBackend` interface → `ChannelGridRenderer` (Canvas CPU impl)
+- `PropagationView` — spatial heatmap with time overlay
+- `AnimationController` — rAF loop driving `timeCursor`
+- `SpatialEventView` — peri-event spatial heatmap
+
+### Transforms / DAG (M4–M6)
+
+- `TransformRegistry` + DAG executor in `core/`
+- `useDagStore` — frontend DAG state
+- Transform pipeline: CMR, bandpass, notch, z-score
+- Server-side processing cache for full-tensor results
 
 ## Current milestone
 
-**M3 complete. Ready for M4.**
+**M8 complete. Ready for M9.**
 
-M4 goal: transform registry, derived tensors, explicit analysis outputs (spectrogram,
-PSD, band power, coherence, event-aligned tensors), worker-based computation, transform cache.
+Potential M9 goals: WebGL spatial renderer, multi-tensor workspace, cross-tensor views, export/annotation features.
 
 ## Inspect these files first
 
 ### Core and server
 
 - [src/tensorscope/core/state.py](/storage2/arash/projects/tensorscope/src/tensorscope/core/state.py)
-- [src/tensorscope/server/state.py](/storage2/arash/projects/tensorscope/src/tensorscope/server/state.py)
-- [src/tensorscope/server/models.py](/storage2/arash/projects/tensorscope/src/tensorscope/server/models.py)
+- [src/tensorscope/server/state.py](/storage2/arash/projects/tensorscope/src/tensorscope/server/state.py) — `apply_slice_request`, `_VIEW_REGISTRY`, processing cache, brainstate helpers
+- [src/tensorscope/server/models.py](/storage2/arash/projects/tensorscope/src/tensorscope/server/models.py) — DTOs including `psd_params`, `ProcessingParamsDTO.enabled`
+- [src/tensorscope/server/routers/brainstates.py](/storage2/arash/projects/tensorscope/src/tensorscope/server/routers/brainstates.py)
 
 ### Frontend architecture anchors
 
 - [frontend/src/types/index.ts](/storage2/arash/projects/tensorscope/frontend/src/types/index.ts) — canonical domain types barrel
-- [frontend/src/types/selection.ts](/storage2/arash/projects/tensorscope/frontend/src/types/selection.ts) — SelectionState, SpatialSelection (with hoveredId/selectedIds)
-- [frontend/src/types/spatialLayout.ts](/storage2/arash/projects/tensorscope/frontend/src/types/spatialLayout.ts) — ElectrodeLayout, ElectrodeCoord, buildElectrodeLayout (M3)
-- [frontend/src/store/selectionStore.ts](/storage2/arash/projects/tensorscope/frontend/src/store/selectionStore.ts) — navigation state + spatial setters
+- [frontend/src/store/selectionStore.ts](/storage2/arash/projects/tensorscope/frontend/src/store/selectionStore.ts) — navigation state (1s default window on first load)
+- [frontend/src/store/appStore.ts](/storage2/arash/projects/tensorscope/frontend/src/store/appStore.ts) — shell store + brainstate toggles
+- [frontend/src/store/layoutStore.ts](/storage2/arash/projects/tensorscope/frontend/src/store/layoutStore.ts) — persistent layout state (Zustand persist)
 - [frontend/src/api/queries.ts](/storage2/arash/projects/tensorscope/frontend/src/api/queries.ts) — useSliceQuery, makeDefaultSliceRequest, clampWindow
-- [frontend/src/api/arrow.ts](/storage2/arash/projects/tensorscope/frontend/src/api/arrow.ts) — Arrow IPC decode + all extractors
+- [frontend/src/api/arrow.ts](/storage2/arash/projects/tensorscope/frontend/src/api/arrow.ts) — Arrow IPC decode + all extractors (including PSD heatmap/average/spatial)
 - [frontend/src/registry/viewRegistry.ts](/storage2/arash/projects/tensorscope/frontend/src/registry/viewRegistry.ts) — VIEW_DESCRIPTORS + getAvailableViews
-- [frontend/src/components/views/WorkspaceMain.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/WorkspaceMain.tsx)
-- [frontend/src/components/views/SpatialRenderer.ts](/storage2/arash/projects/tensorscope/frontend/src/components/views/SpatialRenderer.ts) — SpatialRendererBackend interface (M3)
-- [frontend/src/components/views/ChannelGridRenderer.ts](/storage2/arash/projects/tensorscope/frontend/src/components/views/ChannelGridRenderer.ts) — Canvas CPU renderer (M3)
-- [frontend/src/components/views/PropagationView.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/PropagationView.tsx) — propagation frame view (M3)
-- [frontend/src/components/controls/AnimationController.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/controls/AnimationController.tsx) — rAF animation controller (M3)
+- [frontend/src/components/views/WorkspaceMain.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/WorkspaceMain.tsx) — view orchestration, PSD live expansion, brainstate wiring
+- [frontend/src/components/views/ViewGrid.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/ViewGrid.tsx) — slot-based row layout
+- [frontend/src/components/views/viewGridLayout.ts](/storage2/arash/projects/tensorscope/frontend/src/components/views/viewGridLayout.ts) — DEFAULT_SLOT_LAYOUT constant
+- [frontend/src/components/views/TimeseriesSliceView.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/TimeseriesSliceView.tsx) — Y-zoom/gain, relative time, persistent cursor
+- [frontend/src/components/layout/SidebarTabBar.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/layout/SidebarTabBar.tsx) — 5-tab navigation
+- [frontend/src/components/layout/DAGGraphView.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/layout/DAGGraphView.tsx) — SVG DAG visualization
+- [frontend/src/components/layout/TensorBrowserTab.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/layout/TensorBrowserTab.tsx) — tensor list + detail
 
-## Recent major changes (M3, 2026-03-12)
+## Recent major changes (M7–M8, 2026-03-12)
 
-- `SpatialSelection` extended with `hoveredId` (transient, not serialized to server) and `selectedIds` (multi-electrode committed selection).
-- `ElectrodeLayout` / `ElectrodeCoord` / `buildElectrodeLayout` added to types barrel.
-- `SpatialRendererBackend` interface: `init`, `render`, `hitTest`, `dispose` — CPU/WebGL abstraction.
-- `ChannelGridRenderer` Canvas implementation: sequential + cyclical colormaps, ResizeObserver, O(n) hit-test.
-- `SpatialMapSliceView` rewritten to use `ChannelGridRenderer`; adds `onHoverElectrode` prop.
-- `PropagationView`: same renderer stack, adds `t = N.NNNs` canvas overlay from `slice.meta.selected_time`.
-- `AnimationController`: rAF loop, drives `timeCursor` via `getState().setTimeCursor` — no React re-render during animation.
-- `SpatialEventView`: peri-event spatial heatmap; gates on `event.eventId !== null`.
-- Backend: `ElectrodeLayoutDTO`, `ServerState.electrode_layout()`, `propagation_frame` view type with `frame_time` field.
-- `WorkspaceMain` wired: hover → `setHoveredElectrode`, propagation panel + animation controller, spatial event view at bottom.
-- Test baseline: 40 backend + 39 frontend tests, all green.
+- Resizable shell with pointer-capture `ResizeHandle` for sidebar, inspector, bottom panel
+- Tabbed sidebar: 5 tabs replacing single NavRail (Explore, Graph, Tensors, Events, Pipeline)
+- Slot-based view grid: fixed rows with named slots; views toggle in-place without reflowing
+- `ViewPanel` chrome (24px header, maximize/close) wrapping every view
+- Layout presets (4 built-in) + persistence via `useLayoutStore` + localStorage
+- Keyboard shortcuts: Ctrl+B (sidebar), Ctrl+Shift+B (inspector), Ctrl+J (bottom), Escape (reset)
+- `psd_live` server endpoint using `cogpy.core.spectral.psd.psd_multitaper`
+- Three PSD sub-views (heatmap, curve, spatial) from single server round-trip
+- `expandPSDLive()` bridges server's `psd_live` to frontend's 3 sub-view IDs
+- Timeseries overhaul: Y-zoom lock, amplitude gain mode, relative time labels, persistent cursor, TimeScaleBar
+- ResizeObserver skip for degenerate sizes (fixes blank-after-layout-change)
+- Server-side processing cache: pipeline runs once on full recording, slices from cache
+- `ProcessingParamsDTO.enabled` toggle to disable processing
+- Sidebar cleanup: LayoutPanel removed, Processing (top, expanded) + Selection (bottom, collapsed)
+- `CollapsibleSection` reusable component
+- DAG Graph tab: SVG layered layout, click-to-select tensor
+- Tensor Browser tab: tensor list with dims/shape, expanded detail on active
+- Brainstate overlay on timeseries/navigator (toggleable color bands)
+- Hypnogram view: Canvas 2D step chart
+- Brainstate API: `/api/v1/brainstates` + `/api/v1/brainstates/intervals`
+- Spatial map aspect-ratio constraint (`CSS aspect-ratio: nML/nAP`)
+- Test baseline: 126 backend + 39 frontend tests, all green
 
-## Open questions (M4 scope)
+## Open questions (M9 scope)
 
-- Worker isolation: should transform workers share a single `SharedArrayBuffer` pool or use per-transform `MessageChannel` pairs?
-- Transform cache invalidation: `OptionalUpdate<T>` partial DTO semantics vs. full-param cache key hashing — pick one before caching is implemented.
-- Multi-tensor workspace: view-to-tensor binding when multiple tensors are active (deferred from M2, still open).
+- WebGL spatial renderer: when to upgrade from Canvas CPU (`ChannelGridRenderer`) to WebGL for large electrode arrays?
+- Multi-tensor workspace: view-to-tensor binding when multiple tensors are active (deferred since M2)
+- Export/annotation: snapshotting views, annotating events, exporting selections
+- Cross-tensor views: e.g., comparing PSD across two recordings
 
 ## Update instructions for future agents
 

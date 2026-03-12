@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
 import type { SidebarTabId } from "../../store/layoutStore";
 import { useLayoutStore } from "../../store/layoutStore";
+import { DAGGraphView } from "./DAGGraphView";
 import { PlaceholderTab } from "./PlaceholderTab";
+import { TensorBrowserTab } from "./TensorBrowserTab";
 
 type SidebarContentProps = {
   /** Content for the Explore tab */
@@ -24,8 +26,8 @@ export function SidebarContent({ exploreContent, eventsContent }: SidebarContent
       style={{ display: sidebarCollapsed ? "none" : undefined }}
     >
       {renderTab("explore", activeSidebarTab, exploreContent)}
-      {renderTab("graph", activeSidebarTab, <PlaceholderTab label="Transform DAG inspector" />)}
-      {renderTab("tensors", activeSidebarTab, <PlaceholderTab label="Tensor browser" />)}
+      {renderTab("graph", activeSidebarTab, <DAGGraphView />)}
+      {renderTab("tensors", activeSidebarTab, <TensorBrowserTab />)}
       {renderTab("events", activeSidebarTab, eventsContent)}
       {renderTab("pipeline", activeSidebarTab, <PlaceholderTab label="Pipeline export" />)}
     </div>

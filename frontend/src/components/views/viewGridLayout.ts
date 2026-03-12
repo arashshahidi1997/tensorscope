@@ -1,119 +1,82 @@
 /**
- * Auto-layout logic for the view grid.
+ * Stable slot-based view layout.
  *
- * Given a list of active view IDs, computes a default ViewGridLayout
- * that arranges them in a CSS grid (max 2x2). Views beyond 4 go into
- * an overflow area (not assigned to grid cells).
+ * Each view type has a permanent "home slot" in a row-based layout.
+ * Toggling a view shows/hides it in its slot without reflowing siblings.
  */
-import type { ViewGridLayout, GridCell } from "../../store/layoutStore";
-import { VIEW_DESCRIPTORS } from "../../registry/viewRegistry";
+import type { ViewSlotLayout, ViewRow } from "../../store/layoutStore";
 
-const SPATIAL_VIEW_IDS = new Set(["spatial_map", "psd_spatial", "propagation_frame"]);
-
-function isSpatial(viewId: string): boolean {
-  return SPATIAL_VIEW_IDS.has(viewId);
-}
-
-function getPriority(viewId: string): number {
-  const desc = VIEW_DESCRIPTORS.find((d) => d.id === viewId);
-  return desc?.priority ?? 99;
-}
+export type { ViewSlotLayout, ViewRow };
+export type { ViewSlot } from "../../store/layoutStore";
 
 /**
- * Sort view IDs by their ViewDescriptor priority (lower = first).
+ * Default slot assignments — three rows covering signal, PSD, and spectrogram layers.
  */
-function sortByPriority(viewIds: string[]): string[] {
-  return [...viewIds].sort((a, b) => getPriority(a) - getPriority(b));
-}
-
-/**
- * Compute a default grid layout for the given active view IDs.
- *
- * Rules:
- * - 1 view -> 1x1
- * - 2 views, one spatial -> 1x2 (temporal left, spatial right)
- * - 2 views, both temporal -> 2x1
- * - 3-4 views -> 2x2
- * - >4 views -> 2x2 for first 4, rest overflow (not in cells)
- */
-export function computeDefaultGrid(activeViewIds: string[]): ViewGridLayout {
-  // Exclude navigator from grid — it goes to bottom panel or stays separate
-  const gridViews = activeViewIds.filter((id) => id !== "navigator");
-  const sorted = sortByPriority(gridViews);
-
-  if (sorted.length === 0) {
-    return { columns: 1, rows: 1, cells: [], colWidths: [1], rowHeights: [1] };
-  }
-
-  if (sorted.length === 1) {
-    return {
-      columns: 1,
-      rows: 1,
-      cells: [{ viewId: sorted[0], row: 0, col: 0 }],
-      colWidths: [1],
-      rowHeights: [1],
-    };
-  }
-
-  if (sorted.length === 2) {
-    const hasSpatialView = sorted.some(isSpatial);
-    if (hasSpatialView) {
-      // 1x2: temporal left, spatial right
-      const spatialIdx = sorted.findIndex(isSpatial);
-      const temporalIdx = spatialIdx === 0 ? 1 : 0;
-      return {
-        columns: 2,
-        rows: 1,
-        cells: [
-          { viewId: sorted[temporalIdx], row: 0, col: 0 },
-          { viewId: sorted[spatialIdx], row: 0, col: 1 },
-        ],
-        colWidths: [0.65, 0.35],
-        rowHeights: [1],
-      };
-    }
-    // Both temporal: 2x1
-    return {
-      columns: 1,
-      rows: 2,
-      cells: [
-        { viewId: sorted[0], row: 0, col: 0 },
-        { viewId: sorted[1], row: 1, col: 0 },
+export const DEFAULT_SLOT_LAYOUT: ViewSlotLayout = {
+  rows: [
+    {
+      id: "signal",
+      label: "Signal",
+      slots: [
+        { viewId: "timeseries", region: "left", widthFraction: 0.65 },
+        { viewId: "spatial_map", region: "right", widthFraction: 0.35 },
       ],
-      colWidths: [1],
-      rowHeights: [0.5, 0.5],
-    };
-  }
+      minHeight: 260,
+    },
+    {
+      id: "psd",
+      label: "PSD",
+      slots: [
+        { viewId: "psd_heatmap", region: "left", widthFraction: 0.4 },
+        { viewId: "psd_curve", region: "center", widthFraction: 0.25 },
+        { viewId: "psd_spatial", region: "right", widthFraction: 0.35 },
+      ],
+      minHeight: 220,
+    },
+    {
+      id: "spectrogram",
+      label: "Spectrogram",
+      slots: [
+        { viewId: "spectrogram", region: "left", widthFraction: 0.65 },
+        { viewId: "propagation_frame", region: "right", widthFraction: 0.35 },
+      ],
+      minHeight: 220,
+    },
+  ],
+};
 
-  // 3-4+ views: 2x2 grid
-  const cells: GridCell[] = [];
-  const topN = sorted.slice(0, 4);
-  const positions: [number, number][] = [[0, 0], [0, 1], [1, 0], [1, 1]];
-
-  if (topN.length === 3) {
-    // 3 views: first two in top row, third spans bottom row
-    cells.push({ viewId: topN[0], row: 0, col: 0 });
-    cells.push({ viewId: topN[1], row: 0, col: 1 });
-    cells.push({ viewId: topN[2], row: 1, col: 0, colSpan: 2 });
-  } else {
-    for (let i = 0; i < topN.length; i++) {
-      cells.push({ viewId: topN[i], row: positions[i][0], col: positions[i][1] });
-    }
-  }
-
-  return {
-    columns: 2,
-    rows: 2,
-    cells,
-    colWidths: [0.5, 0.5],
-    rowHeights: [0.5, 0.5],
-  };
+/**
+ * Check if a row has any active views.
+ */
+export function isRowActive(row: ViewRow, activeViewIds: string[]): boolean {
+  return row.slots.some((slot) => activeViewIds.includes(slot.viewId));
 }
 
 /**
- * Returns view IDs that are in activeViewIds but not assigned to any grid cell.
+ * Find the row containing a given view ID.
  */
-export function getOverflowViews(activeViewIds: string[], grid: ViewGridLayout): string[] {
-  const assignedIds = new Set(grid.cells.map((c) => c.viewId));
-  return activeViewIds.filter((id) => id !== "navigator" && !assignedIds.has(id));
+export function findRowForView(layout: ViewSlotLayout, viewId: string): ViewRow | undefined {
+  return layout.rows.find((row) => row.slots.some((s) => s.viewId === viewId));
+}
+
+/**
+ * Get all view IDs that are defined in the slot layout (for determining
+ * which views have a slot vs. which would go to overflow).
+ */
+export function getSlottedViewIds(layout: ViewSlotLayout): Set<string> {
+  const ids = new Set<string>();
+  for (const row of layout.rows) {
+    for (const slot of row.slots) {
+      ids.add(slot.viewId);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Returns view IDs that are active but not assigned to any slot in the layout.
+ */
+export function getOverflowViews(activeViewIds: string[], layout: ViewSlotLayout): string[] {
+  const slotted = getSlottedViewIds(layout);
+  return activeViewIds.filter((id) => id !== "navigator" && !slotted.has(id));
 }

@@ -2,12 +2,28 @@ import { useEffect, useMemo, useRef } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { decodeArrowSlice, extractTimeseriesColumnar } from "../../api/arrow";
+import type { BrainstateIntervalDTO } from "../../api/types";
 import type { SliceViewProps } from "./viewTypes";
-import { ChartToolbar } from "./ChartToolbar";
+import { ChartToolbar, TimeScaleBar } from "./ChartToolbar";
 import { useChartTools } from "./useChartTools";
-import type { GestureTool } from "./useChartTools";
+import type { GestureTool, YMode } from "./useChartTools";
+import { makeBrainstateDrawHook } from "./brainstateOverlay";
 
 const COLORS = ["#d3ff68", "#73d2de", "#ff9770", "#c492ff", "#f4d35e", "#8bd450", "#ff6b9d", "#a8e6cf"];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Relative time formatter (F3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function formatRelativeTime(seconds: number): string {
+  const abs = Math.abs(seconds);
+  if (abs < 0.001) return `${(seconds * 1e6).toFixed(0)} \u00B5s`;
+  if (abs < 1) return `${(seconds * 1000).toFixed(1)} ms`;
+  if (abs < 60) return `${seconds.toFixed(3)} s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${s.toFixed(1)}`;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Gesture layer
@@ -22,8 +38,13 @@ type GestureRefs = {
   onSelectTimeRef: React.RefObject<((t: number) => void) | undefined>;
   toolRef: React.RefObject<GestureTool>;
   wheelZoomRef: React.RefObject<boolean>;
-  /** Multiplied against the raw Y range for gain control. Shared across mode 1 wheel events. */
-  yGainRef: React.MutableRefObject<number>;
+  yModeRef: React.RefObject<YMode>;
+  /** Locked Y-axis bounds for yZoom mode. */
+  yLockedRef: React.MutableRefObject<[number, number] | null>;
+  /** Gain multiplier for yGain mode. */
+  gainMultiplierRef: React.MutableRefObject<number>;
+  /** Callback to rebuild scaled data after gain change. */
+  onGainChange: () => void;
 };
 
 function attachGestures(chart: uPlot, refs: GestureRefs): () => void {
@@ -137,16 +158,11 @@ function attachGestures(chart: uPlot, refs: GestureRefs): () => void {
     });
   };
 
-  // ── Y-axis wheel zoom (fires on root, cursor in axis gutter) ─────────────
+  // ── Y-axis wheel handler (fires on root, cursor in axis gutter) ──────────
   //
-  // Two modes controlled by the Shift key:
-  //   Default  → symmetric scale around current Y center (gain/amplitude knob).
-  //              The visual midpoint stays fixed; all waveforms grow or shrink.
-  //   Shift    → scale around the cursor's Y position (standard zoom-at-point).
-  //
-  // The event fires on chart.root so it catches the Y-axis label area that
-  // lives outside chart.over. We ignore it when the cursor is inside the plot
-  // area (chart.over handles those via the X wheel handler above).
+  // Two modes controlled by yMode:
+  //   yZoom → zoom Y-axis range around cursor position. Uses yLockedRef.
+  //   yGain → scale waveform amplitude without changing Y scale.
   const onWheelYAxis = (e: WheelEvent) => {
     if (!refs.wheelZoomRef.current) return;
     const overRect = over.getBoundingClientRect();
@@ -157,27 +173,23 @@ function attachGestures(chart: uPlot, refs: GestureRefs): () => void {
     const yMax = chart.scales.y?.max ?? 1;
     // Scroll down (deltaY > 0) → zoom out (larger range); up → zoom in.
     const factor = e.deltaY > 0 ? 1.25 : 0.8;
-    if (e.shiftKey) {
-      // Mode 2: zoom around cursor Y position
+
+    if (refs.yModeRef.current === "yZoom") {
+      // yZoom: zoom around cursor Y position
       const overH = over.clientHeight || 1;
       const yInOver = e.clientY - overRect.top;
       const yFrac = clamp(yInOver / overH, 0, 1);
       // uPlot Y: top of over = yMax, bottom = yMin
       const yCursor = yMax + yFrac * (yMin - yMax);
-      chart.setScale("y", {
-        min: yCursor + (yMin - yCursor) * factor,
-        max: yCursor + (yMax - yCursor) * factor,
-      });
+      refs.yLockedRef.current = [
+        yCursor + (yMin - yCursor) * factor,
+        yCursor + (yMax - yCursor) * factor,
+      ];
+      chart.redraw();
     } else {
-      // Mode 1: symmetric scale around center — gain/amplitude control.
-      // Channel waveforms grow or shrink; their visual separation is preserved
-      // because both sides expand equally from the same midpoint.
-      refs.yGainRef.current *= factor;
-      const yMid = (yMin + yMax) / 2;
-      chart.setScale("y", {
-        min: yMid + (yMin - yMid) * factor,
-        max: yMid + (yMax - yMid) * factor,
-      });
+      // yGain: scale waveform amplitude without changing Y scale
+      refs.gainMultiplierRef.current *= factor;
+      refs.onGainChange();
     }
   };
 
@@ -205,9 +217,14 @@ export function TimeseriesSliceView({
   slice,
   selection,
   events = [],
+  brainstateIntervals = [],
+  brainstateOverlayEnabled = false,
   onSelectTime,
   onTimeWindowChange,
-}: SliceViewProps) {
+}: SliceViewProps & {
+  brainstateIntervals?: BrainstateIntervalDTO[];
+  brainstateOverlayEnabled?: boolean;
+}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<uPlot | null>(null);
 
@@ -215,16 +232,28 @@ export function TimeseriesSliceView({
   const onSelectTimeRef = useRef(onSelectTime);
   const eventsRef = useRef(events);
   const onTimeWindowChangeRef = useRef(onTimeWindowChange);
+  const brainstateIntervalsRef = useRef(brainstateIntervals);
+  const brainstateEnabledRef = useRef(brainstateOverlayEnabled);
   useEffect(() => { onSelectTimeRef.current = onSelectTime; });
   useEffect(() => { eventsRef.current = events; });
   useEffect(() => { onTimeWindowChangeRef.current = onTimeWindowChange; });
+  useEffect(() => { brainstateIntervalsRef.current = brainstateIntervals; });
+  useEffect(() => { brainstateEnabledRef.current = brainstateOverlayEnabled; });
 
   // View-local tool state — chartRef is shared so the hook can call reset imperatively
   const tools = useChartTools(chartRef);
 
-  // Y-axis gain — 1.0 = original scale; updated by wheel-on-Y-axis gesture.
-  // Stored in a ref so the gesture hot-path never re-renders the component.
-  const yGainRef = useRef(1);
+  // ── Y-axis lock for yZoom mode (B1) ───────────────────────────────────────
+  const yLockedRef = useRef<[number, number] | null>(null);
+
+  // ── Gain multiplier for yGain mode (F1) ───────────────────────────────────
+  const gainMultiplierRef = useRef(1);
+
+  // ── Persistent time cursor ref (F4) ───────────────────────────────────────
+  const selectionTimeRef = useRef<number | null>(null);
+
+  // ── Raw decoded data — kept for gain rebuilds ─────────────────────────────
+  const rawDataRef = useRef<{ times: Float64Array; seriesArrays: Float32Array[]; offsets: number[] } | null>(null);
 
   // ── Data decoding ────────────────────────────────────────────────────────
   const { times, series } = useMemo(() => {
@@ -234,29 +263,97 @@ export function TimeseriesSliceView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slice.payload]);
 
+  // Rebuild scaled data for gain mode: scale each channel around its offset center
+  const buildScaledData = (
+    timesArr: Float64Array,
+    seriesData: { values: number[] }[],
+    gain: number,
+  ): [Float64Array, ...Float32Array[]] => {
+    const result: [Float64Array, ...Float32Array[]] = [timesArr];
+    const offsets: number[] = [];
+    for (const s of seriesData) {
+      const vals = s.values;
+      // Compute channel offset as mean value
+      let sum = 0, count = 0;
+      for (const v of vals) {
+        if (Number.isFinite(v)) { sum += v; count++; }
+      }
+      const offset = count > 0 ? sum / count : 0;
+      offsets.push(offset);
+      const scaled = new Float32Array(vals.length);
+      for (let i = 0; i < vals.length; i++) {
+        scaled[i] = offset + (vals[i] - offset) * gain;
+      }
+      result.push(scaled);
+    }
+    rawDataRef.current = {
+      times: timesArr,
+      seriesArrays: seriesData.map((s) => new Float32Array(s.values)),
+      offsets,
+    };
+    return result;
+  };
+
+  // Called by gesture handler when gain changes
+  const applyGain = () => {
+    const chart = chartRef.current;
+    const raw = rawDataRef.current;
+    if (!chart || !raw) return;
+    const gain = gainMultiplierRef.current;
+    const data: [Float64Array, ...Float32Array[]] = [raw.times];
+    for (let i = 0; i < raw.seriesArrays.length; i++) {
+      const vals = raw.seriesArrays[i];
+      const offset = raw.offsets[i];
+      const scaled = new Float32Array(vals.length);
+      for (let j = 0; j < vals.length; j++) {
+        scaled[j] = offset + (vals[j] - offset) * gain;
+      }
+      data.push(scaled);
+    }
+    chart.setData(data as uPlot.AlignedData);
+  };
+
   // ── Chart lifecycle ──────────────────────────────────────────────────────
   useEffect(() => {
     const el = containerRef.current;
     if (!el || times.length === 0) return;
 
     const width = el.clientWidth || el.getBoundingClientRect().width || 900;
+    const height = el.clientHeight || 260;
 
     // Suppress setScale during chart initialization — same guard as NavigatorView.
-    // Without this, creating the chart fires setScale with the data bounds and
-    // re-publishes timeWindow, causing an extra server round-trip on every data arrival.
     let initialized = false;
+
+    // Reset Y lock and gain on new data
+    yLockedRef.current = null;
+    gainMultiplierRef.current = 1;
+
+    const initialData = buildScaledData(new Float64Array(times), series, 1);
 
     const chart = new uPlot(
       {
         width,
-        height: 260,
+        height,
         legend: { show: false },
         cursor: {
           drag: { setScale: false, x: false, y: false },
           sync: { key: "tsscope-time" },
         },
+        scales: {
+          y: {
+            range: (_u: uPlot, dataMin: number, dataMax: number): [number, number] => {
+              if (yLockedRef.current) return yLockedRef.current;
+              return [dataMin, dataMax];
+            },
+          },
+        },
         axes: [
-          { stroke: "#8b949e", ticks: { stroke: "#30363d" }, grid: { stroke: "#21262d" } },
+          {
+            stroke: "#8b949e",
+            ticks: { stroke: "#30363d" },
+            grid: { stroke: "#21262d" },
+            values: (_u: uPlot, vals: number[]) => vals.map((v) => formatRelativeTime(v)),
+          },
           { stroke: "#8b949e", ticks: { stroke: "#30363d" }, grid: { stroke: "#21262d" } },
         ],
         series: [
@@ -270,19 +367,18 @@ export function TimeseriesSliceView({
         ],
         hooks: {
           setScale: [
-            // Publish window changes back to shared state so the navigator
-            // and other views stay in sync when the user pans or zooms here.
-            // Guarded by `initialized` to suppress the spurious fire during
-            // chart creation (and the subsequent resize correction).
             (u, key) => {
               if (!initialized || key !== "x") return;
               const { min, max } = u.scales.x;
               if (min != null && max != null) onTimeWindowChangeRef.current?.([min, max]);
             },
           ],
+          drawClear: [
+            makeBrainstateDrawHook(brainstateIntervalsRef, brainstateEnabledRef),
+          ],
           draw: [
             (u) => {
-              // eventsRef is always current — markers update without chart recreation
+              // Event markers
               const evs = eventsRef.current;
               if (!evs.length) return;
               const ctx = u.ctx;
@@ -302,10 +398,26 @@ export function TimeseriesSliceView({
               }
               ctx.restore();
             },
+            (u) => {
+              // Persistent time cursor line (F4)
+              const t = selectionTimeRef.current;
+              if (t == null || !Number.isFinite(t)) return;
+              const x = Math.round(u.valToPos(t, "x", true));
+              if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) return;
+              const ctx = u.ctx;
+              ctx.save();
+              ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.moveTo(x, u.bbox.top);
+              ctx.lineTo(x, u.bbox.top + u.bbox.height);
+              ctx.stroke();
+              ctx.restore();
+            },
           ],
         },
       },
-      [new Float64Array(times), ...series.map((s) => new Float32Array(s.values))],
+      initialData as uPlot.AlignedData,
       el,
     );
 
@@ -316,23 +428,29 @@ export function TimeseriesSliceView({
       onSelectTimeRef,
       toolRef: tools.toolRef,
       wheelZoomRef: tools.wheelZoomRef,
-      yGainRef,
+      yModeRef: tools.yModeRef,
+      yLockedRef,
+      gainMultiplierRef,
+      onGainChange: applyGain,
     });
 
+    // B3: skip degenerate sizes; use dynamic height
     const ro = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect.width;
-      if (w && chartRef.current) chartRef.current.setSize({ width: w, height: 260 });
+      const rect = entries[0]?.contentRect;
+      if (!rect || rect.width < 10 || rect.height < 10) return;
+      if (chartRef.current) {
+        chartRef.current.setSize({ width: Math.round(rect.width), height: Math.round(rect.height) });
+      }
     });
     ro.observe(el);
 
     // Correct the size once after the browser has finished laying out the
-    // container. clientWidth can be 0 at effect time (the parent grid column
-    // may not have been measured yet), so the chart is created at the fallback
-    // width. The rAF fires after the next paint, when the true CSS width is known.
+    // container. clientWidth can be 0 at effect time.
     const rafId = requestAnimationFrame(() => {
       const w = el.clientWidth || el.getBoundingClientRect().width;
-      if (w && chartRef.current && w !== chartRef.current.width) {
-        chartRef.current.setSize({ width: w, height: 260 });
+      const h = el.clientHeight || 260;
+      if (w && chartRef.current) {
+        chartRef.current.setSize({ width: w, height: h });
       }
       initialized = true;
     });
@@ -342,7 +460,8 @@ export function TimeseriesSliceView({
       ro.disconnect();
       detachGestures();
       chartRef.current = null;
-      yGainRef.current = 1;
+      yLockedRef.current = null;
+      gainMultiplierRef.current = 1;
       chart.destroy();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -355,12 +474,14 @@ export function TimeseriesSliceView({
     chart.over.style.cursor = tools.activeTool === "pan" ? "grab" : "crosshair";
   }, [tools.activeTool]);
 
-  // ── Hot sync: cursor marker follows selection ────────────────────────────
+  // ── Hot sync: cursor marker + persistent cursor line follow selection ─────
   useEffect(() => {
     const chart = chartRef.current;
+    selectionTimeRef.current = selection?.time ?? null;
     if (!chart || times.length === 0 || !selection) return;
     const x = chart.valToPos(selection.time, "x");
     if (Number.isFinite(x)) chart.setCursor({ left: x, top: -1 });
+    chart.redraw();
   }, [selection?.time, times]);
 
   // ── Hot sync: redraw when event list changes ─────────────────────────────
@@ -368,24 +489,45 @@ export function TimeseriesSliceView({
     chartRef.current?.redraw();
   }, [events]);
 
+  // ── Hot sync: redraw when brainstate intervals or overlay toggle change ──
+  useEffect(() => {
+    chartRef.current?.redraw();
+  }, [brainstateIntervals, brainstateOverlayEnabled]);
+
   // Rules of Hooks: all hooks above, conditional return below
   if (!selection || times.length === 0) return null;
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <div style={{ position: "relative" }}>
+    <div style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column" }}>
       <ChartToolbar
         activeTool={tools.activeTool}
         onSetTool={tools.setActiveTool}
         wheelZoom={tools.wheelZoom}
         onToggleWheelZoom={tools.toggleWheelZoom}
-        onReset={tools.reset}
+        onReset={() => {
+          yLockedRef.current = null;
+          gainMultiplierRef.current = 1;
+          // Rebuild data with gain=1
+          const raw = rawDataRef.current;
+          if (raw && chartRef.current) {
+            const data: [Float64Array, ...Float32Array[]] = [raw.times, ...raw.seriesArrays];
+            chartRef.current.setData(data as uPlot.AlignedData);
+          }
+          tools.reset();
+        }}
+        yMode={tools.yMode}
+        onSetYMode={tools.setYMode}
       />
       <div
         ref={containerRef}
         className="uplot-wrap"
-        title={`${series.length} ch · ${times.length} samples`}
+        style={{ flex: 1, minHeight: 0 }}
+        title={`${series.length} ch \u00B7 ${times.length} samples`}
       />
+      {onTimeWindowChange && (
+        <TimeScaleBar timeCursor={selection.time} onTimeWindowChange={onTimeWindowChange} />
+      )}
     </div>
   );
 }

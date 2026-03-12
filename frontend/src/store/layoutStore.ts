@@ -3,6 +3,24 @@ import { persist } from "zustand/middleware";
 
 export type SidebarTabId = "explore" | "graph" | "tensors" | "events" | "pipeline";
 
+export type ViewSlot = {
+  viewId: string;
+  region: "left" | "right" | "center";
+  widthFraction: number; // e.g. 0.65
+};
+
+export type ViewRow = {
+  id: string;          // "signal", "psd", "spectrogram"
+  label: string;
+  slots: ViewSlot[];
+  minHeight: number;   // px, when row is visible
+};
+
+export type ViewSlotLayout = {
+  rows: ViewRow[];
+};
+
+// Keep old types as aliases for backward compat with layoutPresets
 export type GridCell = {
   viewId: string;
   row: number;
@@ -12,11 +30,11 @@ export type GridCell = {
 };
 
 export type ViewGridLayout = {
-  columns: number;          // 1 or 2
-  rows: number;             // 1 or 2
+  columns: number;
+  rows: number;
   cells: GridCell[];
-  colWidths: number[];      // fractional [0.6, 0.4]
-  rowHeights: number[];     // fractional [0.5, 0.5]
+  colWidths: number[];
+  rowHeights: number[];
 };
 
 export type LayoutState = {

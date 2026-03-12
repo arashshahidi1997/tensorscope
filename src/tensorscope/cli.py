@@ -60,9 +60,33 @@ def _load_dataarray(path: Path) -> xr.DataArray:
         raise ValueError(f"Expected a single DataArray in {path}, found {list(dataset.data_vars)}")
 
 
+def _load_brainstates(data_path: Path) -> xr.DataArray | None:
+    """Try to load brainstates from a sibling file or parent directory."""
+    # If data_path is a directory, look for brainstates.nc inside it
+    if data_path.is_dir():
+        bs_path = data_path / "brainstates.nc"
+    else:
+        # Look for brainstates.nc next to the data file
+        bs_path = data_path.parent / "brainstates.nc"
+    if bs_path.exists():
+        try:
+            return xr.load_dataarray(bs_path)
+        except Exception:
+            try:
+                ds = xr.load_dataset(bs_path)
+                if len(ds.data_vars) == 1:
+                    return next(iter(ds.data_vars.values()))
+            except Exception:
+                pass
+    return None
+
+
 def _cmd_serve(data_path: Path, tensor_name: str, host: str, port: int) -> int:
     data = _load_dataarray(data_path)
-    app = create_app(data, tensor_name=tensor_name)
+    brainstates = _load_brainstates(data_path)
+    if brainstates is not None:
+        print(f"Loaded brainstates: {brainstates.dims} {brainstates.shape}")
+    app = create_app(data, tensor_name=tensor_name, brainstates=brainstates)
     uvicorn.run(app, host=str(host), port=int(port))
     return 0
 

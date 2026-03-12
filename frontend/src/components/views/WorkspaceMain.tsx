@@ -14,23 +14,43 @@ import {
   clampWindow,
   makeDefaultSliceRequest,
   makeNavigatorRequest,
+  useBrainstateIntervalsQuery,
+  useBrainstateMetaQuery,
   useEventWindowQuery,
   useSliceQuery,
   useStateQuery,
   useTensorQuery,
 } from "../../api/queries";
-import type { SelectionDTO, TensorSliceDTO } from "../../api/types";
+import { decodeArrowSlice, extractPSDHeatmap, extractPSDAverage } from "../../api/arrow";
+import type { SelectionDTO, TensorSliceDTO, TensorSliceRequestDTO } from "../../api/types";
 import { useAppStore } from "../../store/appStore";
 import { useSelectionStore, toSelectionDTO } from "../../store/selectionStore";
 import { getAvailableViews, viewRegistry } from "../../registry/viewRegistry";
+import { HypnogramView } from "./HypnogramView";
 import { NavigatorView } from "./NavigatorView";
+import { PSDHeatmapView } from "./PSDHeatmapView";
+import { PSDCurveView } from "./PSDCurveView";
+import { PSDSpatialView } from "./PSDSpatialView";
 import { PropagationView } from "./PropagationView";
 import { SpatialMapSliceView } from "./SpatialMapSliceView";
 import { AnimationController } from "../controls/AnimationController";
 import { SpatialEventView } from "./SpatialEventView";
+import { TimeseriesSliceView } from "./TimeseriesSliceView";
 import { TensorChooser } from "./TensorChooser";
 import { TensorOverview } from "./TensorOverview";
 import { ViewGrid } from "./ViewGrid";
+
+const PSD_LIVE_EXPANSION = ["psd_heatmap", "psd_curve", "psd_spatial"];
+
+/** Replace server's "psd_live" with the three frontend sub-view IDs. */
+function expandPSDLive(views: string[]): string[] {
+  if (!views.includes("psd_live")) return views;
+  const result = views.filter((v) => v !== "psd_live");
+  for (const id of PSD_LIVE_EXPANSION) {
+    if (!result.includes(id)) result.push(id);
+  }
+  return result;
+}
 
 type WorkspaceMainProps = {
   onCommitSelection: (dto: SelectionDTO) => void;
@@ -39,7 +59,7 @@ type WorkspaceMainProps = {
 };
 
 export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceMainProps) {
-  const { selectedTensor, activeViews, setSelectedTensor, toggleView } = useAppStore();
+  const { selectedTensor, activeViews, setSelectedTensor, toggleView, brainstateOverlay, showHypnogram } = useAppStore();
   const selectionState = useSelectionStore();
   const { timeWindow, setTimeWindow, setFreq, setHoveredElectrode } = selectionState;
 
@@ -68,7 +88,10 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const earlyAvailableViews = activeTensorSummary
     ? getAvailableViews(activeTensorSummary).map((d) => d.id)
     : [];
-  const availableViews = tensorQuery.data?.available_views ?? earlyAvailableViews;
+  // Expand server-side "psd_live" into the three frontend sub-view IDs
+  // so they appear in available/active views automatically.
+  const rawAvailableViews = tensorQuery.data?.available_views ?? earlyAvailableViews;
+  const availableViews = expandPSDLive(rawAvailableViews);
   const effectiveActiveViews = activeViews.length === 0 ? availableViews : activeViews;
   const hasTimeseries = effectiveActiveViews.includes("timeseries");
   const hasSpatial = effectiveActiveViews.includes("spatial_map");
@@ -76,6 +99,13 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const hasPSD = effectiveActiveViews.includes("psd_average");
   const hasSpectrogram = effectiveActiveViews.includes("spectrogram");
   const hasNavigator = availableViews.includes("navigator");
+  const hasPSDLive = effectiveActiveViews.some((v) =>
+    v === "psd_heatmap" || v === "psd_curve" || v === "psd_spatial",
+  );
+
+  // PSD settings — component-local state; changing triggers refetch.
+  const [psdFmax, setPsdFmax] = useState(100);
+  const [psdNW, setPsdNW] = useState(4);
 
   const timeCoord = tensorQuery.data?.coords.find((c) => c.name === "time");
 
@@ -162,10 +192,30 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     selectedTensor,
     hasSpectrogram ? makeDefaultSliceRequest("spectrogram", selectionDraft, safeWindow) : null,
   );
+  const psdLiveQuery = useSliceQuery(
+    selectedTensor,
+    hasPSDLive ? {
+      view_type: "psd_live",
+      selection: selectionDraft,
+      time_range: safeWindow ? [safeWindow[0], safeWindow[1]] : undefined,
+      psd_params: { NW: psdNW, fmax: psdFmax },
+    } as TensorSliceRequestDTO : null,
+  );
   const navigatorSliceQuery = useSliceQuery(
     selectedTensor,
     hasNavigator ? makeNavigatorRequest(selectionDraft, timeCoord) : null,
   );
+
+  // Brainstate queries — fetch metadata once, intervals per visible window
+  const brainstateMetaQuery = useBrainstateMetaQuery();
+  const brainstateAvailable = brainstateMetaQuery.data?.available ?? false;
+  const brainstateTimeRange = brainstateMetaQuery.data?.time_range ?? [null, null];
+  // Fetch all intervals (no window filter) since the dataset is small
+  const brainstateIntervalsQuery = useBrainstateIntervalsQuery(
+    brainstateAvailable && typeof brainstateTimeRange[0] === "number" ? brainstateTimeRange[0] : undefined,
+    brainstateAvailable && typeof brainstateTimeRange[1] === "number" ? brainstateTimeRange[1] : undefined,
+  );
+  const brainstateIntervals = brainstateIntervalsQuery.data ?? [];
 
   // Keep the last successfully-received slice for each view so that a transient
   // query error (e.g. zooming between two samples → 400 "no data") does not blank
@@ -182,7 +232,6 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const firstEventStream = stateQuery.data?.events[0] ?? null;
   const eventWindowQuery = useEventWindowQuery(firstEventStream?.name ?? null, selectionDraft, 2);
 
-  const TimeseriesComponent = viewRegistry.timeseries;
   const SpatialMapComponent = viewRegistry.spatial_map as typeof SpatialMapSliceView;
   const PSDComponent = viewRegistry.psd_average;
   const SpectrogramComponent = viewRegistry.spectrogram;
@@ -195,13 +244,29 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     if (!navigatorRef.current) return;
     if (navigatorData) {
       navigatorRef.current(
-        <NavigatorView
-          slice={navigatorData}
-          selection={selectionDraft}
-          onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
-          timeWindow={timeWindow}
-          onTimeWindowChange={setTimeWindow}
-        />,
+        <>
+          <NavigatorView
+            slice={navigatorData}
+            selection={selectionDraft}
+            onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
+            timeWindow={timeWindow}
+            onTimeWindowChange={setTimeWindow}
+            brainstateIntervals={brainstateIntervals}
+            brainstateOverlayEnabled={brainstateOverlay && brainstateAvailable}
+          />
+          {showHypnogram && brainstateAvailable && brainstateIntervals.length > 0 && (
+            <HypnogramView
+              intervals={brainstateIntervals}
+              timeRange={[
+                typeof brainstateTimeRange[0] === "number" ? brainstateTimeRange[0] : 0,
+                typeof brainstateTimeRange[1] === "number" ? brainstateTimeRange[1] : 10,
+              ]}
+              timeWindow={timeWindow}
+              timeCursor={selectionDraft.time}
+              onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
+            />
+          )}
+        </>,
       );
     } else {
       navigatorRef.current(null);
@@ -213,10 +278,12 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
 
   if (hasTimeseries) {
     viewElements["timeseries"] = timeseriesData ? (
-      <TimeseriesComponent
+      <TimeseriesSliceView
         slice={timeseriesData}
         selection={selectionDraft}
         events={eventWindowQuery.data ?? []}
+        brainstateIntervals={brainstateIntervals}
+        brainstateOverlayEnabled={brainstateOverlay && brainstateAvailable}
         onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
         onTimeWindowChange={setTimeWindow}
       />
@@ -284,6 +351,37 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     );
   }
 
+  if (hasPSDLive && psdLiveQuery.data) {
+    const decoded = decodeArrowSlice(psdLiveQuery.data);
+    const heatmapData = extractPSDHeatmap(decoded);
+    const avgData = extractPSDAverage(decoded);
+
+    viewElements["psd_heatmap"] = (
+      <PSDHeatmapView
+        data={heatmapData}
+        selectedFreq={selectionDraft.freq}
+        onSelectFreq={handleSelectFreq}
+      />
+    );
+    viewElements["psd_curve"] = (
+      <PSDCurveView
+        data={avgData}
+        selectedFreq={selectionDraft.freq}
+        onSelectFreq={handleSelectFreq}
+      />
+    );
+    viewElements["psd_spatial"] = (
+      <PSDSpatialView
+        decoded={decoded}
+        selectedFreq={selectionDraft.freq}
+        onSelectFreq={handleSelectFreq}
+        onSelectCell={(ap, ml) =>
+          onCommitSelection({ ...selectionDraft, ap, ml, channel: null })
+        }
+      />
+    );
+  }
+
   if (firstEventStream && hasSpatial) {
     viewElements["spatial_event"] = (
       <SpatialEventView
@@ -311,13 +409,29 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
 
       {/* Navigator inline fallback — shown when no bottom panel render prop */}
       {!renderNavigator && navigatorData && (
-        <NavigatorView
-          slice={navigatorData}
-          selection={selectionDraft}
-          onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
-          timeWindow={timeWindow}
-          onTimeWindowChange={setTimeWindow}
-        />
+        <>
+          <NavigatorView
+            slice={navigatorData}
+            selection={selectionDraft}
+            onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
+            timeWindow={timeWindow}
+            onTimeWindowChange={setTimeWindow}
+            brainstateIntervals={brainstateIntervals}
+            brainstateOverlayEnabled={brainstateOverlay && brainstateAvailable}
+          />
+          {showHypnogram && brainstateAvailable && brainstateIntervals.length > 0 && (
+            <HypnogramView
+              intervals={brainstateIntervals}
+              timeRange={[
+                typeof brainstateTimeRange[0] === "number" ? brainstateTimeRange[0] : 0,
+                typeof brainstateTimeRange[1] === "number" ? brainstateTimeRange[1] : 10,
+              ]}
+              timeWindow={timeWindow}
+              timeCursor={selectionDraft.time}
+              onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
+            />
+          )}
+        </>
       )}
 
       {/* View grid replaces the old hardcoded layout */}

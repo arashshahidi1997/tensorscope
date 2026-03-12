@@ -124,6 +124,7 @@ class TensorSliceRequestDTO(BaseModel):
     frame_time: float | None = Field(default=None, ge=0.0)
     max_points: int | None = Field(default=None, ge=1)
     downsample: DownsampleMethod = DownsampleMethod.MINMAX
+    psd_params: dict[str, float] | None = None
 
     @model_validator(mode="after")
     def validate_request(self) -> "TensorSliceRequestDTO":
@@ -162,6 +163,7 @@ class ProcessingParamsDTO(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    enabled: bool = True
     cmr: bool = False
     bandpass_lo: float | None = Field(default=None, ge=0.1)
     bandpass_hi: float | None = Field(default=None, ge=0.1)
@@ -174,6 +176,19 @@ class ProcessingParamsDTO(BaseModel):
     spatial_median_size: int = Field(default=3, ge=1, le=15)
     zscore: bool = False
     zscore_robust: bool = False
+
+    def has_any_active(self) -> bool:
+        """True if processing is enabled and at least one step is active."""
+        if not self.enabled:
+            return False
+        return (
+            self.cmr
+            or self.bandpass_lo is not None
+            or self.notch_freq is not None
+            or bool(self.notch_freqs_list)
+            or self.spatial_median
+            or self.zscore
+        )
 
     @model_validator(mode="after")
     def validate_bandpass(self) -> "ProcessingParamsDTO":

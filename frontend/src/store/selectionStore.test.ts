@@ -71,8 +71,8 @@ describe("initFromDTO", () => {
 
   it("re-centers window when time changes", () => {
     getStore().initFromDTO({ time: 10, freq: 0, ap: 0, ml: 0, channel: null });
-    expect(getStore().timeWindow[0]).toBe(9);
-    expect(getStore().timeWindow[1]).toBe(11);
+    expect(getStore().timeWindow[0]).toBe(9.5);
+    expect(getStore().timeWindow[1]).toBe(10.5);
   });
 
   it("preserves window when time is unchanged", () => {
@@ -180,7 +180,7 @@ describe("overview↔detail contract", () => {
     useSelectionStore.setState({ timeCursor: 5, timeWindow: [3, 9] });
     getStore().initFromDTO({ time: 20, freq: 0, ap: 0, ml: 0, channel: null });
     expect(getStore().timeCursor).toBe(20);
-    expect(getStore().timeWindow).toEqual([19, 21]);
+    expect(getStore().timeWindow).toEqual([19.5, 20.5]);
   });
 
   it("multiple views publishing window converge on last write", () => {

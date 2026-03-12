@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { decodeArrowSlice, extractTimeseriesColumnar } from "../../api/arrow";
+import type { BrainstateIntervalDTO } from "../../api/types";
 import type { SliceViewProps } from "./viewTypes";
+import { makeBrainstateDrawHook } from "./brainstateOverlay";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Gesture layer
@@ -59,9 +61,13 @@ export function NavigatorView({
   onSelectTime,
   timeWindow,
   onTimeWindowChange,
+  brainstateIntervals = [],
+  brainstateOverlayEnabled = false,
 }: SliceViewProps & {
   timeWindow?: [number, number];
   onTimeWindowChange?: (window: [number, number]) => void;
+  brainstateIntervals?: BrainstateIntervalDTO[];
+  brainstateOverlayEnabled?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<uPlot | null>(null);
@@ -69,8 +75,12 @@ export function NavigatorView({
   // Stable callback refs — updated every render, never trigger chart recreation
   const onSelectTimeRef = useRef(onSelectTime);
   const onWindowRef = useRef(onTimeWindowChange);
+  const brainstateIntervalsRef = useRef(brainstateIntervals);
+  const brainstateEnabledRef = useRef(brainstateOverlayEnabled);
   useEffect(() => { onSelectTimeRef.current = onSelectTime; });
   useEffect(() => { onWindowRef.current = onTimeWindowChange; });
+  useEffect(() => { brainstateIntervalsRef.current = brainstateIntervals; });
+  useEffect(() => { brainstateEnabledRef.current = brainstateOverlayEnabled; });
 
   // ── Data decoding ────────────────────────────────────────────────────────
   const { times, meanValues } = useMemo(() => {
@@ -132,6 +142,9 @@ export function NavigatorView({
               if (min != null && max != null) onWindowRef.current?.([min, max]);
             },
           ],
+          drawClear: [
+            makeBrainstateDrawHook(brainstateIntervalsRef, brainstateEnabledRef),
+          ],
         },
       },
       [new Float64Array(times), new Float32Array(meanValues)],
@@ -176,6 +189,11 @@ export function NavigatorView({
     const x = chart.valToPos(selection.time, "x");
     if (Number.isFinite(x)) chart.setCursor({ left: x, top: -1 });
   }, [selection?.time, times]);
+
+  // ── Hot sync: redraw when brainstate intervals or overlay toggle change ──
+  useEffect(() => {
+    chartRef.current?.redraw();
+  }, [brainstateIntervals, brainstateOverlayEnabled]);
 
   // Rules of Hooks: all hooks above, conditional return below
   if (!selection || times.length === 0) return null;

@@ -18,7 +18,8 @@
  */
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import type { CoordSummary, ProcessingParamsDTO, SelectionDTO, TensorSliceRequestDTO } from "./types";
+import type { BrainstateIntervalDTO, BrainstateMetaDTO, CoordSummary, ProcessingParamsDTO, SelectionDTO, TensorSliceRequestDTO } from "./types";
+import type { WorkspaceDAGDTO } from "../types/dag";
 
 export function useStateQuery() {
   return useQuery({
@@ -74,6 +75,31 @@ export function useEventWindowQuery(
       return api.getEventWindow(name!, params);
     },
     enabled: Boolean(name && selection),
+  });
+}
+
+export function useBrainstateMetaQuery() {
+  return useQuery<BrainstateMetaDTO>({
+    queryKey: ["brainstate-meta"],
+    queryFn: api.getBrainstateMeta,
+    staleTime: 60_000,
+  });
+}
+
+export function useBrainstateIntervalsQuery(t0?: number, t1?: number) {
+  return useQuery<BrainstateIntervalDTO[]>({
+    queryKey: ["brainstate-intervals", t0, t1],
+    queryFn: () => api.getBrainstateIntervals(t0, t1),
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useDAGQuery() {
+  return useQuery<WorkspaceDAGDTO>({
+    queryKey: ["dag"],
+    queryFn: api.getDAG,
+    staleTime: 10_000, // 10 seconds — refresh when transforms are added
   });
 }
 

@@ -142,21 +142,32 @@ export const useSelectionStore = create<SelectionStore>((set) => ({
     }),
 
   initFromDTO: (dto, timeWindow) =>
-    set((s) => ({
-      timeCursor: dto.time,
-      // Re-center the window only when the cursor jumps outside the currently
-      // visible range. Preserving the window when the cursor stays inside
-      // prevents committed selections (e.g. clicking a time point that is
-      // already visible) from resetting a carefully panned/zoomed view.
-      timeWindow:
-        timeWindow ??
-        (dto.time < s.timeWindow[0] || dto.time > s.timeWindow[1]
-          ? [Math.max(0, dto.time - 1), dto.time + 1]
-          : s.timeWindow),
-      spatial: { ap: dto.ap, ml: dto.ml, channel: dto.channel, hoveredId: null, selectedIds: [] },
-      freq: { freq: dto.freq },
-      event: s.event, // preserve existing event selection across API round-trips
-    })),
+    set((s) => {
+      // Compute the desired time window:
+      // 1. If an explicit timeWindow argument was provided, use it.
+      // 2. If this is the first load (window is still DEFAULT_STATE [0,2]),
+      //    apply a 1s default centered on the cursor.
+      // 3. If cursor jumps outside the visible range, re-center with 1s window.
+      // 4. Otherwise preserve the current window.
+      let nextWindow: TimeWindow;
+      if (timeWindow) {
+        nextWindow = timeWindow;
+      } else if (s.timeWindow[0] === 0 && s.timeWindow[1] === 2) {
+        // First load — apply 1s initial scale
+        nextWindow = [Math.max(0, dto.time - 0.5), dto.time + 0.5];
+      } else if (dto.time < s.timeWindow[0] || dto.time > s.timeWindow[1]) {
+        nextWindow = [Math.max(0, dto.time - 0.5), dto.time + 0.5];
+      } else {
+        nextWindow = s.timeWindow;
+      }
+      return {
+        timeCursor: dto.time,
+        timeWindow: nextWindow,
+        spatial: { ap: dto.ap, ml: dto.ml, channel: dto.channel, hoveredId: null, selectedIds: [] },
+        freq: { freq: dto.freq },
+        event: s.event, // preserve existing event selection across API round-trips
+      };
+    }),
 }));
 
 /** Convert SelectionState back to the wire DTO format for API calls. */

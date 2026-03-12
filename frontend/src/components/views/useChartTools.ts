@@ -23,16 +23,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type uPlot from "uplot";
 
 export type GestureTool = "pan" | "zoom";
+export type YMode = "yZoom" | "yGain";
 
 export type ChartToolsResult = {
   activeTool: GestureTool;
   setActiveTool: (t: GestureTool) => void;
   wheelZoom: boolean;
   toggleWheelZoom: () => void;
+  yMode: YMode;
+  setYMode: (m: YMode) => void;
   /** Stable ref for attachGestures — always current, never triggers recreation. */
   toolRef: React.RefObject<GestureTool>;
   /** Stable ref for attachGestures — always current, never triggers recreation. */
   wheelZoomRef: React.RefObject<boolean>;
+  /** Stable ref for Y-axis mode — always current, never triggers recreation. */
+  yModeRef: React.RefObject<YMode>;
   /**
    * Call once after each uPlot instance is created.
    * Captures the initial x-scale bounds so reset can restore them.
@@ -47,13 +52,16 @@ export function useChartTools(
 ): ChartToolsResult {
   const [activeTool, setActiveTool] = useState<GestureTool>("zoom");
   const [wheelZoom, setWheelZoom] = useState(true);
+  const [yMode, setYMode] = useState<YMode>("yZoom");
 
   // Mirror state into refs so gesture handlers always read current values
   // without requiring chart recreation when tool changes.
   const toolRef = useRef<GestureTool>("zoom");
   const wheelZoomRef = useRef(true);
+  const yModeRef = useRef<YMode>("yZoom");
   useEffect(() => { toolRef.current = activeTool; }, [activeTool]);
   useEffect(() => { wheelZoomRef.current = wheelZoom; }, [wheelZoom]);
+  useEffect(() => { yModeRef.current = yMode; }, [yMode]);
 
   // Initial scale bounds — stored once after chart creation, used by reset.
   const initialScalesRef = useRef<{ min: number; max: number } | null>(null);
@@ -77,8 +85,11 @@ export function useChartTools(
     setActiveTool,
     wheelZoom,
     toggleWheelZoom,
+    yMode,
+    setYMode,
     toolRef,
     wheelZoomRef,
+    yModeRef,
     onChartCreated,
     reset,
   };

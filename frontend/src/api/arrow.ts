@@ -163,6 +163,164 @@ export function extractFreqCurve(decoded: DecodedSlice): FreqCurve {
   return { freqs, values };
 }
 
+// ── PSD Live extraction types and functions ─────────────────────────────
+
+export type PSDHeatmapData = {
+  freqs: number[];           // unique sorted freq values (Y axis)
+  channelLabels: string[];   // "AP0_ML0", "AP0_ML1", ... (X axis)
+  matrix: number[][];        // matrix[freqIdx][channelIdx] = power
+};
+
+export type PSDAvgData = {
+  freqs: number[];      // shared Y axis
+  mean: number[];       // mean power at each freq
+  std: number[];        // std at each freq
+};
+
+/**
+ * Extract a channel×freq heatmap from a psd_live decoded slice.
+ * The Arrow table has columns: freq, AP, ML, value (or freq, channel, value).
+ */
+export function extractPSDHeatmap(decoded: DecodedSlice): PSDHeatmapData {
+  if (!decoded.columns.includes("freq") || !decoded.columns.includes("value")) {
+    return { freqs: [], channelLabels: [], matrix: [] };
+  }
+
+  const hasAP = decoded.columns.includes("AP") && decoded.columns.includes("ML");
+
+  // Collect unique freqs and channels
+  const freqSet = new Set<number>();
+  const channelMap = new Map<string, number>(); // label → insertion order
+  const cellMap = new Map<string, number>();     // "freq|channelLabel" → value
+
+  for (const row of decoded.rows) {
+    const freq = toNumber(row.freq);
+    const value = toNumber(row.value);
+    if (freq === null || value === null) continue;
+    freqSet.add(freq);
+
+    let label: string;
+    if (hasAP) {
+      const ap = toNumber(row.AP);
+      const ml = toNumber(row.ML);
+      if (ap === null || ml === null) continue;
+      label = `AP${ap}_ML${ml}`;
+    } else {
+      const ch = toNumber(row.channel);
+      if (ch === null) continue;
+      label = `Ch${ch}`;
+    }
+
+    if (!channelMap.has(label)) channelMap.set(label, channelMap.size);
+    cellMap.set(`${freq}|${label}`, value);
+  }
+
+  const freqs = Array.from(freqSet).sort((a, b) => a - b);
+  // Sort channels: by AP then ML (or by channel number)
+  const channelLabels = Array.from(channelMap.keys()).sort((a, b) => {
+    // Extract numeric parts for sorting
+    const numsA = a.match(/\d+/g)?.map(Number) ?? [];
+    const numsB = b.match(/\d+/g)?.map(Number) ?? [];
+    for (let i = 0; i < Math.max(numsA.length, numsB.length); i++) {
+      const diff = (numsA[i] ?? 0) - (numsB[i] ?? 0);
+      if (diff !== 0) return diff;
+    }
+    return 0;
+  });
+
+  const matrix: number[][] = freqs.map((f) =>
+    channelLabels.map((ch) => cellMap.get(`${f}|${ch}`) ?? NaN),
+  );
+
+  return { freqs, channelLabels, matrix };
+}
+
+/**
+ * Extract average PSD curve (mean and std across channels at each freq).
+ */
+export function extractPSDAverage(decoded: DecodedSlice): PSDAvgData {
+  if (!decoded.columns.includes("freq") || !decoded.columns.includes("value")) {
+    return { freqs: [], mean: [], std: [] };
+  }
+
+  const groups = new Map<number, number[]>();
+  for (const row of decoded.rows) {
+    const freq = toNumber(row.freq);
+    const value = toNumber(row.value);
+    if (freq === null || value === null) continue;
+    if (!groups.has(freq)) groups.set(freq, []);
+    groups.get(freq)!.push(value);
+  }
+
+  const freqs = Array.from(groups.keys()).sort((a, b) => a - b);
+  const mean: number[] = [];
+  const std: number[] = [];
+
+  for (const f of freqs) {
+    const vals = groups.get(f)!;
+    const m = vals.reduce((s, v) => s + v, 0) / vals.length;
+    mean.push(m);
+    if (vals.length > 1) {
+      const variance = vals.reduce((s, v) => s + (v - m) ** 2, 0) / vals.length;
+      std.push(Math.sqrt(variance));
+    } else {
+      std.push(0);
+    }
+  }
+
+  return { freqs, mean, std };
+}
+
+/**
+ * Extract spatial power at the nearest frequency to targetFreq.
+ */
+export function extractPSDSpatialAtFreq(
+  decoded: DecodedSlice,
+  targetFreq: number,
+): { ap: number; ml: number; value: number }[] {
+  if (
+    !decoded.columns.includes("freq") ||
+    !decoded.columns.includes("value") ||
+    !decoded.columns.includes("AP") ||
+    !decoded.columns.includes("ML")
+  ) {
+    return [];
+  }
+
+  // Find unique freqs and pick the nearest
+  const freqSet = new Set<number>();
+  for (const row of decoded.rows) {
+    const f = toNumber(row.freq);
+    if (f !== null) freqSet.add(f);
+  }
+  if (freqSet.size === 0) return [];
+
+  const allFreqs = Array.from(freqSet).sort((a, b) => a - b);
+  let nearestFreq = allFreqs[0];
+  let minDist = Math.abs(targetFreq - nearestFreq);
+  for (const f of allFreqs) {
+    const dist = Math.abs(targetFreq - f);
+    if (dist < minDist) {
+      minDist = dist;
+      nearestFreq = f;
+    }
+  }
+
+  // Filter rows at nearest freq
+  const result: { ap: number; ml: number; value: number }[] = [];
+  for (const row of decoded.rows) {
+    const f = toNumber(row.freq);
+    if (f !== nearestFreq) continue;
+    const ap = toNumber(row.AP);
+    const ml = toNumber(row.ML);
+    const value = toNumber(row.value);
+    if (ap === null || ml === null || value === null) continue;
+    result.push({ ap, ml, value });
+  }
+
+  return result.sort((a, b) => a.ap - b.ap || a.ml - b.ml);
+}
+
 /**
  * 2-D spectrogram: groups by (time, freq), averages over any spatial dims.
  * Input: (time, freq) or (time, freq, AP, ML) or (time, freq, channel).

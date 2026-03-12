@@ -20,8 +20,11 @@ export const VIEW_DESCRIPTORS: ViewDescriptor[] = [
   { id: "psd_average",       label: "PSD Average",  requiredDims: ["freq"],              priority: 4 },
   { id: "navigator",         label: "Navigator",    requiredDims: ["time"],              priority: 5 },
   { id: "propagation_frame", label: "Propagation",  requiredDims: ["time", "AP", "ML"], priority: 6 },
-  { id: "psd_spatial",       label: "PSD Spatial",  requiredDims: ["freq", "AP", "ML"], priority: 7 },
+  { id: "psd_spatial",       label: "PSD Spatial",  requiredDims: ["time", "AP", "ML"], priority: 7 },
   { id: "table",             label: "Table",        requiredDims: [],                    priority: 8 },
+  { id: "psd_heatmap",      label: "PSD Heatmap",  requiredDims: ["time"],              priority: 10 },
+  { id: "psd_curve",        label: "PSD Curve",    requiredDims: ["time"],              priority: 11 },
+  { id: "hypnogram",        label: "Hypnogram",    requiredDims: [],                    priority: 12 },
 ];
 
 /**
@@ -41,7 +44,9 @@ export const viewRegistry: Record<string, (props: SliceViewProps) => ReactElemen
   navigator: TimeseriesSliceView, // navigator uses same uPlot renderer; NavigatorView is used separately
   spectrogram: SpectrogramView,
   psd_average: PSDSliceView,
-  psd_spatial: SpatialMapSliceView,
+  psd_spatial: PlaceholderSliceView,   // PSD panel views rendered directly in WorkspaceMain
+  psd_heatmap: PlaceholderSliceView,  // PSD panel views rendered directly in WorkspaceMain
+  psd_curve: PlaceholderSliceView,    // PSD panel views rendered directly in WorkspaceMain
   propagation_frame: SpatialMapSliceView,
   table: PlaceholderSliceView,
 };

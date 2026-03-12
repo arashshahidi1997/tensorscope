@@ -66,6 +66,11 @@ export type StateDTO = {
   events: EventStreamMetaDTO[];
 };
 
+export type PSDParamsDTO = {
+  NW?: number;
+  fmax?: number;
+};
+
 export type TensorSliceRequestDTO = {
   view_type: string;
   selection: SelectionDTO;
@@ -78,6 +83,8 @@ export type TensorSliceRequestDTO = {
   frame_time?: number;
   max_points?: number;
   downsample?: DownsampleMethod;
+  /** PSD computation parameters (for psd_live view_type). */
+  psd_params?: PSDParamsDTO;
 };
 
 export type TensorSliceDTO = {
@@ -114,6 +121,19 @@ export type ProcessingParamsDTO = {
   spatial_median_size: number;
   zscore: boolean;
   zscore_robust: boolean;
+};
+
+export type BrainstateMetaDTO = {
+  available: boolean;
+  state_names: string[];
+  time_range: [number | null, number | null];
+  n_steps: number;
+};
+
+export type BrainstateIntervalDTO = {
+  start: number;
+  end: number;
+  state: string;
 };
 
 export type ApiErrorDTO = {

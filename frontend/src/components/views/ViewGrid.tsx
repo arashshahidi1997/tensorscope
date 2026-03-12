@@ -1,15 +1,15 @@
 /**
- * ViewGrid — renders active views in a CSS grid based on ViewGridLayout.
+ * ViewGrid — renders active views in a stable slot-based layout.
  *
- * Receives pre-rendered view elements (with their data already bound) from
- * WorkspaceMain. Wraps each in ViewPanel chrome and arranges them according
- * to the grid layout. Views not in the grid appear in an overflow area.
+ * Each view has a permanent "home slot" in a row. Toggling views shows/hides
+ * them in-place without reflowing siblings. Rows collapse when all their
+ * slots are hidden.
  */
 import { useCallback, useMemo, type ReactNode } from "react";
 import { useLayoutStore } from "../../store/layoutStore";
 import { useAppStore } from "../../store/appStore";
 import { VIEW_DESCRIPTORS } from "../../registry/viewRegistry";
-import { computeDefaultGrid, getOverflowViews } from "./viewGridLayout";
+import { DEFAULT_SLOT_LAYOUT, isRowActive, getOverflowViews } from "./viewGridLayout";
 import { ViewPanel } from "./ViewPanel";
 
 type ViewGridProps = {
@@ -24,17 +24,14 @@ function getViewLabel(viewId: string): string {
 }
 
 export function ViewGrid({ viewElements, activeViewIds, availableViews }: ViewGridProps) {
-  const { viewGridLayout, maximizedView, toggleMaximizeView } = useLayoutStore();
+  const { maximizedView, toggleMaximizeView } = useLayoutStore();
   const { toggleView } = useAppStore();
 
-  const grid = useMemo(
-    () => viewGridLayout ?? computeDefaultGrid(activeViewIds),
-    [viewGridLayout, activeViewIds],
-  );
+  const layout = DEFAULT_SLOT_LAYOUT;
 
   const overflow = useMemo(
-    () => getOverflowViews(activeViewIds, grid),
-    [activeViewIds, grid],
+    () => getOverflowViews(activeViewIds, layout),
+    [activeViewIds, layout],
   );
 
   const handleClose = useCallback(
@@ -42,61 +39,71 @@ export function ViewGrid({ viewElements, activeViewIds, availableViews }: ViewGr
     [toggleView, availableViews],
   );
 
-  // When a view is maximized, only render that view (others hidden via CSS)
-  const gridStyle = useMemo(() => {
-    if (maximizedView) {
-      return {
-        gridTemplateColumns: "1fr",
-        gridTemplateRows: "1fr",
-      };
-    }
-    const cols = grid.colWidths.map((w) => `${w}fr`).join(" ");
-    const rows = grid.rowHeights.map((h) => `minmax(150px, ${h}fr)`).join(" ");
-    return {
-      gridTemplateColumns: cols,
-      gridTemplateRows: rows,
-    };
-  }, [grid.colWidths, grid.rowHeights, maximizedView]);
+  const activeSet = useMemo(() => new Set(activeViewIds), [activeViewIds]);
 
   return (
     <>
-      <div className="view-grid" style={gridStyle}>
-        {grid.cells.map((cell) => {
-          const el = viewElements[cell.viewId];
-          if (!el) return null;
+      <div className="view-rows">
+        {layout.rows.map((row) => {
+          const rowActive = isRowActive(row, activeViewIds);
 
-          const isMaximized = maximizedView === cell.viewId;
-          const isHidden = maximizedView != null && !isMaximized;
-
-          const cellStyle: React.CSSProperties = {};
-          if (isHidden) {
-            cellStyle.display = "none";
-          } else if (!maximizedView) {
-            if (cell.colSpan && cell.colSpan > 1) {
-              cellStyle.gridColumn = `span ${cell.colSpan}`;
-            }
-            if (cell.rowSpan && cell.rowSpan > 1) {
-              cellStyle.gridRow = `span ${cell.rowSpan}`;
-            }
+          // When maximized, hide rows that don't contain the maximized view
+          const rowHasMaximized = maximizedView
+            ? row.slots.some((s) => s.viewId === maximizedView)
+            : false;
+          if (maximizedView && !rowHasMaximized) {
+            return <div key={row.id} style={{ display: "none" }} />;
           }
 
+          const rowClassName = `view-row${!rowActive ? " view-row--collapsed" : ""}`;
+
           return (
-            <div key={cell.viewId} style={cellStyle}>
-              <ViewPanel
-                viewId={cell.viewId}
-                label={getViewLabel(cell.viewId)}
-                isMaximized={isMaximized}
-                onToggleMaximize={() => toggleMaximizeView(cell.viewId)}
-                onClose={() => handleClose(cell.viewId)}
-              >
-                {el}
-              </ViewPanel>
+            <div
+              key={row.id}
+              className={rowClassName}
+              style={rowActive ? { minHeight: `${row.minHeight}px`, flex: `1 1 ${row.minHeight}px` } : undefined}
+            >
+              {row.slots.map((slot) => {
+                const isActive = activeSet.has(slot.viewId);
+                const isMaximized = maximizedView === slot.viewId;
+
+                // When maximized, hide other slots in the same row
+                if (maximizedView && !isMaximized) {
+                  return <div key={slot.viewId} style={{ display: "none" }} />;
+                }
+
+                const slotStyle: React.CSSProperties = isMaximized
+                  ? { flex: "1 1 100%" }
+                  : isActive
+                    ? { flex: `0 0 ${slot.widthFraction * 100}%` }
+                    : {};
+
+                const slotClassName = `view-slot${!isActive && !maximizedView ? " view-slot--hidden" : ""}`;
+
+                const el = viewElements[slot.viewId];
+
+                return (
+                  <div key={slot.viewId} className={slotClassName} style={slotStyle}>
+                    {el ? (
+                      <ViewPanel
+                        viewId={slot.viewId}
+                        label={getViewLabel(slot.viewId)}
+                        isMaximized={isMaximized}
+                        onToggleMaximize={() => toggleMaximizeView(slot.viewId)}
+                        onClose={() => handleClose(slot.viewId)}
+                      >
+                        {el}
+                      </ViewPanel>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           );
         })}
       </div>
 
-      {/* Overflow: views not assigned to grid cells */}
+      {/* Overflow: views not assigned to any slot */}
       {overflow.length > 0 && (
         <div className="view-overflow">
           {overflow.map((viewId) => {

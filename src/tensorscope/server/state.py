@@ -38,8 +38,8 @@ from tensorscope.server.models import (
 
 _INLINE_COORD_LIMIT = 32
 _VIEW_REGISTRY: dict[tuple[str, ...], list[str]] = {
-    ("time", "AP", "ML"): ["timeseries", "spatial_map", "propagation_frame", "navigator"],
-    ("time", "channel"): ["timeseries", "navigator"],
+    ("time", "AP", "ML"): ["timeseries", "spatial_map", "propagation_frame", "navigator", "psd_live"],
+    ("time", "channel"): ["timeseries", "navigator", "psd_live"],
     ("time", "freq", "AP", "ML"): ["spectrogram", "psd_spatial"],
     ("time", "freq", "channel"): ["spectrogram", "psd_average"],
 }
@@ -52,15 +52,20 @@ class ServerState:
     app_state: TensorScopeState
     layout: LayoutManager
     events: EventRegistry
+    brainstates: xr.DataArray | None = None
     processing: ProcessingParamsDTO = None  # type: ignore[assignment]
     transform_registry: TransformRegistry = None  # type: ignore[assignment]
     _transform_executor: TransformExecutor = None  # type: ignore[assignment]
     _transform_cache: TransformCache = None  # type: ignore[assignment]
     _dag: WorkspaceDAG = None  # type: ignore[assignment]
+    _processed_cache: dict = None  # type: ignore[assignment]  # {tensor_name: xr.DataArray}
+    _processed_params_hash: str | None = None
 
     def __post_init__(self) -> None:
         if self.processing is None:
             self.processing = ProcessingParamsDTO()
+        if self._processed_cache is None:
+            self._processed_cache = {}
         if self.transform_registry is None:
             self.transform_registry = TransformRegistry()
             register_builtins(self.transform_registry)
@@ -124,6 +129,9 @@ class ServerState:
 
     def set_processing(self, params: ProcessingParamsDTO) -> ProcessingParamsDTO:
         self.processing = params
+        # Invalidate cache — will be lazily rebuilt on next slice request
+        self._processed_cache.clear()
+        self._processed_params_hash = None
         return self.processing
 
     def electrode_layout(self, name: str) -> ElectrodeLayoutDTO:
@@ -178,9 +186,35 @@ class ServerState:
             tensor_id=tensor_id,
         )
 
+    def _get_processed_tensor(self, name: str) -> xr.DataArray:
+        """Get processed version of tensor, using cache if available."""
+        node = self.get_node(name)
+        params_hash = self.processing.model_dump_json()
+
+        if self._processed_params_hash != params_hash:
+            self._processed_cache.clear()
+            self._processed_params_hash = params_hash
+
+        if name not in self._processed_cache:
+            try:
+                processed = apply_processing(node.data, self.processing)
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger(__name__).warning(
+                    "Processing failed on full tensor, caching raw data: %s", exc,
+                )
+                processed = node.data
+            self._processed_cache[name] = processed
+
+        return self._processed_cache[name]
+
     def tensor_slice(self, name: str, request: TensorSliceRequestDTO) -> TensorSliceDTO:
         node = self.get_node(name)
-        sliced = apply_slice_request(node.data, request, self.processing)
+        # Use cached processed tensor if processing is active
+        if self.processing and self.processing.has_any_active():
+            data = self._get_processed_tensor(name)
+        else:
+            data = node.data
+        sliced = apply_slice_request(data, request, processing=None)
         payload = encode_arrow_payload(sliced)
         meta = {
             "coords": [coord_summary(sliced, dim).model_dump() for dim in sliced.dims if dim in sliced.coords],
@@ -211,6 +245,7 @@ def create_server_state(
     tensor_name: str = "signal",
     events: EventRegistry | None = None,
     layout: LayoutManager | None = None,
+    brainstates: xr.DataArray | None = None,
 ) -> ServerState:
     """Create a server-ready state from one or more named tensors.
 
@@ -226,6 +261,9 @@ def create_server_state(
         Optional pre-populated event registry.
     layout
         Optional pre-configured layout manager.
+    brainstates
+        Optional 1-D ``(time,)`` DataArray of integer state codes.
+        Attributes should include ``state_names`` (comma-separated label string).
     """
     app_state = TensorScopeState()
     if isinstance(data, dict):
@@ -244,6 +282,7 @@ def create_server_state(
         app_state=app_state,
         layout=layout or LayoutManager(),
         events=events or EventRegistry(),
+        brainstates=brainstates,
     )
 
 
@@ -325,6 +364,41 @@ def apply_slice_request(
             sliced = apply_processing(sliced, processing)
         except Exception as exc:  # noqa: BLE001
             logging.getLogger(__name__).warning("Processing pipeline failed, using raw data: %s", exc)
+
+    # 2b. PSD live: compute multitaper PSD, replacing time dim with freq.
+    if request.view_type == "psd_live" and "time" in sliced.dims:
+        from cogpy.core.spectral.psd import psd_multitaper
+
+        time_vals = np.asarray(sliced.coords["time"].values, dtype=float)
+        fs = 1.0 / np.median(np.diff(time_vals)) if len(time_vals) > 1 else 1.0
+
+        nw = float(request.psd_params.get("NW", 4)) if request.psd_params else 4.0
+        fmax = float(request.psd_params.get("fmax", 100)) if request.psd_params else 100.0
+
+        non_time_dims = [d for d in sliced.dims if d != "time"]
+
+        if non_time_dims:
+            reordered = sliced.transpose("time", *non_time_dims)
+            arr = np.asarray(reordered.values)
+            orig_shape = arr.shape[1:]
+            flat = arr.reshape(arr.shape[0], -1).T  # (n_ch, time)
+            psd_vals, freqs = psd_multitaper(flat, fs, NW=nw, fmax=fmax)
+            # psd_vals: (n_ch, freq) -> reshape to (*orig_shape, freq) -> (freq, *orig_shape)
+            psd_vals = psd_vals.reshape(*orig_shape, -1)
+            psd_vals = np.moveaxis(psd_vals, -1, 0)
+        else:
+            arr = np.asarray(sliced.values)  # (time,)
+            psd_vals, freqs = psd_multitaper(arr, fs, NW=nw, fmax=fmax)
+
+        coords = {"freq": freqs}
+        for d in non_time_dims:
+            if d in sliced.coords:
+                coords[d] = sliced.coords[d].values
+
+        dims = ("freq",) + tuple(non_time_dims)
+        sliced = xr.DataArray(
+            psd_vals, dims=dims, coords=coords, attrs=dict(sliced.attrs),
+        )
 
     # 3. Channel / AP / ML selection (after processing so CMR sees all channels).
     if request.channels is not None and "channel" in sliced.dims:
@@ -581,6 +655,69 @@ def encode_arrow_payload(data: xr.DataArray) -> str:
     with pa_ipc.new_stream(sink, table.schema) as writer:
         writer.write_table(table)
     return base64.b64encode(sink.getvalue()).decode("ascii")
+
+
+def brainstate_intervals(
+    bs: xr.DataArray,
+    t0: float | None = None,
+    t1: float | None = None,
+) -> list[dict[str, Any]]:
+    """Convert a 1-D brainstate DataArray into a list of interval dicts.
+
+    Each interval has keys ``start``, ``end``, ``state`` (label string).
+    Adjacent time steps with the same code are merged.  If ``t0`` / ``t1`` are
+    given, only intervals overlapping that window are returned.
+
+    The DataArray must have ``dims == ("time",)`` and an ``attrs["state_names"]``
+    string of comma-separated labels.
+    """
+    time_vals = np.asarray(bs.coords["time"].values, dtype=float)
+    codes = np.asarray(bs.values, dtype=int)
+    names = [s.strip() for s in str(bs.attrs.get("state_names", "")).split(",")]
+
+    if len(time_vals) == 0:
+        return []
+
+    # Estimate the half-step for interval boundaries
+    if len(time_vals) > 1:
+        dt = float(np.median(np.diff(time_vals))) / 2.0
+    else:
+        dt = 0.5
+
+    intervals: list[dict[str, Any]] = []
+    cur_code = int(codes[0])
+    cur_start = float(time_vals[0]) - dt
+
+    for i in range(1, len(codes)):
+        if int(codes[i]) != cur_code:
+            cur_end = (float(time_vals[i - 1]) + float(time_vals[i])) / 2.0
+            label = names[cur_code] if cur_code < len(names) else f"state_{cur_code}"
+            intervals.append({"start": cur_start, "end": cur_end, "state": label})
+            cur_code = int(codes[i])
+            cur_start = cur_end
+
+    # Close the last interval
+    cur_end = float(time_vals[-1]) + dt
+    label = names[cur_code] if cur_code < len(names) else f"state_{cur_code}"
+    intervals.append({"start": cur_start, "end": cur_end, "state": label})
+
+    # Filter to window
+    if t0 is not None and t1 is not None:
+        intervals = [iv for iv in intervals if iv["end"] > t0 and iv["start"] < t1]
+
+    return intervals
+
+
+def brainstate_meta(bs: xr.DataArray) -> dict[str, Any]:
+    """Return metadata about a brainstate DataArray."""
+    time_vals = np.asarray(bs.coords["time"].values, dtype=float)
+    names = [s.strip() for s in str(bs.attrs.get("state_names", "")).split(",")]
+    return {
+        "available": True,
+        "state_names": names,
+        "time_range": [float(time_vals[0]), float(time_vals[-1])] if len(time_vals) else [None, None],
+        "n_steps": len(time_vals),
+    }
 
 
 def _scalar_or_none(value: Any) -> str | float | int | None:
