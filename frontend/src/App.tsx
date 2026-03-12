@@ -1,12 +1,14 @@
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
 import { useEventWindowQuery, useStateQuery } from "./api/queries";
 import type { EventRecordDTO, SelectionDTO } from "./api/types";
 import { WorkspaceMain } from "./components/views/WorkspaceMain";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { LayoutShell } from "./components/layout/LayoutShell";
 import { NavRail } from "./components/layout/NavRail";
 import { InspectorPanel } from "./components/layout/InspectorPanel";
+import { SettingsDialog } from "./components/settings/SettingsDialog";
 import { useEventNavigation } from "./components/views/useEventNavigation";
 import { useAppStore } from "./store/appStore";
 import { useSelectionStore, toSelectionDTO } from "./store/selectionStore";
@@ -14,9 +16,17 @@ import { useSelectionStore, toSelectionDTO } from "./store/selectionStore";
 function App() {
   const queryClient = useQueryClient();
   const stateQuery = useStateQuery();
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Shell state
-  const { selectedTensor, layoutDraft, setSelectedTensor, setLayoutDraft } = useAppStore();
+  const {
+    selectedTensor,
+    layoutDraft,
+    theme,
+    setSelectedTensor,
+    setLayoutDraft,
+    setTheme,
+  } = useAppStore();
 
   // Navigation state
   const selectionState = useSelectionStore();
@@ -34,6 +44,10 @@ function App() {
     if (!layoutDraft) setLayoutDraft(stateQuery.data.layout);
     if (!initialized) initFromDTO(stateQuery.data.selection);
   }, [layoutDraft, selectedTensor, initialized, setLayoutDraft, setSelectedTensor, initFromDTO, stateQuery.data]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
 
   // Selection mutation — the single server round-trip for navigation commits
   const selectionMutation = useMutation({
@@ -89,6 +103,16 @@ function App() {
       title={stateQuery.data.layout.title}
       sessionId={stateQuery.data.session_id}
       layout={layoutDraft}
+      toolbar={(
+        <button
+          aria-label="Open settings"
+          className="icon-button"
+          onClick={() => setSettingsOpen(true)}
+          type="button"
+        >
+          <span aria-hidden="true">⚙</span>
+        </button>
+      )}
       nav={<NavRail onCommitSelection={commitSelection} />}
       inspector={
         <InspectorPanel
@@ -105,7 +129,15 @@ function App() {
         />
       }
     >
-      <WorkspaceMain onCommitSelection={commitSelection} />
+      <ErrorBoundary label="WorkspaceMain">
+        <WorkspaceMain onCommitSelection={commitSelection} />
+      </ErrorBoundary>
+      <SettingsDialog
+        open={settingsOpen}
+        theme={theme}
+        onClose={() => setSettingsOpen(false)}
+        onThemeChange={setTheme}
+      />
     </LayoutShell>
   );
 }

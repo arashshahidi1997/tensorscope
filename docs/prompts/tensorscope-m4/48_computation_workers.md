@@ -49,3 +49,11 @@ The M2 worker downsampling prompt (`14_worker_downsampling.md`) established the 
 
 See [docs/reference-studies/jupyterlite.md §2.1, §2.2](../../reference-studies/jupyterlite.md).
 Also see [docs/reference-studies/neuroglancer.md §4.2](../../reference-studies/neuroglancer.md) for the M2 stale-result discard principle.
+
+**`BackgroundTaskScheduler` with per-transform deduplication** (from the HiGlass study): deduplication prevents the worker queue from filling with stale tasks when parameters change faster than the worker can process. Before enqueuing a new spectrogram compute for a given time window, drop any previously queued spectrogram compute for the same transform id. The scheduler uses `requestIdleCallback` so heavy transforms only run during idle time, keeping the UI thread responsive.
+
+See [docs/reference-studies/higlass.md §2.4](../../reference-studies/higlass.md).
+
+**`MovingWindowRenderTimer` adaptive throttle** (from the Perspective study): when workers report intermediate results at variable latency (e.g., per-channel FFT slices arriving during a long coherence computation), a fixed debounce interval is too aggressive for slow hardware and too sluggish for fast hardware. A 5-sample sliding window of result-delivery durations derives the correct throttle dynamically. Apply this at the worker message handler, not at the React re-render layer.
+
+See [docs/reference-studies/perspective.md §4d](../../reference-studies/perspective.md).

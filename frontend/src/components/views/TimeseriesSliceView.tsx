@@ -22,6 +22,8 @@ type GestureRefs = {
   onSelectTimeRef: React.RefObject<((t: number) => void) | undefined>;
   toolRef: React.RefObject<GestureTool>;
   wheelZoomRef: React.RefObject<boolean>;
+  /** Multiplied against the raw Y range for gain control. Shared across mode 1 wheel events. */
+  yGainRef: React.MutableRefObject<number>;
 };
 
 function attachGestures(chart: uPlot, refs: GestureRefs): () => void {
@@ -119,6 +121,7 @@ function attachGestures(chart: uPlot, refs: GestureRefs): () => void {
     }
   };
 
+  // ── X-axis wheel zoom (fires on the plot overlay) ────────────────────────
   const onWheel = (e: WheelEvent) => {
     if (!refs.wheelZoomRef.current) return;
     e.preventDefault();
@@ -134,10 +137,55 @@ function attachGestures(chart: uPlot, refs: GestureRefs): () => void {
     });
   };
 
+  // ── Y-axis wheel zoom (fires on root, cursor in axis gutter) ─────────────
+  //
+  // Two modes controlled by the Shift key:
+  //   Default  → symmetric scale around current Y center (gain/amplitude knob).
+  //              The visual midpoint stays fixed; all waveforms grow or shrink.
+  //   Shift    → scale around the cursor's Y position (standard zoom-at-point).
+  //
+  // The event fires on chart.root so it catches the Y-axis label area that
+  // lives outside chart.over. We ignore it when the cursor is inside the plot
+  // area (chart.over handles those via the X wheel handler above).
+  const onWheelYAxis = (e: WheelEvent) => {
+    if (!refs.wheelZoomRef.current) return;
+    const overRect = over.getBoundingClientRect();
+    // Only handle if cursor is in the Y-axis gutter (left of the plot area).
+    if (e.clientX >= overRect.left) return;
+    e.preventDefault();
+    const yMin = chart.scales.y?.min ?? -1;
+    const yMax = chart.scales.y?.max ?? 1;
+    // Scroll down (deltaY > 0) → zoom out (larger range); up → zoom in.
+    const factor = e.deltaY > 0 ? 1.25 : 0.8;
+    if (e.shiftKey) {
+      // Mode 2: zoom around cursor Y position
+      const overH = over.clientHeight || 1;
+      const yInOver = e.clientY - overRect.top;
+      const yFrac = clamp(yInOver / overH, 0, 1);
+      // uPlot Y: top of over = yMax, bottom = yMin
+      const yCursor = yMax + yFrac * (yMin - yMax);
+      chart.setScale("y", {
+        min: yCursor + (yMin - yCursor) * factor,
+        max: yCursor + (yMax - yCursor) * factor,
+      });
+    } else {
+      // Mode 1: symmetric scale around center — gain/amplitude control.
+      // Channel waveforms grow or shrink; their visual separation is preserved
+      // because both sides expand equally from the same midpoint.
+      refs.yGainRef.current *= factor;
+      const yMid = (yMin + yMax) / 2;
+      chart.setScale("y", {
+        min: yMid + (yMin - yMid) * factor,
+        max: yMid + (yMax - yMid) * factor,
+      });
+    }
+  };
+
   over.addEventListener("mousedown", onMouseDown);
   window.addEventListener("mousemove", onMouseMove);
   window.addEventListener("mouseup", onMouseUp);
   over.addEventListener("wheel", onWheel, { passive: false });
+  chart.root.addEventListener("wheel", onWheelYAxis, { passive: false });
   over.style.cursor = refs.toolRef.current === "pan" ? "grab" : "crosshair";
 
   return () => {
@@ -145,6 +193,7 @@ function attachGestures(chart: uPlot, refs: GestureRefs): () => void {
     window.removeEventListener("mousemove", onMouseMove);
     window.removeEventListener("mouseup", onMouseUp);
     over.removeEventListener("wheel", onWheel);
+    chart.root.removeEventListener("wheel", onWheelYAxis);
   };
 }
 
@@ -173,6 +222,10 @@ export function TimeseriesSliceView({
   // View-local tool state — chartRef is shared so the hook can call reset imperatively
   const tools = useChartTools(chartRef);
 
+  // Y-axis gain — 1.0 = original scale; updated by wheel-on-Y-axis gesture.
+  // Stored in a ref so the gesture hot-path never re-renders the component.
+  const yGainRef = useRef(1);
+
   // ── Data decoding ────────────────────────────────────────────────────────
   const { times, series } = useMemo(() => {
     const decoded = decodeArrowSlice(slice);
@@ -187,6 +240,11 @@ export function TimeseriesSliceView({
     if (!el || times.length === 0) return;
 
     const width = el.clientWidth || el.getBoundingClientRect().width || 900;
+
+    // Suppress setScale during chart initialization — same guard as NavigatorView.
+    // Without this, creating the chart fires setScale with the data bounds and
+    // re-publishes timeWindow, causing an extra server round-trip on every data arrival.
+    let initialized = false;
 
     const chart = new uPlot(
       {
@@ -214,8 +272,10 @@ export function TimeseriesSliceView({
           setScale: [
             // Publish window changes back to shared state so the navigator
             // and other views stay in sync when the user pans or zooms here.
+            // Guarded by `initialized` to suppress the spurious fire during
+            // chart creation (and the subsequent resize correction).
             (u, key) => {
-              if (key !== "x") return;
+              if (!initialized || key !== "x") return;
               const { min, max } = u.scales.x;
               if (min != null && max != null) onTimeWindowChangeRef.current?.([min, max]);
             },
@@ -256,6 +316,7 @@ export function TimeseriesSliceView({
       onSelectTimeRef,
       toolRef: tools.toolRef,
       wheelZoomRef: tools.wheelZoomRef,
+      yGainRef,
     });
 
     const ro = new ResizeObserver((entries) => {
@@ -273,6 +334,7 @@ export function TimeseriesSliceView({
       if (w && chartRef.current && w !== chartRef.current.width) {
         chartRef.current.setSize({ width: w, height: 260 });
       }
+      initialized = true;
     });
 
     return () => {
@@ -280,6 +342,7 @@ export function TimeseriesSliceView({
       ro.disconnect();
       detachGestures();
       chartRef.current = null;
+      yGainRef.current = 1;
       chart.destroy();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

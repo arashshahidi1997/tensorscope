@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ProcessingParamsDTO } from "../../api/types";
 
 type Props = {
@@ -30,6 +30,19 @@ export function ProcessingPanel({ params, onApply, isPending }: Props) {
   const [notchListText, setNotchListText] = useState<string>(
     draft.notch_freqs_list ? draft.notch_freqs_list.join(", ") : "",
   );
+  const [live, setLive] = useState(false);
+  const onApplyRef = useRef(onApply);
+  useEffect(() => { onApplyRef.current = onApply; });
+
+  // Reactive mode: debounce Apply calls whenever draft changes
+  useEffect(() => {
+    if (!live) return;
+    const final = buildFinal();
+    const id = setTimeout(() => onApplyRef.current(final), 400);
+    return () => clearTimeout(id);
+    // buildFinal reads draft+notchMode which are in the dep array via draft
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live, draft, notchMode]);
 
   function patch(update: Partial<ProcessingParamsDTO>) {
     setDraft((p) => ({ ...p, ...update }));
@@ -226,9 +239,18 @@ export function ProcessingPanel({ params, onApply, isPending }: Props) {
           type="button"
           className="action-button"
           onClick={() => onApply(buildFinal())}
-          disabled={isPending}
+          disabled={isPending || live}
+          title={live ? "Disable Live mode to use Apply" : undefined}
         >
           {isPending ? "Applying…" : "Apply"}
+        </button>
+        <button
+          type="button"
+          className={`action-button${live ? " active" : ""}`}
+          onClick={() => setLive((v) => !v)}
+          title="Apply changes immediately as you type"
+        >
+          Live
         </button>
         <button
           type="button"

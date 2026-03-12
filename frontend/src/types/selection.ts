@@ -19,6 +19,18 @@ export type SpatialSelection = {
   ml: number;
   /** Null means no single channel is pinned; views use ap/ml instead. */
   channel: number | null;
+  /**
+   * Transient hover electrode id. NOT persisted to the server.
+   * Views update this imperatively on mousemove without triggering slice
+   * requests. Null means no electrode is currently hovered.
+   */
+  hoveredId: number | null;
+  /**
+   * Multi-electrode committed selection. These ids correspond to
+   * ElectrodeCoord.id values within the current layout.
+   * Empty array means no multi-selection is active.
+   */
+  selectedIds: number[];
 };
 
 /** Frequency cursor plus optional band. */

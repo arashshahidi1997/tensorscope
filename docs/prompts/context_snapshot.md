@@ -27,86 +27,101 @@ The repo also contains design studies, hand-off notes, and reference-study mater
 
 ## Current TensorScope status
 
-M1 complete. M2 in progress as of 2026-03-11 (Prompt 12 done).
+M1, M2, M3 complete as of 2026-03-12.
 
 Implemented:
 
+### Core / server
 - tensor registry and validated selection model in the Python core
 - session-backed API state and tensor slice endpoints
+- `ElectrodeLayoutDTO` + `ServerState.electrode_layout()` for spatial tensors
+- `propagation_frame` view type: returns a single `(AP, ML)` frame at `frame_time`
+- 40 backend tests passing
+
+### Frontend foundation (M1)
 - `useSelectionStore` — dedicated navigation store: `{ timeCursor, timeWindow, spatial, freq, event }`; app-shell state in `useAppStore`
-- `toSelectionDTO` / `initFromDTO` — store ↔ wire-format bridge
+- `SpatialSelection` now carries `hoveredId: number | null` and `selectedIds: number[]`
+- new store setters: `setHoveredElectrode`, `setSelectedElectrodes`, `toggleElectrodeSelection`, `setSpatialBrush`
+- `toSelectionDTO` / `initFromDTO` — store ↔ wire-format bridge (hoveredId/selectedIds not serialized to server)
 - `useChartTools(chartRef)` + `ChartToolbar` — view-local tool state outside shared store
 - `useOverviewDetail()` — navigator drag and timeseries zoom both call `setTimeWindow`
 - `useEventNavigation()` — event identity in store, decoupled from timeCursor
 - `NavRail` / `WorkspaceMain` / `InspectorPanel` — workspace shell extracted; App.tsx is ~100 lines
 - `VIEW_DESCRIPTORS` + `getAvailableViews(schema)` — frontend view registry mirrors backend `_VIEW_REGISTRY`
 - `InspectorPanel` — tensor summary + selection summary + event table in right rail
-- 39 unit tests: selectionStore (31) + useChartTools (8)
+- 39 frontend unit tests: selectionStore (31) + useChartTools (8)
+
+### Scientific views (M2)
+- `DataSource` interface + `SliceOptions` + `createTensorDataSource` factory in `frontend/src/api/dataSource.ts`
+- `useSliceQuery` / `makeDefaultSliceRequest` / `clampWindow` in `frontend/src/api/queries.ts`
+- Arrow IPC decode + `extractTimeseriesColumnar`, `extractSpatialCells`, `extractFreqCurve`, `extractSpectrogram` in `frontend/src/api/arrow.ts`
+- `timeseries` → uPlot multichannel, event markers via canvas hook
+- `spatial_map` → Canvas heatmap (ChannelGridRenderer) with click-to-select and hover
+- `psd_average` → uPlot freq curve (mean over spatial)
+- `spectrogram` → Canvas 2D heatmap, inferno-like colormap
+- `navigator` → thin uPlot overview with drag-to-zoom → updates timeWindow
+- `EventTableView` with prev/next navigation
+
+### Spatial dynamics (M3)
+- `ElectrodeLayout` / `ElectrodeCoord` / `buildElectrodeLayout` in `frontend/src/types/spatialLayout.ts`
+- `SpatialRendererBackend` interface in `frontend/src/components/views/SpatialRenderer.ts`
+- `ChannelGridRenderer` (Canvas CPU impl) in `frontend/src/components/views/ChannelGridRenderer.ts` — sequential + cyclical colormaps, 1px-gap grid, hit-testing, hover/select borders
+- `SpatialMapSliceView` rewritten to use `ChannelGridRenderer` + `ResizeObserver`; wires `onHoverElectrode`
+- `PropagationView` — spatial heatmap with time overlay (`t = N.NNNs`), same renderer stack
+- `AnimationController` — rAF loop driving `timeCursor` via `getState()`, play/pause/step/speed controls
+- `SpatialEventView` — peri-event spatial heatmap driven by selected event + timeCursor
+- `propagation_frame` registered in `VIEW_DESCRIPTORS` and `viewRegistry`
+- `WorkspaceMain` wired: hover → `setHoveredElectrode`, propagation panel with `AnimationController`, spatial event view
 
 ## Current milestone
 
-**M2 in progress.** M1 complete. M2 goal: scalable data access (chunked/LOD-aware),
-worker-backed rendering, and core scientific views (spectrogram improvements, channel
-grid, event browser, peri-event views, renderer contracts).
+**M3 complete. Ready for M4.**
 
-M2 completed so far:
-
-- **Prompt 12** — `DataSource` contract formalized:
-  - `DataSource` interface + `SliceOptions` + `createTensorDataSource` factory
-    in [frontend/src/api/dataSource.ts](../../frontend/src/api/dataSource.ts)
-  - `useSliceQuery` / `makeDefaultSliceRequest` cross-referenced to the interface
-  - `SliceOptions.maxPoints` named as the pixel-budget anchor for Prompt 13 (LOD)
+M4 goal: transform registry, derived tensors, explicit analysis outputs (spectrogram,
+PSD, band power, coherence, event-aligned tensors), worker-based computation, transform cache.
 
 ## Inspect these files first
-
-### Project docs
-
-- [README.md](/storage2/arash/projects/tensorscope/README.md)
-- [docs/hand-off-2026-03-11.md](/storage2/arash/projects/tensorscope/docs/hand-off-2026-03-11.md)
-- [docs/frontend-phase3.md](/storage2/arash/projects/tensorscope/docs/frontend-phase3.md)
-- [docs/prompts/roadmap.md](/storage2/arash/projects/tensorscope/docs/prompts/roadmap.md)
 
 ### Core and server
 
 - [src/tensorscope/core/state.py](/storage2/arash/projects/tensorscope/src/tensorscope/core/state.py)
-- [src/tensorscope/core/schema.py](/storage2/arash/projects/tensorscope/src/tensorscope/core/schema.py)
 - [src/tensorscope/server/state.py](/storage2/arash/projects/tensorscope/src/tensorscope/server/state.py)
 - [src/tensorscope/server/models.py](/storage2/arash/projects/tensorscope/src/tensorscope/server/models.py)
 
 ### Frontend architecture anchors
 
-- [frontend/src/api/dataSource.ts](/storage2/arash/projects/tensorscope/frontend/src/api/dataSource.ts) — DataSource interface + SliceOptions + factory (M2 Prompt 12)
-- [frontend/src/api/queries.ts](/storage2/arash/projects/tensorscope/frontend/src/api/queries.ts) — useSliceQuery, makeDefaultSliceRequest, clampWindow
-- [frontend/src/App.tsx](/storage2/arash/projects/tensorscope/frontend/src/App.tsx) — bootstrap + selection mutation
-- [frontend/src/store/appStore.ts](/storage2/arash/projects/tensorscope/frontend/src/store/appStore.ts) — shell state only
-- [frontend/src/store/selectionStore.ts](/storage2/arash/projects/tensorscope/frontend/src/store/selectionStore.ts) — navigation state
 - [frontend/src/types/index.ts](/storage2/arash/projects/tensorscope/frontend/src/types/index.ts) — canonical domain types barrel
-- [frontend/src/components/layout/LayoutShell.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/layout/LayoutShell.tsx)
-- [frontend/src/components/layout/NavRail.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/layout/NavRail.tsx)
-- [frontend/src/components/layout/InspectorPanel.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/layout/InspectorPanel.tsx)
-- [frontend/src/components/views/WorkspaceMain.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/WorkspaceMain.tsx)
+- [frontend/src/types/selection.ts](/storage2/arash/projects/tensorscope/frontend/src/types/selection.ts) — SelectionState, SpatialSelection (with hoveredId/selectedIds)
+- [frontend/src/types/spatialLayout.ts](/storage2/arash/projects/tensorscope/frontend/src/types/spatialLayout.ts) — ElectrodeLayout, ElectrodeCoord, buildElectrodeLayout (M3)
+- [frontend/src/store/selectionStore.ts](/storage2/arash/projects/tensorscope/frontend/src/store/selectionStore.ts) — navigation state + spatial setters
+- [frontend/src/api/queries.ts](/storage2/arash/projects/tensorscope/frontend/src/api/queries.ts) — useSliceQuery, makeDefaultSliceRequest, clampWindow
+- [frontend/src/api/arrow.ts](/storage2/arash/projects/tensorscope/frontend/src/api/arrow.ts) — Arrow IPC decode + all extractors
 - [frontend/src/registry/viewRegistry.ts](/storage2/arash/projects/tensorscope/frontend/src/registry/viewRegistry.ts) — VIEW_DESCRIPTORS + getAvailableViews
-- [frontend/src/components/views/TimeseriesSliceView.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/TimeseriesSliceView.tsx)
-- [frontend/src/components/views/NavigatorView.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/NavigatorView.tsx)
-- [frontend/src/components/views/useChartTools.ts](/storage2/arash/projects/tensorscope/frontend/src/components/views/useChartTools.ts)
-- [frontend/src/components/views/useOverviewDetail.ts](/storage2/arash/projects/tensorscope/frontend/src/components/views/useOverviewDetail.ts)
-- [frontend/src/components/views/useEventNavigation.ts](/storage2/arash/projects/tensorscope/frontend/src/components/views/useEventNavigation.ts)
+- [frontend/src/components/views/WorkspaceMain.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/WorkspaceMain.tsx)
+- [frontend/src/components/views/SpatialRenderer.ts](/storage2/arash/projects/tensorscope/frontend/src/components/views/SpatialRenderer.ts) — SpatialRendererBackend interface (M3)
+- [frontend/src/components/views/ChannelGridRenderer.ts](/storage2/arash/projects/tensorscope/frontend/src/components/views/ChannelGridRenderer.ts) — Canvas CPU renderer (M3)
+- [frontend/src/components/views/PropagationView.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/views/PropagationView.tsx) — propagation frame view (M3)
+- [frontend/src/components/controls/AnimationController.tsx](/storage2/arash/projects/tensorscope/frontend/src/components/controls/AnimationController.tsx) — rAF animation controller (M3)
 
-## Recent major changes (M1, 2026-03-11)
+## Recent major changes (M3, 2026-03-12)
 
-- Split `appStore` (shell) from `selectionStore` (navigation); canonical `SelectionState` type.
-- Extracted `NavRail`, `WorkspaceMain`, `InspectorPanel` from App.tsx.
-- Closed timeseries zoom feedback loop: `setScale` hook → `setTimeWindow`.
-- Formalized `VIEW_DESCRIPTORS` and `getAvailableViews` in `viewRegistry.ts`.
-- Event identity (`event.eventId`, `event.streamName`) added to `SelectionState`; `useEventNavigation()` hook.
-- `useChartTools(chartRef)` + `ChartToolbar` for view-local pan/zoom tool state.
-- 39 unit tests.
+- `SpatialSelection` extended with `hoveredId` (transient, not serialized to server) and `selectedIds` (multi-electrode committed selection).
+- `ElectrodeLayout` / `ElectrodeCoord` / `buildElectrodeLayout` added to types barrel.
+- `SpatialRendererBackend` interface: `init`, `render`, `hitTest`, `dispose` — CPU/WebGL abstraction.
+- `ChannelGridRenderer` Canvas implementation: sequential + cyclical colormaps, ResizeObserver, O(n) hit-test.
+- `SpatialMapSliceView` rewritten to use `ChannelGridRenderer`; adds `onHoverElectrode` prop.
+- `PropagationView`: same renderer stack, adds `t = N.NNNs` canvas overlay from `slice.meta.selected_time`.
+- `AnimationController`: rAF loop, drives `timeCursor` via `getState().setTimeCursor` — no React re-render during animation.
+- `SpatialEventView`: peri-event spatial heatmap; gates on `event.eventId !== null`.
+- Backend: `ElectrodeLayoutDTO`, `ServerState.electrode_layout()`, `propagation_frame` view type with `frame_time` field.
+- `WorkspaceMain` wired: hover → `setHoveredElectrode`, propagation panel + animation controller, spatial event view at bottom.
+- Test baseline: 40 backend + 39 frontend tests, all green.
 
-## Open questions (M2 scope)
+## Open questions (M4 scope)
 
-- Multi-tensor workspace: how do views bind to a specific tensor when multiple are active?
-- Should `getAvailableViews` on the frontend fully replace server `available_views`, or are both needed?
-- Event segments: should epoch/segment selection enter `SelectionState` or stay separate?
+- Worker isolation: should transform workers share a single `SharedArrayBuffer` pool or use per-transform `MessageChannel` pairs?
+- Transform cache invalidation: `OptionalUpdate<T>` partial DTO semantics vs. full-param cache key hashing — pick one before caching is implemented.
+- Multi-tensor workspace: view-to-tensor binding when multiple tensors are active (deferred from M2, still open).
 
 ## Update instructions for future agents
 

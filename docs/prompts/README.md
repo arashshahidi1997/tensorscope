@@ -13,6 +13,14 @@ Use these docs together, not interchangeably.
 - [`templates/`](./templates/): reusable note templates for handoffs, session summaries, and architecture-change notes
 - [M1 prompt pack](./tensorscope/README.md): linked multiscale explorer milestone
 - [M2 prompt pack](./tensorscope-m2/README.md): data scalability and scientific-view milestone
+- [M3 prompt pack](./tensorscope-m3/README.md): spatial dynamics milestone
+- [M4 prompt pack](./tensorscope-m4/README.md): transform registry and derived-tensor milestone
+- [M5 prompt pack](./tensorscope-m5/README.md): transform DAG and workspace-graph milestone
+- [M6 prompt pack](./tensorscope-m6/README.md): pipeline export and workflow-cooking milestone
+- [MA1 prompt pack](./tensorscope-ma1/README.md): optional GPU acceleration track
+- [MA2 prompt pack](./tensorscope-ma2/README.md): optional queryable-workspace track
+- [Transform DAG architecture note](../architecture/transform-dag.md): workspace DAG and lineage model
+- [Pipeline export architecture note](../architecture/pipeline-export.md): curated graph export and Snakemake cooking model
 
 ## How to use these docs with agents
 
@@ -115,13 +123,13 @@ Recommended M3 order:
 9. [37_spatial_event_views.md](./tensorscope-m3/37_spatial_event_views.md)
 10. [38_gpu_renderer.md](./tensorscope-m3/38_gpu_renderer.md)
 
-## Prompt Pack M4: Analysis And Derived Tensors
+## Prompt Pack M4: Transform Registry And Derived Tensors
 
 Milestone index:
 
 - [M4 README](./tensorscope-m4/README.md)
 
-M4 transforms TensorScope from a viewer into an interactive analysis environment by making transforms and derived tensors explicit system objects.
+M4 makes transforms and derived tensors explicit system objects.
 
 M4 lives in [`docs/prompts/tensorscope-m4/`](./tensorscope-m4/00_context.md) and focuses on:
 
@@ -130,6 +138,8 @@ M4 lives in [`docs/prompts/tensorscope-m4/`](./tensorscope-m4/00_context.md) and
 - explicit analysis outputs such as spectrogram, PSD, band power, coherence, and event-aligned tensors
 - worker-based computation
 - transform caching and reuse
+- keeping analysis logic out of rendering views
+- providing the foundation that M5 and M6 build on
 
 Recommended M4 order:
 
@@ -145,9 +155,57 @@ Recommended M4 order:
 10. [48_computation_workers.md](./tensorscope-m4/48_computation_workers.md)
 11. [49_transform_cache.md](./tensorscope-m4/49_transform_cache.md)
 
-## Future Scaffolded Packs
+## Prompt Pack M5: Transform DAG And Workspace Graph
 
-These packs are placeholders only. They reserve milestone boundaries and high-level themes, but they are not ready to execute yet.
+Milestone index:
 
-- [M5 README](./tensorscope-m5/README.md): Agentic Exploration
-- [M5 context placeholder](./tensorscope-m5/00_context.md)
+- [M5 README](./tensorscope-m5/README.md)
+
+M5 exposes transform lineage as a navigable workspace graph after M4 establishes explicit transforms and derived tensors.
+
+M5 lives in [`docs/prompts/tensorscope-m5/`](./tensorscope-m5/00_context.md) and focuses on:
+
+- `TensorNode`, `TransformNode`, and `TransformEdge`
+- provenance tracking across source and derived tensors
+- graph inspection and navigation
+- visibility controls for exploratory nodes
+- intermediate tensor inspection
+- lineage tree and node inspection surfaces
+- keeping the DAG distinct from a freeform workflow editor
+
+## Prompt Pack M6: Pipeline Export And Workflow Cooking
+
+Milestone index:
+
+- [M6 README](./tensorscope-m6/README.md)
+
+M6 adds the execution-layer export path after M5 makes the transform DAG explicit and inspectable.
+
+M6 lives in [`docs/prompts/tensorscope-m6/`](./tensorscope-m6/00_context.md) and focuses on:
+
+- pipeline state files
+- transform graph serialization
+- node promotion from workspace DAG to pipeline DAG
+- execution metadata
+- Snakemake-oriented workflow cooking
+- keeping export state distinct from interactive workspace state
+
+## Optional Prompt Pack MA1: GPU Rendering Acceleration
+
+Milestone index:
+
+- [MA1 README](./tensorscope-ma1/README.md)
+
+MA1 is an optional extension track for GPU-backed rendering acceleration around a CPU-first core.
+
+It should remain separate from the core M4 through M6 architecture path.
+
+## Optional Prompt Pack MA2: Queryable Workspace And Assistant Hooks
+
+Milestone index:
+
+- [MA2 README](./tensorscope-ma2/README.md)
+
+MA2 is an optional extension track for structured workspace queries, command surfaces, and external assistant hooks.
+
+It should sit on top of the workspace and export contracts rather than redefining them.

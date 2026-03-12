@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Any
@@ -18,6 +19,7 @@ from tensorscope.core.state import SelectionState, TensorNode, TensorScopeState
 from tensorscope.server.models import (
     CoordSummaryDTO,
     DownsampleMethod,
+    ElectrodeLayoutDTO,
     EventStreamMetaDTO,
     LayoutDTO,
     ProcessingParamsDTO,
@@ -32,7 +34,7 @@ from tensorscope.server.models import (
 
 _INLINE_COORD_LIMIT = 32
 _VIEW_REGISTRY: dict[tuple[str, ...], list[str]] = {
-    ("time", "AP", "ML"): ["timeseries", "spatial_map", "navigator"],
+    ("time", "AP", "ML"): ["timeseries", "spatial_map", "propagation_frame", "navigator"],
     ("time", "channel"): ["timeseries", "navigator"],
     ("time", "freq", "AP", "ML"): ["spectrogram", "psd_spatial"],
     ("time", "freq", "channel"): ["spectrogram", "psd_average"],
@@ -94,6 +96,38 @@ class ServerState:
     def set_processing(self, params: ProcessingParamsDTO) -> ProcessingParamsDTO:
         self.processing = params
         return self.processing
+
+    def electrode_layout(self, name: str) -> ElectrodeLayoutDTO:
+        """Extract electrode layout from a tensor's AP/ML coordinates.
+
+        Raises
+        ------
+        KeyError
+            If the tensor does not exist.
+        ValueError
+            If the tensor has no AP or ML coordinate.
+        """
+        node = self.get_node(name)
+        data = node.data
+        if "AP" not in data.coords or "ML" not in data.coords:
+            raise ValueError(
+                f"Tensor '{name}' has no AP/ML coordinates — "
+                "electrode layout is only available for spatial tensors."
+            )
+        import numpy as np
+        ap_vals = np.asarray(data.coords["AP"].values, dtype=float)
+        ml_vals = np.asarray(data.coords["ML"].values, dtype=float)
+        # These may be per-electrode (1D indexed by AP/ML dim) or grid coords.
+        ap_unique = sorted(set(ap_vals.tolist()))
+        ml_unique = sorted(set(ml_vals.tolist()))
+        return ElectrodeLayoutDTO(
+            n_ap=len(ap_unique),
+            n_ml=len(ml_unique),
+            geometry="grid",
+            ap_coords=ap_unique,
+            ml_coords=ml_unique,
+            n_electrodes=len(ap_vals) if ap_vals.ndim == 1 else len(ap_unique) * len(ml_unique),
+        )
 
     def tensor_slice(self, name: str, request: TensorSliceRequestDTO) -> TensorSliceDTO:
         node = self.get_node(name)
@@ -235,8 +269,13 @@ def apply_slice_request(
         sliced = sliced.sel(freq=slice(float(request.freq_range[0]), float(request.freq_range[1])))
 
     # 2. Apply processing pipeline on the windowed data (not the full recording).
+    # A ValueError here (e.g. signal too short for the requested filter) is
+    # non-fatal: fall back to unprocessed data so the view stays visible.
     if processing is not None:
-        sliced = apply_processing(sliced, processing)
+        try:
+            sliced = apply_processing(sliced, processing)
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).warning("Processing pipeline failed, using raw data: %s", exc)
 
     # 3. Channel / AP / ML selection (after processing so CMR sees all channels).
     if request.channels is not None and "channel" in sliced.dims:
@@ -256,6 +295,18 @@ def apply_slice_request(
                 {
                     **dict(sliced.attrs),
                     "selected_time": _scalar_or_none(sliced.coords["time"].values),
+                }
+            )
+
+    if request.view_type == "propagation_frame" and "time" in sliced.dims:
+        target_time = float(request.frame_time)  # type: ignore[arg-type]
+        sliced = sliced.sel(time=target_time, method="nearest")
+        if "time" in sliced.coords:
+            sliced = sliced.assign_attrs(
+                {
+                    **dict(sliced.attrs),
+                    "selected_time": _scalar_or_none(sliced.coords["time"].values),
+                    "view_type": "propagation_frame",
                 }
             )
 
@@ -301,6 +352,16 @@ def apply_processing(data: xr.DataArray, params: ProcessingParamsDTO) -> xr.Data
     )
 
     out = data
+
+    # cogpy filter functions (bandpassx, notchesx) require an `fs` attribute.
+    # Infer it from the time coordinate if not already present.
+    if "fs" not in out.attrs and "time" in out.dims and "time" in out.coords:
+        time_vals = np.asarray(out.coords["time"].values, dtype=float)
+        if len(time_vals) > 1:
+            diffs = np.diff(time_vals[:101])
+            pos = diffs[diffs > 0]
+            if pos.size:
+                out = out.assign_attrs({**dict(out.attrs), "fs": float(1.0 / pos.mean())})
 
     if params.cmr and "time" in out.dims:
         out = cmrx(out)  # auto-detects channel_dims

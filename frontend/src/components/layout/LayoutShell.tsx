@@ -5,6 +5,7 @@ type LayoutShellProps = PropsWithChildren<{
   title: string;
   sessionId: string;
   layout: LayoutDTO;
+  toolbar?: ReactNode;
   /**
    * Left navigation/control rail.
    * Owns shared navigation controls (selection, layout preset, processing).
@@ -19,13 +20,24 @@ type LayoutShellProps = PropsWithChildren<{
   inspector: ReactNode;
 }>;
 
-export function LayoutShell({ title, sessionId, layout, nav, inspector, children }: LayoutShellProps) {
+export function LayoutShell({
+  title,
+  sessionId,
+  layout,
+  toolbar,
+  nav,
+  inspector,
+  children,
+}: LayoutShellProps) {
   return (
     <div className="app-shell">
       <header className="topbar">
         <span className="topbar-title">{title}</span>
-        <span className="topbar-chip">{layout.current_preset}</span>
-        <span className="topbar-chip muted">{sessionId.slice(0, 8)}</span>
+        <div className="topbar-actions">
+          <span className="topbar-chip">{layout.current_preset}</span>
+          <span className="topbar-chip muted">{sessionId.slice(0, 8)}</span>
+          {toolbar}
+        </div>
       </header>
       <div className="workspace">
         <aside className="sidebar-col">{nav}</aside>

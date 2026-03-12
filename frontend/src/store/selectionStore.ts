@@ -14,6 +14,28 @@ type SelectionStore = SelectionState & {
   setTimeWindow: (w: TimeWindow) => void;
   setSpatial: (s: SpatialSelection) => void;
   patchSpatial: (p: Partial<SpatialSelection>) => void;
+  /**
+   * Update transient hover electrode. Does NOT trigger a server round-trip.
+   * Call from mousemove handlers on the canvas.
+   */
+  setHoveredElectrode: (id: number | null) => void;
+  /**
+   * Commit a multi-electrode selection by electrode ids.
+   */
+  setSelectedElectrodes: (ids: number[]) => void;
+  /**
+   * Toggle one electrode in/out of the multi-selection.
+   */
+  toggleElectrodeSelection: (id: number) => void;
+  /**
+   * Select all electrodes whose apIdx and mlIdx fall within the brush bounds.
+   * electrodes: the layout's electrode list to filter from.
+   */
+  setSpatialBrush: (
+    apIdxRange: [number, number],
+    mlIdxRange: [number, number],
+    electrodes: import("../types/spatialLayout").ElectrodeCoord[],
+  ) => void;
   setFreq: (f: FreqSelection) => void;
   setEvent: (e: EventSelection) => void;
   patch: (p: SelectionPatch) => void;
@@ -29,7 +51,7 @@ type SelectionStore = SelectionState & {
 const DEFAULT_STATE: SelectionState = {
   timeCursor: 0,
   timeWindow: [0, 2],
-  spatial: { ap: 0, ml: 0, channel: null },
+  spatial: { ap: 0, ml: 0, channel: null, hoveredId: null, selectedIds: [] },
   freq: { freq: 0 },
   event: { eventId: null, streamName: null },
 };
@@ -52,6 +74,35 @@ export const useSelectionStore = create<SelectionStore>((set) => ({
   setSpatial: (spatial) => set({ spatial }),
 
   patchSpatial: (p) => set((s) => ({ spatial: { ...s.spatial, ...p } })),
+
+  setHoveredElectrode: (id) =>
+    set((s) => ({ spatial: { ...s.spatial, hoveredId: id } })),
+
+  setSelectedElectrodes: (ids) =>
+    set((s) => ({ spatial: { ...s.spatial, selectedIds: ids } })),
+
+  toggleElectrodeSelection: (id) =>
+    set((s) => {
+      const has = s.spatial.selectedIds.includes(id);
+      const selectedIds = has
+        ? s.spatial.selectedIds.filter((x) => x !== id)
+        : [...s.spatial.selectedIds, id];
+      return { spatial: { ...s.spatial, selectedIds } };
+    }),
+
+  setSpatialBrush: (apIdxRange, mlIdxRange, electrodes) =>
+    set((s) => {
+      const [apLo, apHi] = apIdxRange;
+      const [mlLo, mlHi] = mlIdxRange;
+      const selectedIds = electrodes
+        .filter(
+          (e) =>
+            e.apIdx >= apLo && e.apIdx <= apHi &&
+            e.mlIdx >= mlLo && e.mlIdx <= mlHi,
+        )
+        .map((e) => e.id);
+      return { spatial: { ...s.spatial, selectedIds } };
+    }),
 
   setFreq: (freq) => set({ freq }),
 
@@ -83,6 +134,8 @@ export const useSelectionStore = create<SelectionStore>((set) => ({
           ap: p.ap ?? s.spatial.ap,
           ml: p.ml ?? s.spatial.ml,
           channel: p.channel !== undefined ? p.channel : s.spatial.channel,
+          hoveredId: s.spatial.hoveredId,
+          selectedIds: s.spatial.selectedIds,
         };
       }
       return next;
@@ -91,13 +144,16 @@ export const useSelectionStore = create<SelectionStore>((set) => ({
   initFromDTO: (dto, timeWindow) =>
     set((s) => ({
       timeCursor: dto.time,
-      // Preserve window unless an explicit one is provided or time changed.
+      // Re-center the window only when the cursor jumps outside the currently
+      // visible range. Preserving the window when the cursor stays inside
+      // prevents committed selections (e.g. clicking a time point that is
+      // already visible) from resetting a carefully panned/zoomed view.
       timeWindow:
         timeWindow ??
-        (dto.time !== s.timeCursor
+        (dto.time < s.timeWindow[0] || dto.time > s.timeWindow[1]
           ? [Math.max(0, dto.time - 1), dto.time + 1]
           : s.timeWindow),
-      spatial: { ap: dto.ap, ml: dto.ml, channel: dto.channel },
+      spatial: { ap: dto.ap, ml: dto.ml, channel: dto.channel, hoveredId: null, selectedIds: [] },
       freq: { freq: dto.freq },
       event: s.event, // preserve existing event selection across API round-trips
     })),

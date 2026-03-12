@@ -1,6 +1,6 @@
 # TensorScope M4 Prompt Pack
 
-Milestone: M4 - Analysis And Derived Tensors
+Milestone: M4 - Transform Registry And Derived Tensors
 
 Read first:
 
@@ -12,11 +12,12 @@ Read first:
 
 ## Milestone purpose
 
-M4 introduces explicit analysis transforms and derived-tensor pipelines.
+M4 introduces the explicit transform layer that makes derived tensors first-class analysis objects.
 
 Primary focus:
 
 - transform registration and discovery
+- `TransformNode` as an explicit analysis primitive
 - derived tensor modeling and provenance
 - worker-based computation
 - analysis-oriented tensors such as spectrogram, PSD, band power, coherence, and event-aligned tensors
@@ -43,9 +44,9 @@ Primary focus:
 1. [00_context.md](./00_context.md)
 2. [40_transform_registry.md](./40_transform_registry.md)
 3. [41_derived_tensor_model.md](./41_derived_tensor_model.md)
-4. [42_spectrogram_tensor.md](./42_spectrogram_tensor.md)
-5. [43_psd_tensor.md](./43_psd_tensor.md)
-6. [44_bandpower_tensor.md](./44_bandpower_tensor.md)
+4. [42_spectrogram_tensor.md](./42_spectrogram_tensor.md) — covers spectrogram, PSD, and band power together; read before 43 and 44
+5. [43_psd_tensor.md](./43_psd_tensor.md) — PSD-specific constraints only; read 42 first
+6. [44_bandpower_tensor.md](./44_bandpower_tensor.md) — band-power-specific constraints only; read 42 first
 7. [45_coherence_tensor.md](./45_coherence_tensor.md)
 8. [46_event_aligned_tensor.md](./46_event_aligned_tensor.md)
 9. [47_state_space_view.md](./47_state_space_view.md)

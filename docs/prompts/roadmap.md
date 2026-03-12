@@ -299,184 +299,177 @@ This is the step from “chart app” to “tensor explorer”.
 
 ---
 
-## Phase 4 — Multiscale data pipeline
+## Milestone sequence from M4 onward
 
-### Goal
+M1 through M3 remain the current foundation:
 
-Make long recordings feel interactive.
+* M1 — Architecture Spine
+* M2 — Data + Linked Scientific Views
+* M3 — Spatial Dynamics
 
-### Scope
+From M4 onward, the roadmap should separate:
 
-* multiresolution decimation pipeline
-* chunk provider interface
-* asynchronous window loading
-* cache policy
-* worker-based downsampling/aggregation
+* the interactive analysis workspace
+* the transform graph that explains derived tensors
+* the execution/export layer that turns curated analysis state into reproducible workflows
 
-### Deliverables
+That separation prevents TensorScope from collapsing exploratory UI state and durable pipeline state into the same model.
 
-* data source abstraction
-* LOD chooser
-* cache layer
-* benchmark suite
+Related architecture notes:
 
-### Acceptance criteria
-
-* hour-scale recordings load usable overview quickly
-* zooming switches resolution seamlessly
-* detail windows can request high-resolution slices on demand
-
-### Why now
-
-Needed before advanced views can scale to real lab data.
+* [transform-dag.md](../architecture/transform-dag.md)
+* [pipeline-export.md](../architecture/pipeline-export.md)
 
 ---
 
-## Phase 5 — Linked core views
+## M4 — Transform Registry And Derived Tensors
 
 ### Goal
 
-Establish the canonical TensorScope coordinated view set.
+Introduce explicit transforms and derived tensors as first-class analysis objects.
 
 ### Scope
 
-* raw signal view
-* spectrogram view
-* channel/grid selection view
-* event list / interval track
-* shared cursor / crosshair / brushing
+* `TransformRegistry` and transform discovery
+* explicit `TransformNode` definitions for analysis steps
+* derived tensor creation as registered outputs rather than ad hoc view logic
+* provenance and parameter capture for derived tensors
+* worker-backed execution and cache boundaries for heavier transforms
 
 ### Deliverables
 
-* linked workspace layout
-* cross-view subscriptions
-* consistent selection highlighting
+* transform registration contract
+* derived tensor model linked to source tensors
+* provenance metadata for transform inputs, parameters, and outputs
+* reusable compute/caching boundary for transform execution
 
 ### Acceptance criteria
 
-* click in one view updates all others coherently
-* time brushing propagates correctly
-* channel selection propagates correctly
-* event selection recenters detail panels
-
-### Why now
-
-This is the first truly compelling TensorScope demo.
-
----
-
-## Phase 6 — Event-centered exploration
-
-### Goal
-
-Support neuroscientific workflows around events like ripples and dentate spikes.
-
-### Scope
-
-* event table / browser
-* peri-event alignment
-* event overlay tracks
-* event-centered detail templates
-* optional derived metrics panels
-
-### Deliverables
-
-* event browser
-* event-linked navigation
-* peri-event stack view
-* event summary panels
-
-### Acceptance criteria
-
-* selecting an event opens synchronized detail context
-* event-centered windows can be compared across classes
-* event subsets can be filtered and browsed quickly
-
-### Why now
-
-This turns the system into a practical scientific analysis tool.
-
----
-
-## Phase 7 — Spatial and propagation views
-
-### Goal
-
-Add the standout visualizations that differentiate TensorScope.
-
-### Scope
-
-* channel grid map
-* animated propagation movie
-* phase/power/latency overlays
-* spatial brushing/selection
-* CPU baseline + optional WebGL renderer
-
-### Deliverables
-
-* `ChannelGridView`
-* `PropagationView`
-* spatial renderer abstraction
-* animation controller
-
-### Acceptance criteria
-
-* event-centered propagation animation is smooth
-* clicking spatial sites links back to traces/spec
-* view works on CPU; accelerates when GPU path is available
+* views consume derived tensors instead of computing them inline
+* transform parameters are explicit and serializable
+* derived tensors retain lineage back to source tensors and transforms
+* heavier transform work can run asynchronously without breaking the CPU-first baseline
 
 ### Why here
 
-High value, but depends on stable state/data/view architecture.
+TensorScope needs an explicit analysis model before it can expose transform lineage or export curated workflows.
+
+M4 is intentionally narrower than M5 and M6. It provides the transform and derived-tensor foundation, but it does not yet define the visible workspace graph or the export layer.
 
 ---
 
-## Phase 8 — Advanced exploratory views
+## M5 — Transform DAG And Workspace Graph
 
 ### Goal
 
-Broaden TensorScope beyond classical signal plots.
+Expose the interactive transform graph as a navigable workspace object.
 
 ### Scope
 
-* state-space trajectories
-* pairwise matrices / coherence maps
-* dimensional lenses
-* query-driven view generation
+* `TensorNode`, `TransformNode`, and `TransformEdge` as graph primitives
+* workspace DAG for tensor lineage and transform inspection
+* graph inspection UI
+* toggling node visibility without deleting provenance
+* browsing and viewing intermediate tensors
+* parameter inspection for transform nodes
 
 ### Deliverables
 
-* advanced view plugins
-* standardized derived tensor interface
+* transform DAG model integrated with `TensorRegistry` and `TransformRegistry`
+* provenance graph queries for upstream/downstream lineage
+* workspace graph panel or inspector contract
+* visibility and pinning rules for exploratory intermediate nodes
 
-### Why later
+### Acceptance criteria
 
-These are differentiators, but not prerequisites for a robust platform.
+* users can inspect transform lineage from any derived tensor
+* intermediate tensors can be surfaced and inspected without special-case wiring
+* graph navigation does not replace shared navigation state for cross-view coordination
+* temporary exploratory nodes remain distinct from curated exportable nodes
+
+### Why here
+
+The transform DAG is part of the analysis model. It should exist before any execution export layer is defined.
+
+M5 is separate from M4 because graph inspection, lineage traversal, and workspace-node state are not the same as transform registration. It is also separate from M6 because workspace exploration should not be forced into execution semantics.
 
 ---
 
-## Phase 9 — Agentic workflows and AI-assisted exploration
+## M6 — Pipeline Export And Workflow Cooking
 
 ### Goal
 
-Make TensorScope navigable and extensible by coding agents and potentially by analysis agents.
+Export curated transform state into a reproducible execution specification.
 
 ### Scope
 
-* machine-readable view/tensor schemas
-* command palette / query layer
-* promptable state snapshots
-* exportable context packets for agents
+* pipeline state document in YAML or JSON
+* transform graph serialization
+* promotion rules from workspace DAG nodes to pipeline DAG nodes
+* execution metadata and output declarations
+* workflow cooking for systems such as Snakemake
 
 ### Deliverables
 
-* JSON schemas for tensor/view state
-* snapshot export/import
-* simple natural-language or command-driven navigation hooks
+* pipeline state schema
+* serializer from curated workspace graph to pipeline document
+* node-promotion model for separating exploratory and execution-ready transforms
+* Snakemake-oriented workflow generation contract
 
-### Why last
+### Acceptance criteria
 
-This becomes powerful only after the underlying domain model is disciplined.
+* curated source tensors, transforms, parameters, and outputs can be exported deterministically
+* exported pipeline state preserves provenance needed for reproducibility
+* workflow cooking operates on promoted nodes rather than the entire exploratory workspace
+* interactive workspace behavior remains usable without pipeline export
+
+### Why here
+
+Pipeline export is an execution-layer milestone. It depends on explicit transforms and a visible DAG, but it does not replace the interactive workspace.
+
+M6 is separate from M5 because export requires a curated pipeline DAG, a pipeline state file, and execution metadata that should not be mixed into ordinary workspace inspection.
+
+---
+
+## MA1 — Optional GPU Rendering Acceleration
+
+### Goal
+
+Provide optional rendering acceleration for spatially dense or animated views.
+
+### Scope
+
+* WebGL-backed renderer paths
+* large-channel spatial rendering
+* accelerated propagation visualization
+* renderer selection behind the existing CPU-first contract
+
+Related prompt pack: [tensorscope-ma1](./tensorscope-ma1/README.md)
+
+### Why optional
+
+TensorScope must remain usable and architecturally coherent on the CPU path established in M1 through M3.
+
+---
+
+## MA2 — Optional Queryable Workspace And Assistant Hooks
+
+### Goal
+
+Expose the workspace state for structured querying, command-driven navigation, and external agent integration.
+
+### Scope
+
+* command palette and structured workspace queries
+* queryable graph and tensor metadata
+* context export for external assistants or coding agents
+* machine-readable snapshots of the current workspace and curated graph state
+
+Related prompt pack: [tensorscope-ma2](./tensorscope-ma2/README.md)
+
+### Why optional
+
+These capabilities extend discoverability and automation, but they are not required for the core interactive analysis and pipeline-export architecture.
 
 ## 6. Recommended implementation sequence for agents
 

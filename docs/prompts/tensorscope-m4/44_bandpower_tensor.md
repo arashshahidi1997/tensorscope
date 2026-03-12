@@ -1,39 +1,12 @@
 # Prompt 44: Band Power Tensor
 
-Read first:
+This prompt is an instance of the shared frequency-domain derived tensor pattern.
 
-- [00_context.md](./00_context.md)
-- [41_derived_tensor_model.md](./41_derived_tensor_model.md)
-- [43_psd_tensor.md](./43_psd_tensor.md)
-- [../../architecture/tensorscope.md](../../architecture/tensorscope.md)
+Read [42_spectrogram_tensor.md](./42_spectrogram_tensor.md) first — it defines `BandPowerTransform` as a composition of `PSDTransform` + `BandSelectTransform` and establishes the shared STFT contract.
 
-Goal: compute band power tensors.
+Band-power-specific constraints (on top of 42):
 
-Scope:
-
-- frequency band selection
-- temporal aggregation
-
-Implementation Tasks:
-
-- define how band definitions enter the transform contract
-- specify temporal aggregation semantics for band power outputs
-- describe output tensor coordinates and metadata
-- keep the result usable by both spatial maps and time-trace views
-
-Constraints:
-
-- do not bury band definitions inside view logic
-- keep aggregation assumptions explicit
-- preserve compatibility with existing view registry direction
-
-Acceptance Criteria:
-
-- band power can be displayed in spatial maps and time traces
-- band and aggregation rules are explicit
-- outputs behave like first-class derived tensors
-
-Deliverables:
-
-- prompt-ready band-power tensor spec
-- explicit band-definition and aggregation contract
+- band definitions (name, Hz range) are explicit `BandPowerTransform` parameters, not view-local constants; they travel with the derived tensor as provenance
+- output coordinates are `(time, band, channel)` for temporal traces or `(band, AP, ML)` for spatial views — the consuming view selects the appropriate slice
+- band power values that feed spatial views must be output as `Float32Array` (one value per channel per band) so they can be passed directly to deck.gl `ScatterplotLayer` attribute slots with no intermediate JS object allocation
+- temporal aggregation window (e.g., 1s sliding window) must be an explicit parameter, not a hardcoded default

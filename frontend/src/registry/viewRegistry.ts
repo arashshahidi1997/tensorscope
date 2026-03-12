@@ -16,7 +16,8 @@ import type { TensorSchema, ViewDescriptor } from "../types";
 export const VIEW_DESCRIPTORS: ViewDescriptor[] = [
   { id: "timeseries",  label: "Timeseries",  requiredDims: ["time"] },
   { id: "navigator",   label: "Navigator",   requiredDims: ["time"] },
-  { id: "spatial_map", label: "Spatial Map", requiredDims: ["AP", "ML"] },
+  { id: "spatial_map",        label: "Spatial Map",  requiredDims: ["AP", "ML"] },
+  { id: "propagation_frame", label: "Propagation",  requiredDims: ["time", "AP", "ML"] },
   { id: "spectrogram", label: "Spectrogram", requiredDims: ["time", "freq"] },
   { id: "psd_average", label: "PSD Average", requiredDims: ["freq"] },
   { id: "psd_spatial", label: "PSD Spatial", requiredDims: ["freq", "AP", "ML"] },
@@ -41,5 +42,6 @@ export const viewRegistry: Record<string, (props: SliceViewProps) => ReactElemen
   spectrogram: SpectrogramView,
   psd_average: PSDSliceView,
   psd_spatial: SpatialMapSliceView,
+  propagation_frame: SpatialMapSliceView,
   table: PlaceholderSliceView,
 };

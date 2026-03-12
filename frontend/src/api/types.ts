@@ -74,6 +74,8 @@ export type TensorSliceRequestDTO = {
   channels?: number[];
   ap_range?: [number, number];
   ml_range?: [number, number];
+  /** Required for view_type "propagation_frame". Selects the nearest time frame. */
+  frame_time?: number;
   max_points?: number;
   downsample?: DownsampleMethod;
 };

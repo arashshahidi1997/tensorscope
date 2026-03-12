@@ -18,13 +18,35 @@ type NavigatorGestureRefs = {
 };
 
 function attachNavigatorGestures(chart: uPlot, refs: NavigatorGestureRefs): () => void {
+  // Track whether the pointer moved significantly since mousedown.
+  // A drag-to-zoom release also fires a "click" event; we must not treat
+  // that as a point-selection commit, or the subsequent commitSelection
+  // round-trip will reset the visible window to a default 2-second span.
+  let pointerDownX = 0;
+  let wasDrag = false;
+
+  const handleMouseDown = (e: MouseEvent) => {
+    pointerDownX = e.clientX;
+    wasDrag = false;
+  };
+  const handleMouseMove = (e: MouseEvent) => {
+    if (Math.abs(e.clientX - pointerDownX) > 5) wasDrag = true;
+  };
   const handleClick = (e: MouseEvent) => {
+    if (wasDrag) return; // drag-end — window already updated via setScale hook
     const bounds = chart.over.getBoundingClientRect();
     const t = chart.posToVal(e.clientX - bounds.left, "x");
     if (Number.isFinite(t)) refs.onSelectTimeRef.current?.(t);
   };
+
+  chart.over.addEventListener("mousedown", handleMouseDown);
+  chart.over.addEventListener("mousemove", handleMouseMove);
   chart.over.addEventListener("click", handleClick);
-  return () => chart.over.removeEventListener("click", handleClick);
+  return () => {
+    chart.over.removeEventListener("mousedown", handleMouseDown);
+    chart.over.removeEventListener("mousemove", handleMouseMove);
+    chart.over.removeEventListener("click", handleClick);
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -77,6 +99,12 @@ export function NavigatorView({
 
     const width = el.clientWidth || el.getBoundingClientRect().width || 900;
 
+    // Guard: suppress setScale during chart initialization so that creating or
+    // recreating the navigator (e.g. when new query data arrives) does not fire
+    // setTimeWindow with the full data range and reset whatever window the user had.
+    // Set to true after the rAF so user drag-to-zoom still publishes normally.
+    let initialized = false;
+
     const chart = new uPlot(
       {
         width,
@@ -99,7 +127,7 @@ export function NavigatorView({
         hooks: {
           setScale: [
             (u, key) => {
-              if (key !== "x") return;
+              if (!initialized || key !== "x") return;
               const { min, max } = u.scales.x;
               if (min != null && max != null) onWindowRef.current?.([min, max]);
             },
@@ -120,7 +148,19 @@ export function NavigatorView({
     });
     ro.observe(el);
 
+    // After the next paint the layout is stable; enable setScale publishing from here on.
+    // setSize (in ResizeObserver or rAF) also fires setScale — keep initialized=false
+    // until after that call so the resize correction doesn't publish a spurious window.
+    const rafId = requestAnimationFrame(() => {
+      const w = el.clientWidth || el.getBoundingClientRect().width;
+      if (w && chartRef.current && w !== chartRef.current.width) {
+        chartRef.current.setSize({ width: w, height: 80 });
+      }
+      initialized = true;
+    });
+
     return () => {
+      cancelAnimationFrame(rafId);
       ro.disconnect();
       detachGestures();
       chartRef.current?.destroy();

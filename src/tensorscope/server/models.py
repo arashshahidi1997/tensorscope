@@ -43,6 +43,20 @@ class CoordSummaryDTO(BaseModel):
     values: list[str | float | int] | None = None
 
 
+class ElectrodeLayoutDTO(BaseModel):
+    """Electrode spatial positions for a tensor with AP/ML dimensions.
+
+    Returned by GET /tensors/{name}/layout.
+    """
+
+    n_ap: int = Field(ge=1)
+    n_ml: int = Field(ge=1)
+    geometry: str = "grid"  # "grid" | "probe" | "custom"
+    ap_coords: list[float]  # sorted unique AP coordinate values
+    ml_coords: list[float]  # sorted unique ML coordinate values
+    n_electrodes: int = Field(ge=0)
+
+
 class TensorSummaryDTO(BaseModel):
     """Summary view used by GET /state and GET /tensors."""
 
@@ -107,6 +121,7 @@ class TensorSliceRequestDTO(BaseModel):
     channels: list[int] | None = None
     ap_range: tuple[int, int] | None = None
     ml_range: tuple[int, int] | None = None
+    frame_time: float | None = Field(default=None, ge=0.0)
     max_points: int | None = Field(default=None, ge=1)
     downsample: DownsampleMethod = DownsampleMethod.MINMAX
 
@@ -119,6 +134,9 @@ class TensorSliceRequestDTO(BaseModel):
             raise ValueError("time_range is required for time-based slice requests")
         if time_required and self.max_points is None:
             raise ValueError("max_points is required for time-based slice requests")
+
+        if self.view_type == "propagation_frame" and self.frame_time is None:
+            raise ValueError("frame_time is required for propagation_frame requests")
 
         for value in (self.time_range, self.freq_range, self.ap_range, self.ml_range):
             if value is not None and value[1] < value[0]:

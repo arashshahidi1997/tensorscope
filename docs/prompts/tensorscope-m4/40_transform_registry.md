@@ -26,12 +26,14 @@ Constraints:
 - transforms must map `input tensor -> derived tensor`
 - do not hide compatibility rules inside individual views
 - label new modules as planned if this task remains contract-first
+- transforms operate in abstract data space; they must not depend on canvas pixel geometry (that belongs in client-side initializers, not server-side or worker transforms)
 
 Acceptance Criteria:
 
 - transforms can be registered and discovered by the system
 - transform inputs and outputs are explicit
 - compatibility rules are documented rather than implicit
+- the registry composes transforms without requiring imports between transform modules
 
 Deliverables:
 
@@ -69,3 +71,7 @@ See [docs/reference-studies/jupyterlab.md §2.2 (Token-Based Plugin Registration
 Perspective's side-effect plugin registration (`rust/perspective-viewer/src/ts/extensions.ts`) provides a complementary pattern: `import "@tensorscope/transforms/spectrogram"` triggers self-registration with no explicit registry wiring. Each transform module calls `TransformRegistry.register(spectrogramPlugin)` as an import side effect; application code imports the modules it needs and the registry discovers them automatically — no centralized list that requires manual editing when new transforms are added.
 
 See [docs/reference-studies/perspective.md §2b](../../reference-studies/perspective.md).
+
+Observable Plot's `composeTransform(t1, t2)` pattern provides the mechanism for chaining transforms without coupling them. A composed transform is itself a transform: `bandpower = composeTransform(psd, bandSelect)`. Both transforms remain individually registered and reusable; the composition is a first-class registry entry that records its constituent transforms as provenance. This is the correct primitive for M4's derived-tensor chains (raw signal → spectrogram → band power → spatial map) without building a bespoke DAG scheduler in M4.
+
+See [docs/reference-studies/observable-plot.md §2.2 (Transform vs. Initializer)](../../reference-studies/observable-plot.md).

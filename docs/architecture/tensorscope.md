@@ -13,6 +13,9 @@ Related docs:
 
 - [ADR index](../adr/index.md)
 - [Architecture invariants](./invariants.md)
+- [Transform DAG](./transform-dag.md)
+- [Pipeline export](./pipeline-export.md)
+- [UI layout concepts (exploratory)](../design/ui-layout-concepts.md)
 - [Prompt usage guide](../prompts/README.md)
 - [Context snapshot](../prompts/context_snapshot.md)
 - [Stable prompt context](../prompts/tensorscope/00_context.md)
@@ -47,9 +50,20 @@ A view renders a projection or summary of a tensor for a specific task. Views sh
 ### Registries
 
 - `TensorRegistry` (backend): `TensorScopeState.tensors` in [src/tensorscope/core/state.py](/storage2/arash/projects/tensorscope/src/tensorscope/core/state.py) — named tensor nodes, list/add/get operations.
+- `TransformRegistry` (planned M4): explicit transform definitions for derived-tensor creation. See [Transform DAG](./transform-dag.md).
 - `ViewRegistry` (backend): `_VIEW_REGISTRY` in [src/tensorscope/server/state.py](/storage2/arash/projects/tensorscope/src/tensorscope/server/state.py) — maps dim tuples to available view types. `available_views(data)` and `tensor_meta()` expose this to the frontend via `TensorMetaDTO.available_views`.
 - `ViewRegistry` (frontend): [frontend/src/registry/viewRegistry.ts](/storage2/arash/projects/tensorscope/frontend/src/registry/viewRegistry.ts) — now contains both `VIEW_DESCRIPTORS: ViewDescriptor[]` (schema-compatibility declarations, mirrors backend) and `viewRegistry` (component lookup). `getAvailableViews(schema)` filters by `requiredDims`.
 - `ViewDescriptor` type in [frontend/src/types/view.ts](/storage2/arash/projects/tensorscope/frontend/src/types/view.ts): `{ id, label, requiredDims, canRender? }`.
+
+## Later-stage architecture direction
+
+From M4 onward, TensorScope should keep three layers distinct:
+
+- M4: explicit transforms and derived tensors
+- M5: visible workspace DAG for lineage and inspection
+- M6: curated pipeline export and workflow cooking
+
+See [Transform DAG](./transform-dag.md), [Pipeline export](./pipeline-export.md), and the [prompt roadmap](../prompts/roadmap.md) for the milestone split.
 
 ## Current architecture
 

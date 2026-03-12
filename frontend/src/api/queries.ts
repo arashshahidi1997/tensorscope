@@ -51,6 +51,9 @@ export function useSliceQuery(name: string | null, request: TensorSliceRequestDT
     queryFn: () => api.getTensorSlice(name!, request!),
     enabled: Boolean(name && request),
     placeholderData: keepPreviousData,
+    // 400/422 errors from /slice are definitional (wrong params), not transient.
+    // Retrying just adds 1-7 seconds of delay before the next correct query fires.
+    retry: false,
   });
 }
 

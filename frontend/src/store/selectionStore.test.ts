@@ -7,7 +7,7 @@ beforeEach(() => {
   useSelectionStore.setState({
     timeCursor: 0,
     timeWindow: [0, 2],
-    spatial: { ap: 0, ml: 0, channel: null },
+    spatial: { ap: 0, ml: 0, channel: null, hoveredId: null, selectedIds: [] },
     freq: { freq: 0 },
     event: { eventId: null, streamName: null },
   });
@@ -54,9 +54,9 @@ describe("setTimeWindow", () => {
 
 describe("patchSpatial", () => {
   it("merges partial spatial update", () => {
-    useSelectionStore.setState({ spatial: { ap: 2, ml: 3, channel: null } });
+    useSelectionStore.setState({ spatial: { ap: 2, ml: 3, channel: null, hoveredId: null, selectedIds: [] } });
     getStore().patchSpatial({ ap: 5 });
-    expect(getStore().spatial).toEqual({ ap: 5, ml: 3, channel: null });
+    expect(getStore().spatial).toEqual({ ap: 5, ml: 3, channel: null, hoveredId: null, selectedIds: [] });
   });
 });
 
@@ -66,7 +66,7 @@ describe("initFromDTO", () => {
     getStore().initFromDTO(dto);
     expect(getStore().timeCursor).toBe(4);
     expect(getStore().freq.freq).toBe(60);
-    expect(getStore().spatial).toEqual({ ap: 2, ml: 3, channel: null });
+    expect(getStore().spatial).toEqual({ ap: 2, ml: 3, channel: null, hoveredId: null, selectedIds: [] });
   });
 
   it("re-centers window when time changes", () => {
@@ -95,7 +95,7 @@ describe("initFromDTO", () => {
 
 describe("patchFromDTO", () => {
   it("updates only time when only time is patched", () => {
-    useSelectionStore.setState({ spatial: { ap: 2, ml: 3, channel: null }, freq: { freq: 50 } });
+    useSelectionStore.setState({ spatial: { ap: 2, ml: 3, channel: null, hoveredId: null, selectedIds: [] }, freq: { freq: 50 } });
     getStore().patchFromDTO({ time: 3 });
     expect(getStore().timeCursor).toBe(3);
     expect(getStore().spatial.ap).toBe(2); // unchanged
@@ -103,9 +103,9 @@ describe("patchFromDTO", () => {
   });
 
   it("updates spatial when ap or ml is patched", () => {
-    useSelectionStore.setState({ spatial: { ap: 2, ml: 3, channel: null } });
+    useSelectionStore.setState({ spatial: { ap: 2, ml: 3, channel: null, hoveredId: null, selectedIds: [] } });
     getStore().patchFromDTO({ ap: 5 });
-    expect(getStore().spatial).toEqual({ ap: 5, ml: 3, channel: null });
+    expect(getStore().spatial).toEqual({ ap: 5, ml: 3, channel: null, hoveredId: null, selectedIds: [] });
   });
 
   it("updates freq when freq is patched", () => {
@@ -214,9 +214,9 @@ describe("event-centric navigation", () => {
   });
 
   it("setEvent does not affect spatial selection", () => {
-    useSelectionStore.setState({ spatial: { ap: 2, ml: 3, channel: null } });
+    useSelectionStore.setState({ spatial: { ap: 2, ml: 3, channel: null, hoveredId: null, selectedIds: [] } });
     getStore().setEvent({ eventId: 5, streamName: "trials" });
-    expect(getStore().spatial).toEqual({ ap: 2, ml: 3, channel: null });
+    expect(getStore().spatial).toEqual({ ap: 2, ml: 3, channel: null, hoveredId: null, selectedIds: [] });
   });
 
   it("clearing event (null ids) resets event selection", () => {
