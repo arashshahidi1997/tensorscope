@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { decodeArrowSlice, extractSpectrogram } from "../../api/arrow";
+import { useHeatmapGestures } from "../../hooks/useHeatmapGestures";
 import type { SliceViewProps } from "./viewTypes";
 import { XTicks, YTicks } from "./AxisTicks";
 import { TimeScaleBar } from "./ChartToolbar";
@@ -14,11 +15,6 @@ function valueToColor(v: number, min: number, max: number): [number, number, num
   const b = Math.round(255 * Math.max(0, 0.5 - Math.abs(t - 0.25)));
   return [r, g, b];
 }
-
-// ── Gesture types ─────────────────────────────────────────────────────────────
-
-type GestureTool = "zoom" | "pan";
-type Viewport = { tLo: number; tHi: number; fLo: number; fHi: number };
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -40,14 +36,6 @@ export function SpectrogramView({
   useEffect(() => { onSelectFreqRef.current = onSelectFreq; });
   useEffect(() => { onTimeWindowChangeRef.current = onTimeWindowChange; });
 
-  // Tool state
-  const [activeTool, setActiveTool] = useState<GestureTool>("zoom");
-  const [wheelZoom, setWheelZoom] = useState(true);
-  const toolRef = useRef<GestureTool>("zoom");
-  const wheelZoomRef = useRef(true);
-  useEffect(() => { toolRef.current = activeTool; }, [activeTool]);
-  useEffect(() => { wheelZoomRef.current = wheelZoom; }, [wheelZoom]);
-
   // Decode data
   const { times, freqs, values } = useMemo(() => {
     const decoded = decodeArrowSlice(slice);
@@ -61,19 +49,15 @@ export function SpectrogramView({
   const dataFMin = freqs.length > 0 ? freqs[0] : 0;
   const dataFMax = freqs.length > 0 ? freqs[freqs.length - 1] : 1;
 
-  // Viewport — visible range within data extent (client-side zoom/pan)
-  const [viewport, setViewport] = useState<Viewport>({
-    tLo: dataTMin, tHi: dataTMax, fLo: dataFMin, fHi: dataFMax,
+  // Gesture hook
+  const { viewport, activeTool, wheelZoom, setActiveTool, setWheelZoom, resetViewport } = useHeatmapGestures({
+    canvasRef,
+    xRange: [dataTMin, dataTMax],
+    yRange: [dataFMin, dataFMax],
+    onSelectX: (t) => onSelectTimeRef.current?.(t),
+    onSelectY: (f) => onSelectFreqRef.current?.(f),
+    onXRangeChange: (range) => onTimeWindowChangeRef.current?.(range),
   });
-
-  // Reset viewport when data changes
-  useEffect(() => {
-    setViewport({ tLo: dataTMin, tHi: dataTMax, fLo: dataFMin, fHi: dataFMax });
-  }, [dataTMin, dataTMax, dataFMin, dataFMax]);
-
-  // Ref for gesture handlers
-  const viewportRef = useRef(viewport);
-  useEffect(() => { viewportRef.current = viewport; }, [viewport]);
 
   // ── Canvas rendering — re-renders on viewport or data change ────────────
   useEffect(() => {
@@ -88,7 +72,7 @@ export function SpectrogramView({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const { tLo, tHi, fLo, fHi } = viewport;
+    const { xLo: tLo, xHi: tHi, yLo: fLo, yHi: fHi } = viewport;
     const tRange = tHi - tLo || 1;
     const fRange = fHi - fLo || 1;
 
@@ -126,199 +110,6 @@ export function SpectrogramView({
     ctx.putImageData(imgData, 0, 0);
   }, [times, freqs, values, viewport]);
 
-  // ── Gesture layer ───────────────────────────────────────────────────────
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || times.length === 0 || freqs.length === 0) return;
-
-    // Selection box overlay
-    const selBox = document.createElement("div");
-    selBox.style.cssText =
-      "position:absolute;background:rgba(115,210,222,0.15);border:1px solid rgba(115,210,222,0.5);pointer-events:none;display:none;z-index:5;";
-    canvas.parentElement?.appendChild(selBox);
-
-    type DragState = {
-      active: boolean;
-      startX: number;
-      startY: number;
-      moved: boolean;
-      rect: DOMRect;
-      startVP: Viewport;
-    };
-    const drag: DragState = {
-      active: false, startX: 0, startY: 0, moved: false,
-      rect: new DOMRect(), startVP: viewportRef.current,
-    };
-
-    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
-
-    const pxToCoords = (clientX: number, clientY: number, vp: Viewport) => {
-      const r = drag.rect;
-      const xFrac = clamp((clientX - r.left) / r.width, 0, 1);
-      const yFrac = clamp((clientY - r.top) / r.height, 0, 1);
-      return {
-        t: vp.tLo + xFrac * (vp.tHi - vp.tLo),
-        f: vp.fHi - yFrac * (vp.fHi - vp.fLo),
-      };
-    };
-
-    const onMouseDown = (e: MouseEvent) => {
-      if (e.button !== 0) return;
-      e.preventDefault();
-      drag.active = true;
-      drag.moved = false;
-      drag.rect = canvas.getBoundingClientRect();
-      drag.startX = e.clientX;
-      drag.startY = e.clientY;
-      drag.startVP = { ...viewportRef.current };
-      if (toolRef.current === "pan") {
-        canvas.style.cursor = "grabbing";
-      } else {
-        selBox.style.display = "block";
-        selBox.style.left = `${e.clientX - drag.rect.left}px`;
-        selBox.style.top = `${e.clientY - drag.rect.top}px`;
-        selBox.style.width = "0px";
-        selBox.style.height = "0px";
-      }
-    };
-
-    const onMouseMove = (e: MouseEvent) => {
-      if (!drag.active) return;
-      const dx = e.clientX - drag.startX;
-      const dy = e.clientY - drag.startY;
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) drag.moved = true;
-      if (!drag.moved) return;
-
-      if (toolRef.current === "pan") {
-        const vp = drag.startVP;
-        const r = drag.rect;
-        const dtFrac = -dx / r.width;
-        const dfFrac = dy / r.height; // inverted: drag up = higher freq
-        const tShift = dtFrac * (vp.tHi - vp.tLo);
-        const fShift = dfFrac * (vp.fHi - vp.fLo);
-        setViewport({
-          tLo: vp.tLo + tShift,
-          tHi: vp.tHi + tShift,
-          fLo: vp.fLo + fShift,
-          fHi: vp.fHi + fShift,
-        });
-      } else {
-        // Draw selection box
-        const r = drag.rect;
-        const x0 = Math.min(drag.startX, e.clientX) - r.left;
-        const y0 = Math.min(drag.startY, e.clientY) - r.top;
-        const w = Math.abs(dx);
-        const h = Math.abs(dy);
-        selBox.style.left = `${x0}px`;
-        selBox.style.top = `${y0}px`;
-        selBox.style.width = `${w}px`;
-        selBox.style.height = `${h}px`;
-      }
-    };
-
-    const onMouseUp = (e: MouseEvent) => {
-      if (!drag.active || e.button !== 0) return;
-      drag.active = false;
-      canvas.style.cursor = toolRef.current === "pan" ? "grab" : "crosshair";
-      selBox.style.display = "none";
-
-      if (!drag.moved) {
-        // Click — select time + freq
-        const c = pxToCoords(e.clientX, e.clientY, viewportRef.current);
-        if (Number.isFinite(c.t)) onSelectTimeRef.current?.(c.t);
-        if (Number.isFinite(c.f)) onSelectFreqRef.current?.(c.f);
-        return;
-      }
-
-      if (toolRef.current === "zoom") {
-        const vp = drag.startVP;
-        const r = drag.rect;
-        const dx = Math.abs(e.clientX - drag.startX);
-        const dy = Math.abs(e.clientY - drag.startY);
-
-        // Determine dominant drag direction
-        const isHorizontal = dx > dy * 1.5;
-        const isVertical = dy > dx * 1.5;
-
-        const c0 = pxToCoords(drag.startX, drag.startY, vp);
-        const c1 = pxToCoords(e.clientX, e.clientY, vp);
-
-        if (isHorizontal && dx > 4) {
-          // Horizontal zoom — zoom time axis only
-          const newTLo = Math.min(c0.t, c1.t);
-          const newTHi = Math.max(c0.t, c1.t);
-          setViewport((prev) => ({ ...prev, tLo: newTLo, tHi: newTHi }));
-          onTimeWindowChangeRef.current?.([newTLo, newTHi]);
-        } else if (isVertical && dy > 4) {
-          // Vertical zoom — zoom freq axis only
-          const newFLo = Math.min(c0.f, c1.f);
-          const newFHi = Math.max(c0.f, c1.f);
-          setViewport((prev) => ({ ...prev, fLo: newFLo, fHi: newFHi }));
-        } else if (dx > 4 || dy > 4) {
-          // Box zoom — zoom both axes
-          setViewport({
-            tLo: Math.min(c0.t, c1.t),
-            tHi: Math.max(c0.t, c1.t),
-            fLo: Math.min(c0.f, c1.f),
-            fHi: Math.max(c0.f, c1.f),
-          });
-          onTimeWindowChangeRef.current?.([Math.min(c0.t, c1.t), Math.max(c0.t, c1.t)]);
-        }
-      }
-      // Pan already applied in onMouseMove
-    };
-
-    // ── Wheel zoom ────────────────────────────────────────────────────────
-    const onWheel = (e: WheelEvent) => {
-      if (!wheelZoomRef.current) return;
-      e.preventDefault();
-      const vp = viewportRef.current;
-      const r = canvas.getBoundingClientRect();
-      const xFrac = clamp((e.clientX - r.left) / r.width, 0, 1);
-      const yFrac = clamp((e.clientY - r.top) / r.height, 0, 1);
-      const factor = e.deltaY > 0 ? 1.25 : 0.8;
-
-      // Zoom time around cursor X
-      const tCenter = vp.tLo + xFrac * (vp.tHi - vp.tLo);
-      const newTLo = tCenter + (vp.tLo - tCenter) * factor;
-      const newTHi = tCenter + (vp.tHi - tCenter) * factor;
-
-      // Zoom freq around cursor Y (top=fHi, bottom=fLo)
-      const fCenter = vp.fHi - yFrac * (vp.fHi - vp.fLo);
-      const newFLo = fCenter + (vp.fLo - fCenter) * factor;
-      const newFHi = fCenter + (vp.fHi - fCenter) * factor;
-
-      setViewport({ tLo: newTLo, tHi: newTHi, fLo: newFLo, fHi: newFHi });
-      onTimeWindowChangeRef.current?.([newTLo, newTHi]);
-    };
-
-    canvas.addEventListener("mousedown", onMouseDown);
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    canvas.addEventListener("wheel", onWheel, { passive: false });
-    canvas.style.cursor = toolRef.current === "pan" ? "grab" : "crosshair";
-
-    return () => {
-      canvas.removeEventListener("mousedown", onMouseDown);
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-      canvas.removeEventListener("wheel", onWheel);
-      selBox.remove();
-    };
-  }, [times, freqs]);
-
-  // Update cursor style when tool changes
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (canvas) canvas.style.cursor = activeTool === "pan" ? "grab" : "crosshair";
-  }, [activeTool]);
-
-  const handleReset = useCallback(() => {
-    const vp = { tLo: dataTMin, tHi: dataTMax, fLo: dataFMin, fHi: dataFMax };
-    setViewport(vp);
-    onTimeWindowChangeRef.current?.([dataTMin, dataTMax]);
-  }, [dataTMin, dataTMax, dataFMin, dataFMax]);
-
   // Rules of Hooks: all hooks above, conditional return below
   if (!selection || times.length === 0 || freqs.length === 0) {
     return (
@@ -328,7 +119,7 @@ export function SpectrogramView({
     );
   }
 
-  const { tLo, tHi, fLo, fHi } = viewport;
+  const { xLo: tLo, xHi: tHi, yLo: fLo, yHi: fHi } = viewport;
 
   return (
     <div ref={wrapRef} style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column" }}>
@@ -350,10 +141,10 @@ export function SpectrogramView({
           type="button"
           className={`ts-tool${wheelZoom ? " active" : ""}`}
           title={`Wheel Zoom ${wheelZoom ? "(ON)" : "(OFF)"}`}
-          onClick={() => setWheelZoom((v) => !v)}
+          onClick={() => setWheelZoom(!wheelZoom)}
         >&#x2299;</button>
         <div className="ts-toolbar-sep" />
-        <button type="button" className="ts-tool" title="Reset view" onClick={handleReset}>&#x21BA;</button>
+        <button type="button" className="ts-tool" title="Reset view" onClick={resetViewport}>&#x21BA;</button>
       </div>
 
       {/* Spectrogram with axes */}
