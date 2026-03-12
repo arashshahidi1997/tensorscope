@@ -14,6 +14,7 @@ import { useStateQuery } from "../../api/queries";
 import { CollapsibleSection } from "./CollapsibleSection";
 import type { TransformDefinitionDTO, TransformParamSpec } from "../../types/transform";
 import type { DerivedTensorDTO } from "../../types/transform";
+import type { DetectorDefinitionDTO } from "../../api/types";
 
 export function PipelineTabContent() {
   const selectedTensor = useAppStore((s) => s.selectedTensor);
@@ -175,6 +176,10 @@ export function PipelineTabContent() {
         </div>
       </CollapsibleSection>
 
+      <CollapsibleSection title="Run Detector" defaultOpen={false}>
+        <DetectorSection tensorName={activeTensor} />
+      </CollapsibleSection>
+
       {history.length > 0 && (
         <CollapsibleSection title="Recent Transforms" defaultOpen={true}>
           <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "4px 0" }}>
@@ -286,5 +291,135 @@ function ParamField({
       />
       {spec.description && <div style={{ fontSize: 10, color: "#8b949e" }}>{spec.description}</div>}
     </label>
+  );
+}
+
+/** Detector section — lets the user pick a detector, configure params, and run it. */
+function DetectorSection({ tensorName }: { tensorName: string }) {
+  const [detectors, setDetectors] = useState<DetectorDefinitionDTO[]>([]);
+  const [selectedDetector, setSelectedDetector] = useState<DetectorDefinitionDTO | null>(null);
+  const [params, setParams] = useState<Record<string, unknown>>({});
+  const [streamName, setStreamName] = useState("");
+  const [executing, setExecuting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ stream_name: string; n_events: number } | null>(null);
+
+  useEffect(() => {
+    api.listDetectors()
+      .then(setDetectors)
+      .catch(() => setDetectors([]));
+  }, []);
+
+  const handleSelectDetector = useCallback((name: string) => {
+    const defn = detectors.find((d) => d.name === name) ?? null;
+    setSelectedDetector(defn);
+    setError(null);
+    setResult(null);
+    if (defn) {
+      const defaults: Record<string, unknown> = {};
+      for (const [key, spec] of Object.entries(defn.param_schema)) {
+        defaults[key] = spec.default;
+      }
+      setParams(defaults);
+      setStreamName(`${name}_events`);
+    } else {
+      setParams({});
+      setStreamName("");
+    }
+  }, [detectors]);
+
+  const handleParamChange = useCallback((key: string, value: unknown) => {
+    setParams((prev) => ({ ...prev, [key]: value }));
+  }, []);
+
+  const handleExecute = useCallback(async () => {
+    if (!selectedDetector) return;
+    setExecuting(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await api.runDetector({
+        detector_name: selectedDetector.name,
+        tensor_name: tensorName,
+        params,
+        stream_name: streamName || undefined,
+      });
+      setResult({ stream_name: res.stream_name, n_events: res.n_events });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExecuting(false);
+    }
+  }, [selectedDetector, tensorName, params, streamName]);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "4px 0" }}>
+      <label style={{ fontSize: 12 }}>
+        Detector
+        <select
+          value={selectedDetector?.name ?? ""}
+          onChange={(e) => handleSelectDetector(e.target.value)}
+          style={{ display: "block", width: "100%", fontSize: 12, marginTop: 2 }}
+        >
+          <option value="">-- select --</option>
+          {detectors.map((d) => (
+            <option key={d.name} value={d.name}>{d.name}</option>
+          ))}
+        </select>
+      </label>
+
+      {selectedDetector && selectedDetector.description && (
+        <div style={{ fontSize: 11, color: "#8b949e" }}>
+          {selectedDetector.description}
+        </div>
+      )}
+
+      {selectedDetector && Object.keys(selectedDetector.param_schema).length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {Object.entries(selectedDetector.param_schema).map(([key, spec]) => (
+            <ParamField
+              key={key}
+              name={key}
+              spec={spec}
+              value={params[key]}
+              onChange={(v) => handleParamChange(key, v)}
+            />
+          ))}
+        </div>
+      )}
+
+      {selectedDetector && (
+        <label style={{ fontSize: 12 }}>
+          Stream Name
+          <input
+            type="text"
+            value={streamName}
+            onChange={(e) => setStreamName(e.target.value)}
+            style={{ display: "block", width: "100%", fontSize: 12, marginTop: 2 }}
+          />
+        </label>
+      )}
+
+      {selectedDetector && (
+        <button
+          onClick={handleExecute}
+          disabled={executing}
+          style={{ fontSize: 12, padding: "4px 12px", cursor: executing ? "wait" : "pointer" }}
+        >
+          {executing ? "Detecting..." : "Run Detector"}
+        </button>
+      )}
+
+      {error && (
+        <div style={{ fontSize: 11, color: "#f85149", whiteSpace: "pre-wrap" }}>
+          {error}
+        </div>
+      )}
+      {result && (
+        <div style={{ fontSize: 11, color: "#3fb950" }}>
+          Found <strong>{result.n_events}</strong> events in stream <strong>{result.stream_name}</strong>
+        </div>
+      )}
+    </div>
   );
 }

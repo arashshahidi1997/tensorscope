@@ -1,6 +1,9 @@
 import type {
   BrainstateIntervalDTO,
   BrainstateMetaDTO,
+  DetectRequestDTO,
+  DetectResultDTO,
+  DetectorDefinitionDTO,
   EventRecordDTO,
   EventStreamMetaDTO,
   LayoutDTO,
@@ -173,6 +176,18 @@ export const api = {
     if (t1 != null) params.set("t1", String(t1));
     const qs = params.toString();
     return request<BrainstateIntervalDTO[]>(`/api/v1/brainstates/intervals${qs ? `?${qs}` : ""}`);
+  },
+
+  // Detector API
+  listDetectors(): Promise<DetectorDefinitionDTO[]> {
+    return request<DetectorDefinitionDTO[]>("/api/v1/events/detectors");
+  },
+
+  runDetector(body: DetectRequestDTO): Promise<DetectResultDTO> {
+    return request<DetectResultDTO>("/api/v1/events/detect", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
   },
 
   // Pipeline API (M6)

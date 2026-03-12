@@ -308,6 +308,40 @@ class DAGNodeVisibilityDTO(BaseModel):
     exploratory: bool | None = None
 
 
+class DetectorParamSpecDTO(BaseModel):
+    """Single detector parameter specification."""
+    dtype: str
+    default: Any = None
+    description: str = ""
+    min_value: float | None = None
+    max_value: float | None = None
+    choices: list[str] | None = None
+
+
+class DetectorDefinitionDTO(BaseModel):
+    """Public view of a registered detector."""
+    name: str
+    description: str = ""
+    param_schema: dict[str, DetectorParamSpecDTO]
+
+
+class DetectRequestDTO(BaseModel):
+    """Request to run an event detector."""
+    model_config = ConfigDict(extra="forbid")
+
+    detector_name: str = Field(min_length=1)
+    tensor_name: str = Field(min_length=1)
+    params: dict[str, Any] = Field(default_factory=dict)
+    stream_name: str | None = None  # optional override for the output stream name
+
+
+class DetectResultDTO(BaseModel):
+    """Result of running a detector."""
+    stream_name: str
+    n_events: int
+    detector_name: str
+
+
 class ApiErrorDTO(BaseModel):
     """Structured API error payload."""
 

@@ -136,6 +136,34 @@ export type BrainstateIntervalDTO = {
   state: string;
 };
 
+export type DetectorParamSpecDTO = {
+  dtype: string;
+  default: unknown;
+  description: string;
+  min_value: number | null;
+  max_value: number | null;
+  choices: string[] | null;
+};
+
+export type DetectorDefinitionDTO = {
+  name: string;
+  description: string;
+  param_schema: Record<string, DetectorParamSpecDTO>;
+};
+
+export type DetectRequestDTO = {
+  detector_name: string;
+  tensor_name: string;
+  params: Record<string, unknown>;
+  stream_name?: string;
+};
+
+export type DetectResultDTO = {
+  stream_name: string;
+  n_events: number;
+  detector_name: string;
+};
+
 export type ApiErrorDTO = {
   code: string;
   message: string;

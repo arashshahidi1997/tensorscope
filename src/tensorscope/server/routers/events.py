@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
-from tensorscope.server.models import ApiErrorDTO, EventRecordDTO, EventStreamMetaDTO
+from tensorscope.core.events.detectors import get_detector, list_detectors
+from tensorscope.core.events.model import EventStream
+from tensorscope.server.models import (
+    ApiErrorDTO,
+    DetectorDefinitionDTO,
+    DetectorParamSpecDTO,
+    DetectRequestDTO,
+    DetectResultDTO,
+    EventRecordDTO,
+    EventStreamMetaDTO,
+)
 from tensorscope.server.routers.deps import SessionState, SessionStateDep
 from tensorscope.server.state import event_stream_meta
 
@@ -54,3 +64,62 @@ def get_event_window(
         frame = frame[frame["channel"] == channel]
 
     return [EventRecordDTO(record=row) for row in frame.to_dict(orient="records")]
+
+
+@router.get("/detectors", response_model=list[DetectorDefinitionDTO])
+def list_event_detectors() -> list[DetectorDefinitionDTO]:
+    """List all registered event detectors."""
+    return [
+        DetectorDefinitionDTO(
+            name=d.name,
+            description=d.description,
+            param_schema={
+                k: DetectorParamSpecDTO(
+                    dtype=v.dtype,
+                    default=v.default,
+                    description=v.description,
+                    min_value=v.min_value,
+                    max_value=v.max_value,
+                    choices=v.choices,
+                )
+                for k, v in d.param_schema.items()
+            },
+        )
+        for d in list_detectors()
+    ]
+
+
+@router.post("/detect", response_model=DetectResultDTO, responses={400: {"model": ApiErrorDTO}, 404: {"model": ApiErrorDTO}})
+def run_detector(body: DetectRequestDTO, session: SessionState = SessionStateDep) -> DetectResultDTO:
+    """Run an event detector on a tensor and register the resulting event stream."""
+    _, state = session
+
+    detector = get_detector(body.detector_name)
+    if detector is None:
+        raise KeyError(f"Detector {body.detector_name!r} not found")
+
+    # Get the tensor data
+    node = state.get_node(body.tensor_name)
+    data = node.data
+
+    # Run detection
+    stream = detector.detect(data, body.params)
+
+    # Override stream name if requested
+    if body.stream_name:
+        stream = EventStream(
+            name=body.stream_name,
+            df=stream.df,
+            time_col=stream.time_col,
+            id_col=stream.id_col,
+            style=stream.style,
+        )
+
+    # Register in event registry
+    state.events.register(stream)
+
+    return DetectResultDTO(
+        stream_name=stream.name,
+        n_events=len(stream),
+        detector_name=body.detector_name,
+    )
