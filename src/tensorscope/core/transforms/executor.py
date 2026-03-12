@@ -10,6 +10,7 @@ import xarray as xr
 
 from tensorscope.core.state import TensorNode, TensorRegistry
 from tensorscope.core.transforms.cache import TransformCache
+from tensorscope.core.transforms.dag import WorkspaceDAG
 from tensorscope.core.transforms.model import DerivedTensor, TransformProvenance
 from tensorscope.core.transforms.registry import TransformRegistry
 
@@ -27,14 +28,24 @@ class TransformExecutor:
         transform_registry: TransformRegistry,
         tensor_registry: TensorRegistry,
         cache: TransformCache | None = None,
+        dag: WorkspaceDAG | None = None,
     ) -> None:
         self._transforms = transform_registry
         self._tensors = tensor_registry
         self._cache = cache or TransformCache()
+        self._dag = dag
 
     @property
     def cache(self) -> TransformCache:
         return self._cache
+
+    @property
+    def dag(self) -> WorkspaceDAG | None:
+        return self._dag
+
+    @dag.setter
+    def dag(self, value: WorkspaceDAG | None) -> None:
+        self._dag = value
 
     def execute(
         self,
@@ -135,6 +146,16 @@ class TransformExecutor:
                 error=str(exc),
                 cache_key=cache_key,
             )
+            # Record error in DAG if available.
+            if self._dag is not None:
+                self._dag.record_execution(
+                    input_tensor_ids=input_names,
+                    transform_name=transform_name,
+                    params=validated_params,
+                    output_tensor_id=tid,
+                    status="error",
+                    error=str(exc),
+                )
             logger.error("Transform %s failed: %s", transform_name, exc)
             return derived
 
@@ -180,6 +201,16 @@ class TransformExecutor:
                     transform=transform_name,
                     params=validated_params,
                 )
+            )
+
+        # 12. Record in DAG if available.
+        if self._dag is not None:
+            self._dag.record_execution(
+                input_tensor_ids=input_names,
+                transform_name=transform_name,
+                params=validated_params,
+                output_tensor_id=tid,
+                status="computed",
             )
 
         logger.info(

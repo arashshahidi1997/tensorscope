@@ -10,6 +10,13 @@ from tensorscope.core.transforms.registry import (
 )
 from tensorscope.core.transforms.executor import TransformExecutor
 from tensorscope.core.transforms.cache import TransformCache
+from tensorscope.core.transforms.dag import (
+    DAGTensorNode,
+    DAGTransformNode,
+    ProvenanceStep,
+    TransformEdge,
+    WorkspaceDAG,
+)
 
 __all__ = [
     "DerivedTensor",
@@ -21,4 +28,9 @@ __all__ = [
     "TransformRegistry",
     "TransformExecutor",
     "TransformCache",
+    "DAGTensorNode",
+    "DAGTransformNode",
+    "TransformEdge",
+    "ProvenanceStep",
+    "WorkspaceDAG",
 ]

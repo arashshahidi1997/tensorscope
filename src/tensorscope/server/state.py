@@ -16,8 +16,9 @@ import xarray as xr
 from tensorscope.core.events import EventRegistry, EventStream
 from tensorscope.core.layout import LayoutManager
 from tensorscope.core.state import SelectionState, TensorNode, TensorScopeState
-from tensorscope.core.transforms import TransformCache, TransformExecutor, TransformRegistry
+from tensorscope.core.transforms import TransformCache, TransformExecutor, TransformRegistry, WorkspaceDAG
 from tensorscope.core.transforms.builtins import register_builtins
+from tensorscope.core.transforms.dag import DAGTensorNode
 from tensorscope.core.transforms.model import DerivedTensor
 from tensorscope.server.models import (
     CoordSummaryDTO,
@@ -55,6 +56,7 @@ class ServerState:
     transform_registry: TransformRegistry = None  # type: ignore[assignment]
     _transform_executor: TransformExecutor = None  # type: ignore[assignment]
     _transform_cache: TransformCache = None  # type: ignore[assignment]
+    _dag: WorkspaceDAG = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.processing is None:
@@ -64,11 +66,21 @@ class ServerState:
             register_builtins(self.transform_registry)
         if self._transform_cache is None:
             self._transform_cache = TransformCache()
+        if self._dag is None:
+            self._dag = WorkspaceDAG()
+            # Seed DAG with source tensors already in the registry.
+            for name in self.app_state.tensors.list():
+                node = self.app_state.tensors.get(name)
+                if node.source is None and not self._dag.has_node(name):
+                    self._dag.add_tensor_node(DAGTensorNode(
+                        id=name, tensor_id=name, node_type="source",
+                    ))
         if self._transform_executor is None:
             self._transform_executor = TransformExecutor(
                 self.transform_registry,
                 self.app_state.tensors,
                 self._transform_cache,
+                dag=self._dag,
             )
 
     def state_dto(self, session_id: str) -> StateDTO:
@@ -145,6 +157,11 @@ class ServerState:
             ml_coords=ml_unique,
             n_electrodes=len(ap_vals) if ap_vals.ndim == 1 else len(ap_unique) * len(ml_unique),
         )
+
+    @property
+    def dag(self) -> WorkspaceDAG:
+        """Access the workspace DAG."""
+        return self._dag
 
     def execute_transform(
         self,

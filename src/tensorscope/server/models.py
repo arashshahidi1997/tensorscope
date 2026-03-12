@@ -237,6 +237,61 @@ class DerivedTensorDTO(BaseModel):
     error: str | None = None
 
 
+class DAGTensorNodeDTO(BaseModel):
+    """Tensor node in the workspace DAG."""
+
+    id: str
+    tensor_id: str
+    node_type: str  # "source" | "derived"
+    visible: bool = True
+    exploratory: bool = False
+    display_name: str = ""
+
+
+class DAGTransformNodeDTO(BaseModel):
+    """Transform node in the workspace DAG."""
+
+    id: str
+    transform_name: str
+    params: dict[str, Any] = Field(default_factory=dict)
+    status: str = "pending"  # "pending" | "computed" | "error"
+    error: str | None = None
+
+
+class TransformEdgeDTO(BaseModel):
+    """Directed edge in the workspace DAG."""
+
+    source_id: str
+    target_id: str
+    edge_type: str  # "input" | "output"
+
+
+class ProvenanceStepDTO(BaseModel):
+    """One step in a provenance chain."""
+
+    input_tensor_id: str
+    transform_name: str
+    params: dict[str, Any]
+    output_tensor_id: str
+
+
+class WorkspaceDAGDTO(BaseModel):
+    """Full workspace DAG serialization."""
+
+    tensor_nodes: list[DAGTensorNodeDTO]
+    transform_nodes: list[DAGTransformNodeDTO]
+    edges: list[TransformEdgeDTO]
+
+
+class DAGNodeVisibilityDTO(BaseModel):
+    """Request to update tensor node visibility/exploratory state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    visible: bool | None = None
+    exploratory: bool | None = None
+
+
 class ApiErrorDTO(BaseModel):
     """Structured API error payload."""
 

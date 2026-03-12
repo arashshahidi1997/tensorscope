@@ -36,3 +36,12 @@ export type {
   TransformProvenance,
   DerivedTensorDTO,
 } from "./transform";
+
+export type {
+  DAGTensorNodeDTO,
+  DAGTransformNodeDTO,
+  TransformEdgeDTO,
+  ProvenanceStepDTO,
+  WorkspaceDAGDTO,
+  DAGNodeVisibilityDTO,
+} from "./dag";

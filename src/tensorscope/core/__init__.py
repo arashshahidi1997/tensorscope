@@ -29,6 +29,11 @@ from tensorscope.core.transforms import (
     InputSpec,
     OutputSpec,
     ParamSpec,
+    DAGTensorNode,
+    DAGTransformNode,
+    TransformEdge,
+    ProvenanceStep,
+    WorkspaceDAG,
 )
 
 __all__ = [
@@ -61,4 +66,9 @@ __all__ = [
     "InputSpec",
     "OutputSpec",
     "ParamSpec",
+    "DAGTensorNode",
+    "DAGTransformNode",
+    "TransformEdge",
+    "ProvenanceStep",
+    "WorkspaceDAG",
 ]

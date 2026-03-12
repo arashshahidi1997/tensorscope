@@ -16,6 +16,13 @@ import type {
   TransformRequestDTO,
   DerivedTensorDTO,
 } from "../types/transform";
+import type {
+  DAGTensorNodeDTO,
+  DAGTransformNodeDTO,
+  DAGNodeVisibilityDTO,
+  ProvenanceStepDTO,
+  WorkspaceDAGDTO,
+} from "../types/dag";
 
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await fetch(input, {
@@ -113,5 +120,39 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     });
+  },
+
+  getDAG(): Promise<WorkspaceDAGDTO> {
+    return request<WorkspaceDAGDTO>("/api/v1/dag");
+  },
+
+  getDAGTensorNode(nodeId: string): Promise<DAGTensorNodeDTO> {
+    return request<DAGTensorNodeDTO>(`/api/v1/dag/tensors/${nodeId}`);
+  },
+
+  getDAGTransformNode(nodeId: string): Promise<DAGTransformNodeDTO> {
+    return request<DAGTransformNodeDTO>(`/api/v1/dag/transforms/${nodeId}`);
+  },
+
+  updateDAGTensorVisibility(
+    nodeId: string,
+    body: DAGNodeVisibilityDTO,
+  ): Promise<DAGTensorNodeDTO> {
+    return request<DAGTensorNodeDTO>(`/api/v1/dag/tensors/${nodeId}/visibility`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+  },
+
+  getDAGUpstream(nodeId: string): Promise<DAGTransformNodeDTO[]> {
+    return request<DAGTransformNodeDTO[]>(`/api/v1/dag/upstream/${nodeId}`);
+  },
+
+  getDAGDownstream(nodeId: string): Promise<unknown[]> {
+    return request<unknown[]>(`/api/v1/dag/downstream/${nodeId}`);
+  },
+
+  getDAGProvenance(tensorNodeId: string): Promise<ProvenanceStepDTO[]> {
+    return request<ProvenanceStepDTO[]>(`/api/v1/dag/provenance/${tensorNodeId}`);
   },
 };
