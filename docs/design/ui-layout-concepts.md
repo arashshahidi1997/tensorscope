@@ -1,17 +1,12 @@
 # UI Layout Concepts
 
-These layout concepts are exploratory and not yet part of the official architecture.
+These layout concepts originated as exploratory design notes. They have been promoted into **Milestone M7 — Dynamic Workspace Layout**.
 
-Role: design exploration note for possible TensorScope workspace layouts.
+Role: design exploration note and reference for TensorScope workspace layouts.
 
-Use this file for:
+For the concrete implementation plan, see the [M7 prompt pack](../prompts/tensorscope-m7/README.md).
 
-- candidate UI layout patterns
-- possible workspace regions
-- speculative navigation structures
-- future layout experiments
-
-Do not use this file as a source of architectural requirements. For confirmed architecture, use [../architecture/tensorscope.md](../architecture/tensorscope.md) and [../architecture/invariants.md](../architecture/invariants.md).
+For confirmed architecture, see [../architecture/tensorscope.md](../architecture/tensorscope.md) and [../architecture/invariants.md](../architecture/invariants.md).
 
 ## 1. General layout philosophy
 
@@ -186,12 +181,13 @@ These should be treated as exploratory ideas for future UI work, not as committe
 
 ## 7. Relationship to roadmap milestones
 
-These layout ideas likely evolve alongside the later milestones:
+These layout ideas have been promoted into M7, which depends on:
 
-- M4: derived tensors and transform registry
-- M5: transform DAG and graph UI
-- M6: pipeline export
+- M4: derived tensors and transform registry → content for "Tensors" sidebar tab
+- M5: transform DAG and graph UI → content for "Graph" sidebar tab
+- M6: pipeline export → content for "Pipeline" sidebar tab
+- M7: dynamic workspace layout → resizable shell, tabbed sidebar, view grid, persistence
 
-The layout should therefore be expected to change as those milestones clarify what needs to be visible in the workspace, what belongs in inspection surfaces, and what becomes part of a curated pipeline workflow.
+For the M7 implementation plan, see [../prompts/tensorscope-m7/README.md](../prompts/tensorscope-m7/README.md).
 
 For roadmap context, see [../prompts/roadmap.md](../prompts/roadmap.md).

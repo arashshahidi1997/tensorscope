@@ -431,6 +431,54 @@ M6 is separate from M5 because export requires a curated pipeline DAG, a pipelin
 
 ---
 
+## M7 — Dynamic Workspace Layout
+
+### Goal
+
+Upgrade the fixed three-column shell into a flexible, user-configurable workspace layout.
+
+### Scope
+
+* resizable column dividers between sidebar, center workspace, and inspector
+* collapsible sidebar and inspector panels
+* tabbed left sidebar (Explore, Graph, Tensors, Events, Pipeline) reflecting the feature surfaces from M4–M6
+* flexible center workspace view grid (1x1, 1x2, 2x1, or 2x2 arrangements)
+* view panel chrome with maximize and close affordances
+* optional bottom panel for persistent overview surfaces (navigator, events)
+* layout state persistence via localStorage
+* task-oriented layout presets (Signal Inspection, Spatial Exploration, Spectral Analysis)
+* keyboard shortcuts for panel toggling and view focus
+
+### Deliverables
+
+* resizable LayoutShell with drag handles and collapse toggles
+* tabbed sidebar with tab bar, tab content routing, and per-tab content contracts
+* ViewGrid component with configurable rows/columns and ViewPanel chrome
+* bottom panel region for navigator and future persistent surfaces
+* layout state model, localStorage persistence, and preset system
+* keyboard shortcut handler for workspace navigation
+
+### Acceptance criteria
+
+* shell columns are resizable via drag handles
+* sidebar and inspector can be collapsed and expanded
+* left sidebar has tabbed navigation with at least Explore and Events tabs implemented
+* center workspace supports at least a 2-column view arrangement
+* each view has a panel header with maximize and close affordances
+* layout state persists across page reloads
+* at least three task-oriented presets are defined and selectable
+* keyboard shortcuts for sidebar toggle and view maximize are functional
+
+### Why here
+
+M7 depends on M4–M6 having populated the sidebar tabs with real content (tensor browser, DAG inspector, pipeline export). The fixed shell from M1 was appropriate for early milestones but becomes a bottleneck as the workspace grows.
+
+M7 is a UI-structure milestone. It does not change data flow, tensor slicing, or transform execution. It restructures how existing views and controls are arranged in the shell.
+
+Related prompt pack: [tensorscope-m7](./tensorscope-m7/README.md)
+
+---
+
 ## MA1 — Optional GPU Rendering Acceleration
 
 ### Goal

@@ -57,11 +57,12 @@ A view renders a projection or summary of a tensor for a specific task. Views sh
 
 ## Later-stage architecture direction
 
-From M4 onward, TensorScope should keep three layers distinct:
+From M4 onward, TensorScope should keep these layers distinct:
 
 - M4: explicit transforms and derived tensors
 - M5: visible workspace DAG for lineage and inspection
 - M6: curated pipeline export and workflow cooking
+- M7: dynamic workspace layout (resizable shell, tabbed sidebar, view grid, persistence)
 
 See [Transform DAG](./transform-dag.md), [Pipeline export](./pipeline-export.md), and the [prompt roadmap](../prompts/roadmap.md) for the milestone split.
 
