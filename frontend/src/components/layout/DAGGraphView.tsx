@@ -3,29 +3,57 @@
  *
  * Renders tensor and transform nodes as a top-down layered graph.
  * Tensor nodes are clickable (sets active tensor), and hoverable (shows tooltip).
+ * Supports fullscreen mode with "add transform" buttons on tensor nodes.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { api } from "../../api/client";
 import { useDAGQuery } from "../../api/queries";
 import { useAppStore } from "../../store/appStore";
 import type {
   DAGTensorNodeDTO,
   DAGTransformNodeDTO,
-  TransformEdgeDTO,
   WorkspaceDAGDTO,
 } from "../../types/dag";
+import type {
+  TransformDefinitionDTO,
+  TransformParamSpec,
+} from "../../types/transform";
 
 // ---------------------------------------------------------------------------
 // Layout constants
 // ---------------------------------------------------------------------------
 
-const NODE_W = 140;
-const NODE_H = 40;
-const TRANSFORM_W = 120;
-const TRANSFORM_H = 32;
-const LAYER_GAP_Y = 72;
-const NODE_GAP_X = 24;
-const PAD_X = 20;
-const PAD_Y = 20;
+const NORMAL = {
+  NODE_W: 140,
+  NODE_H: 40,
+  TRANSFORM_W: 120,
+  TRANSFORM_H: 32,
+  LAYER_GAP_Y: 72,
+  NODE_GAP_X: 24,
+  PAD_X: 20,
+  PAD_Y: 20,
+  FONT_NODE: 11,
+  FONT_TRANSFORM: 10,
+  TRUNCATE_NODE: 16,
+  TRUNCATE_TRANSFORM: 14,
+};
+
+const FULLSCREEN = {
+  NODE_W: 200,
+  NODE_H: 52,
+  TRANSFORM_W: 160,
+  TRANSFORM_H: 40,
+  LAYER_GAP_Y: 100,
+  NODE_GAP_X: 40,
+  PAD_X: 40,
+  PAD_Y: 40,
+  FONT_NODE: 13,
+  FONT_TRANSFORM: 12,
+  TRUNCATE_NODE: 22,
+  TRUNCATE_TRANSFORM: 18,
+};
+
 const ARROW_SIZE = 5;
 
 // ---------------------------------------------------------------------------
@@ -48,7 +76,10 @@ type LayoutEdge = {
   to: LayoutNode;
 };
 
-function computeLayout(dag: WorkspaceDAGDTO) {
+type LayoutSizes = typeof NORMAL;
+
+function computeLayout(dag: WorkspaceDAGDTO, sizes: LayoutSizes) {
+  const { NODE_W, NODE_H, TRANSFORM_W, TRANSFORM_H, LAYER_GAP_Y, NODE_GAP_X, PAD_X, PAD_Y } = sizes;
   const allIds = new Set<string>();
   const children = new Map<string, string[]>();
   const parents = new Map<string, string[]>();
@@ -117,11 +148,8 @@ function computeLayout(dag: WorkspaceDAGDTO) {
       const isTensor = tensorMap.has(id);
       const w = isTensor ? NODE_W : TRANSFORM_W;
       const h = isTensor ? NODE_H : TRANSFORM_H;
-      const totalWidth = count * w + (count - 1) * NODE_GAP_X;
       const startX = PAD_X + (count > 1 ? i * (w + NODE_GAP_X) : 0);
-      // Center the layer
-      const offsetX = count > 1 ? 0 : 0;
-      const x = startX + offsetX;
+      const x = startX;
       const y = PAD_Y + layer * LAYER_GAP_Y;
 
       const data = isTensor ? tensorMap.get(id)! : transformMap.get(id)!;
@@ -238,15 +266,21 @@ function EdgePath({ edge }: { edge: LayoutEdge }) {
 function TensorNodeRect({
   node,
   isActive,
+  isFullscreen,
+  sizes,
   onHover,
   onLeave,
   onClick,
+  onAddClick,
 }: {
   node: LayoutNode;
   isActive: boolean;
+  isFullscreen: boolean;
+  sizes: LayoutSizes;
   onHover: (info: TooltipInfo) => void;
   onLeave: () => void;
   onClick: () => void;
+  onAddClick?: (node: LayoutNode) => void;
 }) {
   const d = node.data as DAGTensorNodeDTO;
   const isSource = d.node_type === "source";
@@ -275,28 +309,55 @@ function TensorNodeRect({
         height={node.h}
         rx={6}
         ry={6}
+        strokeDasharray={isSource ? undefined : "6 3"}
       />
       <text
         x={node.w / 2}
         y={node.h / 2 + 1}
         textAnchor="middle"
         dominantBaseline="central"
-        fontSize={11}
+        fontSize={sizes.FONT_NODE}
         fontWeight={500}
         fill="var(--text)"
       >
-        {truncate(d.display_name, 16)}
+        {truncate(d.display_name, sizes.TRUNCATE_NODE)}
       </text>
+      {/* "+" button — only in fullscreen mode */}
+      {isFullscreen && onAddClick && (
+        <g
+          className="dag-node-add-btn"
+          transform={`translate(${node.w - 14}, ${node.h - 14})`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onAddClick(node);
+          }}
+        >
+          <circle cx={8} cy={8} r={10} />
+          <text
+            x={8}
+            y={9}
+            textAnchor="middle"
+            dominantBaseline="central"
+            fontSize={14}
+            fontWeight={700}
+            fill="var(--text)"
+          >
+            +
+          </text>
+        </g>
+      )}
     </g>
   );
 }
 
 function TransformNodeRect({
   node,
+  sizes,
   onHover,
   onLeave,
 }: {
   node: LayoutNode;
+  sizes: LayoutSizes;
   onHover: (info: TooltipInfo) => void;
   onLeave: () => void;
 }) {
@@ -313,18 +374,18 @@ function TransformNodeRect({
       <rect
         width={node.w}
         height={node.h}
-        rx={4}
-        ry={4}
+        rx={12}
+        ry={12}
       />
       <text
         x={node.w / 2}
         y={node.h / 2 + 1}
         textAnchor="middle"
         dominantBaseline="central"
-        fontSize={10}
+        fontSize={sizes.FONT_TRANSFORM}
         fill="var(--text)"
       >
-        {truncate(d.transform_name, 14)}
+        {truncate(d.transform_name, sizes.TRUNCATE_TRANSFORM)}
       </text>
     </g>
   );
@@ -335,22 +396,297 @@ function truncate(s: string, maxLen: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// AddTransformPicker — inline form for adding transforms from a tensor node
+// ---------------------------------------------------------------------------
+
+function AddTransformPicker({
+  tensorId,
+  anchorX,
+  anchorY,
+  onClose,
+  onExecuted,
+}: {
+  tensorId: string;
+  anchorX: number;
+  anchorY: number;
+  onClose: () => void;
+  onExecuted: () => void;
+}) {
+  const [transforms, setTransforms] = useState<TransformDefinitionDTO[]>([]);
+  const [selectedTransform, setSelectedTransform] = useState<TransformDefinitionDTO | null>(null);
+  const [params, setParams] = useState<Record<string, unknown>>({});
+  const [outputId, setOutputId] = useState("");
+  const [executing, setExecuting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.listCompatibleTransforms(tensorId)
+      .then(setTransforms)
+      .catch(() => setTransforms([]));
+  }, [tensorId]);
+
+  const handleSelectTransform = useCallback((name: string) => {
+    const defn = transforms.find((t) => t.name === name) ?? null;
+    setSelectedTransform(defn);
+    setError(null);
+    if (defn) {
+      const defaults: Record<string, unknown> = {};
+      for (const [key, spec] of Object.entries(defn.param_schema)) {
+        defaults[key] = spec.default;
+      }
+      setParams(defaults);
+      setOutputId(`${name}_1`);
+    } else {
+      setParams({});
+      setOutputId("");
+    }
+  }, [transforms]);
+
+  const handleParamChange = useCallback((key: string, value: unknown) => {
+    setParams((prev) => ({ ...prev, [key]: value }));
+  }, []);
+
+  const handleExecute = useCallback(async () => {
+    if (!selectedTransform) return;
+    setExecuting(true);
+    setError(null);
+    try {
+      await api.executeTransform({
+        transform_name: selectedTransform.name,
+        input_names: [tensorId],
+        params,
+        tensor_id: outputId || undefined,
+      });
+      onExecuted();
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExecuting(false);
+    }
+  }, [selectedTransform, tensorId, params, outputId, onExecuted, onClose]);
+
+  return (
+    <div
+      className="dag-transform-picker"
+      style={{ left: anchorX, top: anchorY }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <strong style={{ fontSize: 12 }}>Add Transform</strong>
+        <button
+          onClick={onClose}
+          style={{
+            background: "transparent",
+            border: "none",
+            color: "var(--muted)",
+            cursor: "pointer",
+            fontSize: 14,
+            padding: "0 2px",
+          }}
+        >
+          x
+        </button>
+      </div>
+      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>
+        Input: <span style={{ color: "var(--accent)" }}>{tensorId}</span>
+      </div>
+      <label style={{ fontSize: 12, display: "block", marginBottom: 6 }}>
+        Transform
+        <select
+          value={selectedTransform?.name ?? ""}
+          onChange={(e) => handleSelectTransform(e.target.value)}
+          style={{ display: "block", width: "100%", fontSize: 12, marginTop: 2, background: "var(--bg)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 4, padding: "2px 4px" }}
+        >
+          <option value="">-- select --</option>
+          {transforms.map((t) => (
+            <option key={t.name} value={t.name}>{t.name}</option>
+          ))}
+        </select>
+      </label>
+
+      {selectedTransform && selectedTransform.description && (
+        <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 6 }}>
+          {selectedTransform.description}
+        </div>
+      )}
+
+      {selectedTransform && Object.keys(selectedTransform.param_schema).length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 6 }}>
+          {Object.entries(selectedTransform.param_schema).map(([key, spec]) => (
+            <PickerParamField
+              key={key}
+              name={key}
+              spec={spec}
+              value={params[key]}
+              onChange={(v) => handleParamChange(key, v)}
+            />
+          ))}
+        </div>
+      )}
+
+      {selectedTransform && (
+        <label style={{ fontSize: 12, display: "block", marginBottom: 6 }}>
+          Output ID
+          <input
+            type="text"
+            value={outputId}
+            onChange={(e) => setOutputId(e.target.value)}
+            style={{ display: "block", width: "100%", fontSize: 12, marginTop: 2, background: "var(--bg)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 4, padding: "2px 4px" }}
+          />
+        </label>
+      )}
+
+      {selectedTransform && (
+        <button
+          className="action-button"
+          onClick={handleExecute}
+          disabled={executing}
+          style={{ fontSize: 12, padding: "4px 12px", marginTop: 0 }}
+        >
+          {executing ? "Running..." : "Execute"}
+        </button>
+      )}
+
+      {error && (
+        <div style={{ fontSize: 11, color: "var(--alert)", whiteSpace: "pre-wrap", marginTop: 4 }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A single parameter field for the transform picker. */
+function PickerParamField({
+  name,
+  spec,
+  value,
+  onChange,
+}: {
+  name: string;
+  spec: TransformParamSpec;
+  value: unknown;
+  onChange: (v: unknown) => void;
+}) {
+  const inputStyle = {
+    display: "block" as const,
+    width: "100%",
+    fontSize: 12,
+    marginTop: 2,
+    background: "var(--bg)",
+    color: "var(--text)",
+    border: "1px solid var(--border)",
+    borderRadius: 4,
+    padding: "2px 4px",
+  };
+
+  if (spec.choices && spec.choices.length > 0) {
+    return (
+      <label style={{ fontSize: 11 }}>
+        {name}
+        <select
+          value={String(value ?? spec.default ?? "")}
+          onChange={(e) => onChange(e.target.value)}
+          style={inputStyle}
+        >
+          {spec.choices.map((c) => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+
+  if (spec.dtype === "bool") {
+    return (
+      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, cursor: "pointer" }}>
+        <input
+          type="checkbox"
+          checked={Boolean(value)}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        {name}
+      </label>
+    );
+  }
+
+  if (spec.dtype === "float" || spec.dtype === "int") {
+    const strVal = value != null ? String(value) : "";
+    return (
+      <label style={{ fontSize: 11 }}>
+        {name}
+        <input
+          type="text"
+          inputMode="decimal"
+          value={strVal}
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (raw === "" || raw === "-") {
+              onChange(raw === "-" ? raw : null);
+              return;
+            }
+            const v = parseFloat(raw);
+            if (Number.isFinite(v)) {
+              onChange(spec.dtype === "int" ? Math.round(v) : v);
+            }
+          }}
+          style={inputStyle}
+        />
+      </label>
+    );
+  }
+
+  return (
+    <label style={{ fontSize: 11 }}>
+      {name}
+      <input
+        type="text"
+        value={String(value ?? "")}
+        onChange={(e) => onChange(e.target.value)}
+        style={inputStyle}
+      />
+    </label>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
-export function DAGGraphView() {
+type DAGGraphViewProps = {
+  isFullscreen?: boolean;
+};
+
+export function DAGGraphView({ isFullscreen = false }: DAGGraphViewProps) {
   const dagQuery = useDAGQuery();
+  const queryClient = useQueryClient();
   const selectedTensor = useAppStore((s) => s.selectedTensor);
   const setSelectedTensor = useAppStore((s) => s.setSelectedTensor);
   const [tooltip, setTooltip] = useState<TooltipInfo | null>(null);
+  const [pickerNode, setPickerNode] = useState<LayoutNode | null>(null);
 
   const handleHover = useCallback((info: TooltipInfo) => setTooltip(info), []);
   const handleLeave = useCallback(() => setTooltip(null), []);
 
+  const handleAddClick = useCallback((node: LayoutNode) => {
+    setPickerNode(node);
+  }, []);
+
+  const handlePickerClose = useCallback(() => {
+    setPickerNode(null);
+  }, []);
+
+  const handleTransformExecuted = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["dag"] });
+  }, [queryClient]);
+
+  const sizes = isFullscreen ? FULLSCREEN : NORMAL;
+
   const layout = useMemo(() => {
     if (!dagQuery.data) return null;
-    return computeLayout(dagQuery.data);
-  }, [dagQuery.data]);
+    return computeLayout(dagQuery.data, sizes);
+  }, [dagQuery.data, sizes]);
 
   if (dagQuery.isLoading) {
     return (
@@ -376,11 +712,18 @@ export function DAGGraphView() {
     );
   }
 
+  // Compute picker anchor position relative to SVG container
+  const pickerTensorId = pickerNode
+    ? (pickerNode.data as DAGTensorNodeDTO).tensor_id
+    : null;
+  const pickerAnchorX = pickerNode ? pickerNode.x + pickerNode.w + 8 : 0;
+  const pickerAnchorY = pickerNode ? pickerNode.y : 0;
+
   return (
-    <div className="dag-graph">
+    <div className={isFullscreen ? "dag-graph dag-graph--fullscreen" : "dag-graph"} style={{ position: "relative" }}>
       <svg
-        width={layout.svgW}
-        height={layout.svgH}
+        width={isFullscreen ? "100%" : layout.svgW}
+        height={isFullscreen ? "100%" : layout.svgH}
         viewBox={`0 0 ${layout.svgW} ${layout.svgH}`}
         style={{ display: "block", maxWidth: "100%" }}
       >
@@ -397,6 +740,8 @@ export function DAGGraphView() {
               isActive={
                 (node.data as DAGTensorNodeDTO).tensor_id === selectedTensor
               }
+              isFullscreen={isFullscreen}
+              sizes={sizes}
               onHover={handleHover}
               onLeave={handleLeave}
               onClick={() =>
@@ -404,11 +749,13 @@ export function DAGGraphView() {
                   (node.data as DAGTensorNodeDTO).tensor_id,
                 )
               }
+              onAddClick={handleAddClick}
             />
           ) : (
             <TransformNodeRect
               key={node.id}
               node={node}
+              sizes={sizes}
               onHover={handleHover}
               onLeave={handleLeave}
             />
@@ -427,6 +774,15 @@ export function DAGGraphView() {
         >
           {formatTooltip(tooltip.node)}
         </div>
+      )}
+      {pickerNode && pickerTensorId && (
+        <AddTransformPicker
+          tensorId={pickerTensorId}
+          anchorX={pickerAnchorX}
+          anchorY={pickerAnchorY}
+          onClose={handlePickerClose}
+          onExecuted={handleTransformExecuted}
+        />
       )}
     </div>
   );
