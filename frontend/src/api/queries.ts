@@ -206,6 +206,25 @@ export function makeDefaultSliceRequest(
   }
 }
 
+/**
+ * Build a spatial_map slice request for ortho-slicing a 4D tensor.
+ *
+ * Slices at a narrow time+freq window around the current selection point
+ * to produce an AP × ML spatial map at that (time, freq) location.
+ */
+export function makeOrthoSpatialRequest(
+  selection: SelectionDTO,
+): TensorSliceRequestDTO {
+  const halfT = 0.25; // narrow time window around selection
+  return {
+    view_type: "spatial_map",
+    selection,
+    time_range: [Math.max(0, selection.time - halfT), selection.time + halfT],
+    max_points: 400,
+    downsample: "none",
+  };
+}
+
 /** Full-range navigator slice. Uses the tensor's time coord bounds if available. */
 export function makeNavigatorRequest(
   selection: SelectionDTO,

@@ -25,7 +25,7 @@ import { decodeArrowSlice, extractPSDHeatmap, extractPSDAverage } from "../../ap
 import type { SelectionDTO, TensorSliceDTO, TensorSliceRequestDTO } from "../../api/types";
 import { useAppStore } from "../../store/appStore";
 import { useSelectionStore, toSelectionDTO } from "../../store/selectionStore";
-import { getAvailableViews, viewRegistry } from "../../registry/viewRegistry";
+import { getAvailableViews, getOrthoPair, viewRegistry } from "../../registry/viewRegistry";
 import { HypnogramView } from "./HypnogramView";
 import { NavigatorView } from "./NavigatorView";
 import { PSDHeatmapView } from "./PSDHeatmapView";
@@ -36,6 +36,7 @@ import { SpatialMapSliceView } from "./SpatialMapSliceView";
 import { AnimationController } from "../controls/AnimationController";
 import { SpatialEventView } from "./SpatialEventView";
 import { TimeseriesSliceView } from "./TimeseriesSliceView";
+import { OrthoSlicerView } from "./OrthoSlicerView";
 import { TensorChooser } from "./TensorChooser";
 import { TensorOverview } from "./TensorOverview";
 import { ViewGrid } from "./ViewGrid";
@@ -102,6 +103,10 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const hasPSDLive = effectiveActiveViews.some((v) =>
     v === "psd_heatmap" || v === "psd_curve" || v === "psd_spatial",
   );
+
+  // Detect if the active tensor supports ortho-slicing (4D: time, freq, AP, ML)
+  const tensorDims = tensorQuery.data?.dims ?? activeTensorSummary?.dims ?? [];
+  const orthoPair = getOrthoPair(tensorDims);
 
   const timeCoord = tensorQuery.data?.coords.find((c) => c.name === "time");
 
@@ -326,16 +331,32 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     );
   }
 
-  if (hasSpectrogram && spectrogramSliceQuery.data) {
-    viewElements["spectrogram"] = (
-      <SpectrogramComponent
-        slice={spectrogramSliceQuery.data}
-        selection={selectionDraft}
-        onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
-        onSelectFreq={handleSelectFreq}
-        onTimeWindowChange={setTimeWindow}
-      />
-    );
+  if (hasSpectrogram) {
+    if (orthoPair && activeTensorName) {
+      // 4D tensor: render ortho-slicer (spectrogram + linked spatial map)
+      viewElements["spectrogram"] = (
+        <OrthoSlicerView
+          tensorName={activeTensorName}
+          selection={selectionDraft}
+          timeWindow={timeWindow}
+          timeCoord={timeCoord}
+          onCommitSelection={onCommitSelection}
+          onSelectFreq={handleSelectFreq}
+          onTimeWindowChange={setTimeWindow}
+          onHoverElectrode={setHoveredElectrode}
+        />
+      );
+    } else if (spectrogramSliceQuery.data) {
+      viewElements["spectrogram"] = (
+        <SpectrogramComponent
+          slice={spectrogramSliceQuery.data}
+          selection={selectionDraft}
+          onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
+          onSelectFreq={handleSelectFreq}
+          onTimeWindowChange={setTimeWindow}
+        />
+      );
+    }
   }
 
   if (hasPSD && psdSliceQuery.data) {

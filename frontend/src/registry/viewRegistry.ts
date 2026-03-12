@@ -37,6 +37,26 @@ export function getAvailableViews(schema: TensorSchema): ViewDescriptor[] {
   );
 }
 
+/**
+ * Ortho-pair configuration for 4D tensors.
+ *
+ * Given a tensor's dimension names, returns the pair of view types that
+ * form a linked orthogonal slicer (primary 2D heatmap + spatial cross-section).
+ * Returns null if the tensor doesn't have the required 4 dims.
+ */
+export type OrthoPair = {
+  primary: string;    // e.g. "spectrogram" (time × freq)
+  orthogonal: string; // e.g. "spatial_map" (AP × ML)
+};
+
+export function getOrthoPair(dims: string[]): OrthoPair | null {
+  const has = (d: string) => dims.includes(d);
+  if (has("time") && has("freq") && has("AP") && has("ML")) {
+    return { primary: "spectrogram", orthogonal: "spatial_map" };
+  }
+  return null;
+}
+
 /** Component lookup — maps view_type to its React renderer. */
 export const viewRegistry: Record<string, (props: SliceViewProps) => ReactElement | null> = {
   timeseries: TimeseriesSliceView,
