@@ -333,6 +333,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         selection={selectionDraft}
         onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
         onSelectFreq={handleSelectFreq}
+        onTimeWindowChange={setTimeWindow}
       />
     );
   }

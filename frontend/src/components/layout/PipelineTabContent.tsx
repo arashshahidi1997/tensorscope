@@ -245,20 +245,27 @@ function ParamField({
     );
   }
 
-  // Numeric (int/float)
+  // Numeric (int/float) — use text input to allow clearing the field
   if (spec.dtype === "float" || spec.dtype === "int") {
+    const strVal = value != null ? String(value) : "";
     return (
       <label style={{ fontSize: 12 }}>
         {name}
         <input
-          type="number"
-          value={value != null ? Number(value) : ""}
-          min={spec.min_value ?? undefined}
-          max={spec.max_value ?? undefined}
-          step={spec.dtype === "int" ? 1 : "any"}
+          type="text"
+          inputMode="decimal"
+          value={strVal}
           onChange={(e) => {
-            const v = parseFloat(e.target.value);
-            if (Number.isFinite(v)) onChange(spec.dtype === "int" ? Math.round(v) : v);
+            const raw = e.target.value;
+            if (raw === "" || raw === "-") {
+              // Allow empty/minus so user can clear and retype
+              onChange(raw === "-" ? raw : null);
+              return;
+            }
+            const v = parseFloat(raw);
+            if (Number.isFinite(v)) {
+              onChange(spec.dtype === "int" ? Math.round(v) : v);
+            }
           }}
           style={{ display: "block", width: "100%", fontSize: 12, marginTop: 2 }}
         />

@@ -190,6 +190,23 @@ M6 lives in [`docs/prompts/tensorscope-m6/`](./tensorscope-m6/00_context.md) and
 - Snakemake-oriented workflow cooking
 - keeping export state distinct from interactive workspace state
 
+## Prompt Pack M9: Multi-Tensor Workspace And Interactive Exploration
+
+Milestone index:
+
+- [M9 README](./tensorscope-m9/README.md)
+
+M9 transforms TensorScope from a single-tensor viewer into a multi-tensor exploration workspace.
+
+M9 lives in [`docs/prompts/tensorscope-m9/`](./tensorscope-m9/README.md) and focuses on:
+
+- per-panel tensor override: view any tensor in any panel
+- ortho-slicer for 4D tensors: linked time-freq + spatial views (the cogpy ortho-slicer pattern)
+- full-screen DAG editor with visual node creation and branching
+- generalized heatmap interaction gestures (zoom, pan, drag-select)
+- event detection framework integrated with the transform DAG
+- PSD settings panel and frequency log scale
+
 ## Optional Prompt Pack MA1: GPU Rendering Acceleration
 
 Milestone index:
