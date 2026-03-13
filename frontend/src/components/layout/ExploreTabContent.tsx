@@ -28,7 +28,20 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
 
   const brainstateMetaQuery = useBrainstateMetaQuery();
   const brainstateAvailable = brainstateMetaQuery.data?.available ?? false;
-  const { brainstateOverlay, showHypnogram, toggleBrainstateOverlay, toggleHypnogram, psdFmax, psdNW, freqLogScale, setPsdFmax, setPsdNW, toggleFreqLogScale } = useAppStore();
+  const {
+    brainstateOverlay,
+    showHypnogram,
+    toggleBrainstateOverlay,
+    toggleHypnogram,
+    psdFmax,
+    psdNW,
+    psdWindowS,
+    freqLogScale,
+    setPsdFmax,
+    setPsdNW,
+    setPsdWindowS,
+    toggleFreqLogScale,
+  } = useAppStore();
 
   return (
     <>
@@ -96,6 +109,21 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
               onChange={(e) => {
                 const v = parseFloat(e.target.value);
                 if (Number.isFinite(v) && v >= 1) setPsdNW(v);
+              }}
+              style={{ width: 60, fontSize: 12 }}
+            />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+            Window (s)
+            <input
+              type="number"
+              min={0.01}
+              max={60}
+              step={0.1}
+              value={psdWindowS}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (Number.isFinite(v) && v > 0) setPsdWindowS(v);
               }}
               style={{ width: 60, fontSize: 12 }}
             />

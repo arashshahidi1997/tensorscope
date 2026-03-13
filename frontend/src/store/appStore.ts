@@ -26,6 +26,7 @@ type AppStore = {
   /** PSD settings */
   psdFmax: number;
   psdNW: number;
+  psdWindowS: number;
   freqLogScale: boolean;
   setSelectedTensor: (value: string) => void;
   setPanelTensor: (slotId: string, tensorName: string) => void;
@@ -38,6 +39,7 @@ type AppStore = {
   toggleHypnogram: () => void;
   setPsdFmax: (value: number) => void;
   setPsdNW: (value: number) => void;
+  setPsdWindowS: (value: number) => void;
   toggleFreqLogScale: () => void;
 };
 
@@ -79,8 +81,10 @@ export const useAppStore = create<AppStore>((set) => ({
   toggleHypnogram: () => set((s) => ({ showHypnogram: !s.showHypnogram })),
   psdFmax: 100,
   psdNW: 4,
+  psdWindowS: 1,
   freqLogScale: false,
   setPsdFmax: (value) => set({ psdFmax: value }),
   setPsdNW: (value) => set({ psdNW: value }),
+  setPsdWindowS: (value) => set({ psdWindowS: value }),
   toggleFreqLogScale: () => set((s) => ({ freqLogScale: !s.freqLogScale })),
 }));

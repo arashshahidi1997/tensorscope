@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.egg-info/
 
 # Virtual environments
 .venv/
@@ -17,3 +18,10 @@ frontend/*.tsbuildinfo
 
 # Misc local OS/editor artifacts
 .DS_Store
+
+# >>> projio >>>
+.projio.mkdocs.yml
+.projio/servers.json
+.projio/site/
+site/
+# <<< projio <<<

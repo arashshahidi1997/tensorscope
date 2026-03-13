@@ -14,6 +14,7 @@ import {
   clampWindow,
   makeDefaultSliceRequest,
   makeNavigatorRequest,
+  makePSDLiveRequest,
   useBrainstateIntervalsQuery,
   useBrainstateMetaQuery,
   useEventWindowQuery,
@@ -22,7 +23,7 @@ import {
   useTensorQuery,
 } from "../../api/queries";
 import { decodeArrowSlice, extractPSDHeatmap, extractPSDAverage } from "../../api/arrow";
-import type { SelectionDTO, TensorSliceDTO, TensorSliceRequestDTO } from "../../api/types";
+import type { SelectionDTO, TensorSliceDTO } from "../../api/types";
 import { useAppStore } from "../../store/appStore";
 import { useSelectionStore, toSelectionDTO } from "../../store/selectionStore";
 import { getAvailableViews, getOrthoPair, viewRegistry } from "../../registry/viewRegistry";
@@ -60,7 +61,18 @@ type WorkspaceMainProps = {
 };
 
 export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceMainProps) {
-  const { selectedTensor, activeViews, setSelectedTensor, toggleView, brainstateOverlay, showHypnogram, psdFmax, psdNW, freqLogScale } = useAppStore();
+  const {
+    selectedTensor,
+    activeViews,
+    setSelectedTensor,
+    toggleView,
+    brainstateOverlay,
+    showHypnogram,
+    psdFmax,
+    psdNW,
+    psdWindowS,
+    freqLogScale,
+  } = useAppStore();
   const selectionState = useSelectionStore();
   const { timeWindow, setTimeWindow, setFreq, setHoveredElectrode } = selectionState;
 
@@ -195,12 +207,9 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   );
   const psdLiveQuery = useSliceQuery(
     selectedTensor,
-    hasPSDLive ? {
-      view_type: "psd_live",
-      selection: selectionDraft,
-      time_range: safeWindow ? [safeWindow[0], safeWindow[1]] : undefined,
-      psd_params: { NW: psdNW, fmax: psdFmax },
-    } as TensorSliceRequestDTO : null,
+    hasPSDLive
+      ? makePSDLiveRequest(selectionDraft, psdWindowS, timeCoord, { NW: psdNW, fmax: psdFmax })
+      : null,
   );
   const navigatorSliceQuery = useSliceQuery(
     selectedTensor,

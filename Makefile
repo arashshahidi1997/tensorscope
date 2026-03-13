@@ -139,3 +139,5 @@ site-serve:
 
 mcp:
 	$(PROJIO) mcp -C .
+
+-include .projio/projio.mk

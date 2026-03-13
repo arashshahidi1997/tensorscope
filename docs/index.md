@@ -2,6 +2,11 @@
 
 ## Core docs
 
+- [Diataxis map](./diataxis.md)
+- [Tutorials](./tutorials/index.md)
+- [How-to guides](./how-to/index.md)
+- [Reference](./reference/index.md)
+- [Explanation](./explanation/index.md)
 - [Architecture](./architecture/tensorscope.md)
 - [ADR index](./adr/index.md)
 - [Prompt docs guide](./prompts/README.md)

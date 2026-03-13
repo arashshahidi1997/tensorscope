@@ -240,3 +240,25 @@ export function makeNavigatorRequest(
     downsample: "minmax",
   };
 }
+
+/** PSD live request centered on the selected time, independent of the visible timeseries window. */
+export function makePSDLiveRequest(
+  selection: SelectionDTO,
+  windowSizeS: number,
+  timeCoord: CoordSummary | undefined,
+  psdParams?: TensorSliceRequestDTO["psd_params"],
+): TensorSliceRequestDTO {
+  const safeWindowSizeS = Number.isFinite(windowSizeS) && windowSizeS > 0 ? windowSizeS : 1;
+  const halfWindow = safeWindowSizeS / 2;
+  const centeredWindow: [number, number] = [
+    Math.max(0, selection.time - halfWindow),
+    selection.time + halfWindow,
+  ];
+
+  return {
+    view_type: "psd_live",
+    selection,
+    time_range: clampWindow(centeredWindow, timeCoord),
+    psd_params: psdParams,
+  };
+}
