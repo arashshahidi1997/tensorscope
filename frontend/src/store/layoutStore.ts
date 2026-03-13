@@ -73,8 +73,8 @@ type LayoutActions = {
   }, presetId: string) => void;
 };
 
-const SIDEBAR_MIN = 180;
-const SIDEBAR_MAX = 400;
+const SIDEBAR_MIN = 240;
+const SIDEBAR_MAX = 480;
 const INSPECTOR_MIN = 200;
 const INSPECTOR_MAX = 500;
 const BOTTOM_MIN = 100;
@@ -95,7 +95,7 @@ function clampBottom(h: number): number {
 export const useLayoutStore = create<LayoutState & LayoutActions>()(
   persist(
     (set) => ({
-      sidebarWidth: 220,
+      sidebarWidth: 260,
       sidebarCollapsed: false,
       activeSidebarTab: "explore",
       inspectorWidth: 260,

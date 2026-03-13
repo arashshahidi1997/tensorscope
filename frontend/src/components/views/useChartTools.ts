@@ -23,7 +23,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type uPlot from "uplot";
 
 export type GestureTool = "pan" | "zoom";
-export type YMode = "yZoom" | "yGain";
+export type YMode = "yZoom" | "yGain" | "yAuto";
 
 export type ChartToolsResult = {
   activeTool: GestureTool;

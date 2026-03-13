@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import xarray as xr
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from tensorscope.core.events import EventRegistry, EventStream
 from tensorscope.server.models import ApiErrorDTO
@@ -17,15 +19,39 @@ from tensorscope.server.session import SESSION_COOKIE_NAME, SessionManager
 from tensorscope.server.state import ServerState, create_server_state
 
 
+def _find_frontend_dist() -> Path | None:
+    """Locate the frontend dist directory.
+
+    Checks two locations:
+    1. Bundled: src/tensorscope/static/ (ships with PyPI package)
+    2. Dev tree: project_root/frontend/dist/ (editable installs)
+    """
+    pkg_dir = Path(__file__).resolve().parent.parent  # src/tensorscope/
+
+    # 1. Bundled inside the package (PyPI installs)
+    bundled = pkg_dir / "static"
+    if bundled.is_dir() and (bundled / "index.html").exists():
+        return bundled
+
+    # 2. Dev tree (editable installs)
+    project_root = pkg_dir.parent.parent
+    dev_dist = project_root / "frontend" / "dist"
+    if dev_dist.is_dir() and (dev_dist / "index.html").exists():
+        return dev_dist
+
+    return None
+
+
 def create_app(
-    data: xr.DataArray,
+    data: xr.DataArray | dict[str, xr.DataArray],
     *,
     tensor_name: str = "signal",
     events_registry: EventRegistry | None = None,
     brainstates: xr.DataArray | None = None,
+    static_dir: Path | None = None,
     title: str = "TensorScope API",
 ) -> FastAPI:
-    """Create a Phase 2 FastAPI app bound to a single dataset."""
+    """Create a FastAPI app bound to one or more tensors."""
     base_state = create_server_state(data, tensor_name=tensor_name, events=events_registry, brainstates=brainstates)
     app = FastAPI(title=title, version="0.2.0")
     app.state.session_manager = SessionManager(base_state)
@@ -42,6 +68,25 @@ def create_app(
     app.include_router(dag.router, prefix="/api/v1")
     app.include_router(pipeline.router, prefix="/api/v1")
     app.include_router(brainstates_router_mod.router, prefix="/api/v1")
+
+    # Serve frontend static files if available
+    dist_dir = static_dir if static_dir is not None else _find_frontend_dist()
+    if dist_dir is not None:
+        assets_dir = dist_dir / "assets"
+        if assets_dir.is_dir():
+            app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="static-assets")
+
+        index_html = dist_dir / "index.html"
+
+        @app.get("/{full_path:path}")
+        async def serve_spa(full_path: str) -> FileResponse:
+            """Serve index.html for all non-API routes (SPA catch-all)."""
+            # Serve actual files from dist if they exist
+            file_path = dist_dir / full_path
+            if full_path and file_path.is_file():
+                return FileResponse(str(file_path))
+            return FileResponse(str(index_html))
+
     return app
 
 

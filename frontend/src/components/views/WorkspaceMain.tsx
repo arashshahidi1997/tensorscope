@@ -213,7 +213,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   );
   const navigatorSliceQuery = useSliceQuery(
     selectedTensor,
-    hasNavigator ? makeNavigatorRequest(selectionDraft, timeCoord) : null,
+    hasNavigator && timeCoord ? makeNavigatorRequest(selectionDraft, timeCoord) : null,
   );
 
   // Brainstate queries — fetch metadata once, intervals per visible window

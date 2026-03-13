@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -7,6 +9,7 @@ import xarray as xr
 from pydantic import ValidationError
 
 import tensorscope
+from tensorscope import cli
 from tensorscope.core import (
     EventRegistry,
     EventStream,
@@ -139,3 +142,23 @@ def test_alignment_helpers_behave_as_expected() -> None:
     assert union[0] == pytest.approx(0.0)
     assert intersection[0] == pytest.approx(0.25)
     assert find_nearest_time_index(0.6, a) == 1
+
+
+def test_choose_port_skips_occupied_ports(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "_port_is_available", lambda host, port: port != 8000)
+    assert cli._choose_port("127.0.0.1", 8000) == 8001
+
+
+def test_cmd_serve_uses_fallback_port(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    data = xr.DataArray(np.zeros((2, 2), dtype=np.float32), dims=("time", "channel"))
+    run_calls: list[tuple[str, int]] = []
+
+    monkeypatch.setattr(cli, "_load_dataarray", lambda path: data)
+    monkeypatch.setattr(cli, "_load_brainstates", lambda path: None)
+    monkeypatch.setattr(cli, "create_app", lambda *args, **kwargs: "app")
+    monkeypatch.setattr(cli, "_choose_port", lambda host, port: 8001)
+    monkeypatch.setattr(cli.uvicorn, "run", lambda app, host, port: run_calls.append((host, port)))
+
+    assert cli._cmd_serve(Path("demo.nc"), "signal", "127.0.0.1", 8000) == 0
+    assert run_calls == [("127.0.0.1", 8001)]
+    assert "Port 8000 is in use on 127.0.0.1; using 8001 instead." in capsys.readouterr().out

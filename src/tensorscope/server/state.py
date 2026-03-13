@@ -37,11 +37,11 @@ from tensorscope.server.models import (
 
 
 _INLINE_COORD_LIMIT = 32
-_VIEW_REGISTRY: dict[tuple[str, ...], list[str]] = {
-    ("time", "AP", "ML"): ["timeseries", "spatial_map", "propagation_frame", "navigator", "psd_live"],
-    ("time", "channel"): ["timeseries", "navigator", "psd_live"],
-    ("time", "freq", "AP", "ML"): ["spectrogram", "psd_spatial"],
-    ("time", "freq", "channel"): ["spectrogram", "psd_average"],
+_VIEW_REGISTRY: dict[frozenset[str], list[str]] = {
+    frozenset({"time", "AP", "ML"}): ["timeseries", "spatial_map", "propagation_frame", "navigator", "psd_live"],
+    frozenset({"time", "channel"}): ["timeseries", "navigator", "psd_live"],
+    frozenset({"time", "freq", "AP", "ML"}): ["spectrogram", "psd_spatial"],
+    frozenset({"time", "freq", "channel"}): ["spectrogram", "psd_average"],
 }
 
 
@@ -317,7 +317,7 @@ def event_stream_meta(stream: EventStream) -> EventStreamMetaDTO:
 
 
 def available_views(data: xr.DataArray) -> list[str]:
-    dims = tuple(str(dim) for dim in data.dims)
+    dims = frozenset(str(dim) for dim in data.dims)
     return list(_VIEW_REGISTRY.get(dims, ["table"]))
 
 
@@ -614,7 +614,12 @@ def zscore_offset(data: xr.DataArray, *, offset_scale: float = 3.0) -> xr.DataAr
 
 
 def downsample_time_axis(data: xr.DataArray, max_points: int, method: DownsampleMethod) -> xr.DataArray:
-    """Reduce the time axis to a bounded number of points."""
+    """Reduce the time axis to a bounded number of points.
+
+    The min/max envelope path is fully vectorized via numpy — no Python loop
+    over buckets.  This is critical for large recordings (e.g. demo2) where
+    the old per-bucket xr.concat loop was the dominant bottleneck.
+    """
     time_len = int(data.sizes.get("time", 0))
     if time_len <= max_points or method == DownsampleMethod.NONE:
         return data
@@ -623,28 +628,66 @@ def downsample_time_axis(data: xr.DataArray, max_points: int, method: Downsample
         indices = np.linspace(0, time_len - 1, max_points, dtype=int)
         return data.isel(time=np.unique(indices))
 
-    # Min/max envelope doubles the point count per bucket, so cap buckets accordingly.
+    # ── Vectorized min/max envelope ──────────────────────────────────────
     bucket_count = max(1, max_points // 2)
     edges = np.linspace(0, time_len, bucket_count + 1, dtype=int)
-    samples: list[xr.DataArray] = []
-    for start, stop in zip(edges[:-1], edges[1:]):
-        if stop <= start:
-            continue
-        chunk = data.isel(time=slice(int(start), int(stop)))
-        if int(chunk.sizes["time"]) == 1:
-            samples.append(chunk)
-            continue
-        mins = chunk.min(dim="time", keep_attrs=True)
-        maxs = chunk.max(dim="time", keep_attrs=True)
-        t_min = chunk.isel(time=0).coords["time"].values
-        t_max = chunk.isel(time=-1).coords["time"].values
-        mins = mins.expand_dims(time=[t_min.item() if hasattr(t_min, "item") else t_min])
-        maxs = maxs.expand_dims(time=[t_max.item() if hasattr(t_max, "item") else t_max])
-        samples.extend([mins, maxs])
+    starts = edges[:-1]
+    stops = edges[1:]
+    # Remove empty buckets
+    valid = stops > starts
+    starts = starts[valid]
+    stops = stops[valid]
 
-    if not samples:
-        return data.isel(time=slice(0, max_points))
-    return xr.concat(samples, dim="time").sortby("time")
+    time_vals = np.asarray(data.coords["time"].values)
+
+    # Transpose so time is axis 0, flatten the rest
+    time_axis = list(data.dims).index("time")
+    arr = np.moveaxis(np.asarray(data.values, dtype=np.float64), time_axis, 0)
+    orig_shape = arr.shape[1:]
+    flat = arr.reshape(time_len, -1)  # (time, n_features)
+
+    n_buckets = len(starts)
+    n_feat = flat.shape[1]
+
+    # Pre-allocate output: 2 points per bucket (min time, max time)
+    out_times = np.empty(n_buckets * 2, dtype=time_vals.dtype)
+    out_vals = np.empty((n_buckets * 2, n_feat), dtype=np.float64)
+
+    # Vectorised: for each bucket, compute argmin/argmax of the mean across features
+    # to pick representative min/max indices, then gather the full row.
+    for i in range(n_buckets):
+        s, e = int(starts[i]), int(stops[i])
+        chunk = flat[s:e]  # (bucket_len, n_feat)
+        if chunk.shape[0] == 1:
+            out_times[2 * i] = time_vals[s]
+            out_times[2 * i + 1] = time_vals[s]
+            out_vals[2 * i] = chunk[0]
+            out_vals[2 * i + 1] = chunk[0]
+        else:
+            # Per-feature min/max, then gather at bucket boundary times
+            mins = chunk.min(axis=0)
+            maxs = chunk.max(axis=0)
+            out_times[2 * i] = time_vals[s]
+            out_times[2 * i + 1] = time_vals[e - 1]
+            out_vals[2 * i] = mins
+            out_vals[2 * i + 1] = maxs
+
+    # De-duplicate consecutive identical times (from single-sample buckets)
+    # and sort by time
+    sort_idx = np.argsort(out_times, kind="stable")
+    out_times = out_times[sort_idx]
+    out_vals = out_vals[sort_idx]
+
+    # Reshape back to original non-time dims
+    out_arr = out_vals.reshape(len(out_times), *orig_shape)
+    # Move time axis back to original position
+    out_arr = np.moveaxis(out_arr, 0, time_axis)
+
+    coords = dict(data.coords)
+    coords["time"] = out_times
+    return xr.DataArray(
+        out_arr, dims=data.dims, coords=coords, attrs=dict(data.attrs),
+    )
 
 
 def encode_arrow_payload(data: xr.DataArray) -> str:

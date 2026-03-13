@@ -7,7 +7,7 @@
  *   3. Execute button: runs the transform and produces a derived tensor
  *   4. Derived tensors list: shows outputs with status badges
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { useAppStore } from "../../store/appStore";
 import { useStateQuery } from "../../api/queries";
@@ -250,32 +250,11 @@ function ParamField({
     );
   }
 
-  // Numeric (int/float) — use text input to allow clearing the field
+  // Numeric (int/float) — use text input with local draft state so partial
+  // input like "0." or "-" is preserved while typing.
   if (spec.dtype === "float" || spec.dtype === "int") {
-    const strVal = value != null ? String(value) : "";
     return (
-      <label style={{ fontSize: 12 }}>
-        {name}
-        <input
-          type="text"
-          inputMode="decimal"
-          value={strVal}
-          onChange={(e) => {
-            const raw = e.target.value;
-            if (raw === "" || raw === "-") {
-              // Allow empty/minus so user can clear and retype
-              onChange(raw === "-" ? raw : null);
-              return;
-            }
-            const v = parseFloat(raw);
-            if (Number.isFinite(v)) {
-              onChange(spec.dtype === "int" ? Math.round(v) : v);
-            }
-          }}
-          style={{ display: "block", width: "100%", fontSize: 12, marginTop: 2 }}
-        />
-        {spec.description && <div style={{ fontSize: 10, color: "#8b949e" }}>{spec.description}</div>}
-      </label>
+      <NumericInput name={name} spec={spec} value={value} onChange={onChange} />
     );
   }
 
@@ -287,6 +266,78 @@ function ParamField({
         type="text"
         value={String(value ?? "")}
         onChange={(e) => onChange(e.target.value)}
+        style={{ display: "block", width: "100%", fontSize: 12, marginTop: 2 }}
+      />
+      {spec.description && <div style={{ fontSize: 10, color: "#8b949e" }}>{spec.description}</div>}
+    </label>
+  );
+}
+
+/**
+ * NumericInput — keeps a local draft string so partial input like "0." or
+ * trailing decimals are not swallowed by parseFloat. Commits valid numbers
+ * on every keystroke; commits final value on blur.
+ */
+function NumericInput({
+  name,
+  spec,
+  value,
+  onChange,
+}: {
+  name: string;
+  spec: TransformParamSpec;
+  value: unknown;
+  onChange: (v: unknown) => void;
+}) {
+  const [draft, setDraft] = useState(() => (value != null ? String(value) : ""));
+  const lastCommitted = useRef(value);
+
+  // Sync draft when value changes externally
+  useEffect(() => {
+    if (value !== lastCommitted.current) {
+      setDraft(value != null ? String(value) : "");
+      lastCommitted.current = value;
+    }
+  }, [value]);
+
+  const commit = (raw: string) => {
+    if (raw === "" || raw === "-") {
+      onChange(null);
+      lastCommitted.current = null;
+      return;
+    }
+    const v = parseFloat(raw);
+    if (Number.isFinite(v)) {
+      const out = spec.dtype === "int" ? Math.round(v) : v;
+      onChange(out);
+      lastCommitted.current = out;
+    }
+  };
+
+  return (
+    <label style={{ fontSize: 12 }}>
+      {name}
+      <input
+        type="text"
+        inputMode="decimal"
+        value={draft}
+        onChange={(e) => {
+          const raw = e.target.value;
+          // Allow any string that looks like a partial number
+          if (/^-?\d*\.?\d*$/.test(raw)) {
+            setDraft(raw);
+            commit(raw);
+          }
+        }}
+        onBlur={() => {
+          // Clean up draft on blur (e.g. "1." → "1")
+          if (draft !== "" && draft !== "-") {
+            const v = parseFloat(draft);
+            if (Number.isFinite(v)) {
+              setDraft(String(spec.dtype === "int" ? Math.round(v) : v));
+            }
+          }
+        }}
         style={{ display: "block", width: "100%", fontSize: 12, marginTop: 2 }}
       />
       {spec.description && <div style={{ fontSize: 10, color: "#8b949e" }}>{spec.description}</div>}

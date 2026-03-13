@@ -489,6 +489,29 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
   color: var(--text);
 }
 
+.ts-time-input {
+  width: 70px;
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 10px;
+  font-family: inherit;
+  text-align: right;
+}
+
+.ts-time-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.ts-time-unit {
+  font-size: 9px;
+  color: var(--muted);
+  margin-right: 2px;
+}
+
 /* ── Zoom selection rect (lives inside .u-over) ──────── */
 .ts-sel-box {
   position: absolute;

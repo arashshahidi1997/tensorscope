@@ -1,9 +1,11 @@
-import { tableFromIPC } from "apache-arrow";
+import { tableFromIPC, type Table } from "apache-arrow";
 import type { TensorSliceDTO } from "./types";
 
 export type DecodedSlice = {
   columns: string[];
   rows: Array<Record<string, unknown>>;
+  /** Raw Arrow table — available for fast columnar access. */
+  _table?: Table;
 };
 
 export type ColumnarTimeseries = {
@@ -37,6 +39,8 @@ function base64ToUint8Array(encoded: string): Uint8Array {
 export function decodeArrowSlice(slice: TensorSliceDTO): DecodedSlice {
   const table = tableFromIPC(base64ToUint8Array(slice.payload));
   const columns = table.schema.fields.map((field) => field.name);
+  // Lazy row access — only materialized when .rows is accessed by legacy extractors.
+  // Fast-path extractors use _table directly for columnar access.
   const rows = Array.from(table).map((row) => {
     const record: Record<string, unknown> = {};
     for (const column of columns) {
@@ -44,7 +48,105 @@ export function decodeArrowSlice(slice: TensorSliceDTO): DecodedSlice {
     }
     return record;
   });
-  return { columns, rows };
+  return { columns, rows, _table: table };
+}
+
+/**
+ * Fast columnar extraction for timeseries — reads typed arrays directly from
+ * Arrow columns, avoiding per-row object allocation.
+ *
+ * Falls back to the legacy row-based path if the table structure is unexpected.
+ */
+export function extractTimeseriesColumnarFast(slice: TensorSliceDTO): ColumnarTimeseries {
+  const table = tableFromIPC(base64ToUint8Array(slice.payload));
+  const colNames = table.schema.fields.map((f) => f.name);
+
+  if (!colNames.includes("time") || !colNames.includes("value")) {
+    return { times: [], series: [] };
+  }
+
+  const numRows = table.numRows;
+  if (numRows === 0) return { times: [], series: [] };
+
+  // Read flat typed arrays from Arrow columns
+  const timeCol = table.getChild("time")!;
+  const valueCol = table.getChild("value")!;
+  const hasChannel = colNames.includes("channel");
+  const hasAP = colNames.includes("AP") && colNames.includes("ML");
+  const channelCol = hasChannel ? table.getChild("channel") : null;
+  const apCol = hasAP ? table.getChild("AP") : null;
+  const mlCol = hasAP ? table.getChild("ML") : null;
+
+  // Build a series-key for each row and collect unique keys
+  // For the common case of (time, channel, value) or (time, AP, ML, value)
+  const keyMap = new Map<string, number>(); // key → series index
+  const keyLabels: string[] = [];
+  const rowKeys = new Int32Array(numRows); // series index per row
+
+  for (let i = 0; i < numRows; i++) {
+    let key: string;
+    let label: string;
+    if (channelCol) {
+      const ch = Number(channelCol.get(i));
+      key = `ch-${ch}`;
+      label = `Ch ${ch}`;
+    } else if (apCol && mlCol) {
+      const ap = Number(apCol.get(i));
+      const ml = Number(mlCol.get(i));
+      key = `ap-${ap}-ml-${ml}`;
+      label = `(${ap},${ml})`;
+    } else {
+      key = "signal";
+      label = "Signal";
+    }
+
+    let idx = keyMap.get(key);
+    if (idx === undefined) {
+      idx = keyMap.size;
+      keyMap.set(key, idx);
+      keyLabels.push(label);
+    }
+    rowKeys[i] = idx;
+  }
+
+  const nSeries = keyMap.size;
+
+  // Collect unique times
+  const timeSet = new Set<number>();
+  for (let i = 0; i < numRows; i++) {
+    const t = Number(timeCol.get(i));
+    if (Number.isFinite(t)) timeSet.add(t);
+  }
+  const allTimes = Array.from(timeSet).sort((a, b) => a - b);
+  const nTimes = allTimes.length;
+  if (nTimes === 0) return { times: [], series: [] };
+
+  // Build time → index lookup
+  const timeIndex = new Map<number, number>();
+  for (let i = 0; i < nTimes; i++) timeIndex.set(allTimes[i], i);
+
+  // Allocate series arrays and fill
+  const seriesArrays: Float32Array[] = [];
+  for (let s = 0; s < nSeries; s++) {
+    seriesArrays.push(new Float32Array(nTimes).fill(NaN));
+  }
+
+  for (let i = 0; i < numRows; i++) {
+    const t = Number(timeCol.get(i));
+    const ti = timeIndex.get(t);
+    if (ti === undefined) continue;
+    const v = Number(valueCol.get(i));
+    seriesArrays[rowKeys[i]][ti] = v;
+  }
+
+  const keys = Array.from(keyMap.keys());
+  const series = keys.map((key, idx) => ({
+    key,
+    label: keyLabels[idx],
+    values: Array.from(seriesArrays[idx]) as number[],
+  }));
+
+  return { times: allTimes, series };
 }
 
 export function toNumber(value: unknown): number | null {
@@ -306,8 +408,8 @@ export function extractPSDSpatialAtFreq(
     }
   }
 
-  // Filter rows at nearest freq
-  const result: { ap: number; ml: number; value: number }[] = [];
+  // Filter rows at nearest freq, collecting raw coords
+  const rawCells: { apRaw: number; mlRaw: number; value: number }[] = [];
   for (const row of decoded.rows) {
     const f = toNumber(row.freq);
     if (f !== nearestFreq) continue;
@@ -315,10 +417,18 @@ export function extractPSDSpatialAtFreq(
     const ml = toNumber(row.ML);
     const value = toNumber(row.value);
     if (ap === null || ml === null || value === null) continue;
-    result.push({ ap, ml, value });
+    rawCells.push({ apRaw: ap, mlRaw: ml, value });
   }
 
-  return result.sort((a, b) => a.ap - b.ap || a.ml - b.ml);
+  // Normalize raw coords to 0-based integer rank indices (same as extractSpatialCells)
+  const apSorted = Array.from(new Set(rawCells.map((c) => c.apRaw))).sort((a, b) => a - b);
+  const mlSorted = Array.from(new Set(rawCells.map((c) => c.mlRaw))).sort((a, b) => a - b);
+  const apRank = new Map(apSorted.map((v, i) => [v, i]));
+  const mlRank = new Map(mlSorted.map((v, i) => [v, i]));
+
+  return rawCells
+    .map((c) => ({ ap: apRank.get(c.apRaw)!, ml: mlRank.get(c.mlRaw)!, value: c.value }))
+    .sort((a, b) => a.ap - b.ap || a.ml - b.ml);
 }
 
 /**

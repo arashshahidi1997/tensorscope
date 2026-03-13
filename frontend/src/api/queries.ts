@@ -181,7 +181,7 @@ export function makeDefaultSliceRequest(
         view_type: viewType,
         selection,
         time_range: timeWindow,
-        max_points: 300,
+        max_points: 800,
         downsample: "minmax",
       };
     }
@@ -200,7 +200,7 @@ export function makeDefaultSliceRequest(
         view_type: viewType,
         selection,
         time_range: timeWindow,
-        max_points: 600,
+        max_points: 2000,
         downsample: "minmax",
       };
   }
@@ -236,7 +236,7 @@ export function makeNavigatorRequest(
     view_type: "navigator",
     selection,
     time_range: [t0, t1],
-    max_points: 300,
+    max_points: 800,
     downsample: "minmax",
   };
 }

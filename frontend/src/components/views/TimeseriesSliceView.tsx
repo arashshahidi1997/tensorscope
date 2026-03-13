@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import { decodeArrowSlice, extractTimeseriesColumnar } from "../../api/arrow";
+import { extractTimeseriesColumnarFast } from "../../api/arrow";
 import type { BrainstateIntervalDTO } from "../../api/types";
 import type { SliceViewProps } from "./viewTypes";
 import { ChartToolbar, TimeScaleBar } from "./ChartToolbar";
@@ -138,6 +138,7 @@ function attachGestures(chart: uPlot, refs: GestureRefs): () => void {
 
   const onWheel = (e: WheelEvent) => {
     if (!refs.wheelZoomRef.current) return;
+    if (e.shiftKey) return; // Shift+scroll is handled by onWheelYAxis for gain
     e.preventDefault();
     const xMin = chart.scales.x.min ?? 0;
     const xMax = chart.scales.x.max ?? 1;
@@ -152,8 +153,22 @@ function attachGestures(chart: uPlot, refs: GestureRefs): () => void {
   };
 
   const onWheelYAxis = (e: WheelEvent) => {
-    if (!refs.wheelZoomRef.current) return;
     const overRect = over.getBoundingClientRect();
+
+    // Shift+scroll anywhere on the chart applies gain
+    if (e.shiftKey) {
+      e.preventDefault();
+      // Browsers may convert Shift+wheel to horizontal scroll (deltaY→0, deltaX has value)
+      const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      if (delta === 0) return;
+      const factor = delta > 0 ? 1.25 : 0.8;
+      refs.gainMultiplierRef.current *= factor;
+      refs.onGainChange();
+      return;
+    }
+
+    // Non-shift: only respond on the Y-axis area (left of plot), and only when wheel zoom is on
+    if (!refs.wheelZoomRef.current) return;
     if (e.clientX >= overRect.left) return;
     e.preventDefault();
 
@@ -253,8 +268,7 @@ export function TimeseriesSliceView({
   const tools = useChartTools(chartRef);
 
   const { times, series } = useMemo(() => {
-    const decoded = decodeArrowSlice(slice);
-    const raw = extractTimeseriesColumnar(decoded);
+    const raw = extractTimeseriesColumnarFast(slice);
     return {
       times: new Float64Array(raw.times),
       series: raw.series.slice(0, 32),
@@ -265,6 +279,36 @@ export function TimeseriesSliceView({
     () => series.map((s) => `${s.key}:${s.label}`).join("|"),
     [series],
   );
+
+  /**
+   * Compute an optimal gain multiplier so that channel traces fill their
+   * allocated vertical space.  The server z-scores each channel (std ≈ 1)
+   * and spaces them 3 units apart.  We want the visible IQR (p25–p75) to
+   * span about 60% of the 3-unit slot, so gain = target_range / actual_iqr.
+   */
+  const computeAutoGain = (seriesData: { values: number[] }[]): number => {
+    const TARGET_FILL = 1.8; // how many units of the 3-unit slot we want the IQR to fill
+    const iqrs: number[] = [];
+    for (const s of seriesData) {
+      const sorted = s.values.filter(Number.isFinite).sort((a, b) => a - b);
+      if (sorted.length < 4) continue;
+      // Compute IQR around each channel's mean (offset)
+      let sum = 0;
+      for (const v of sorted) sum += v;
+      const mean = sum / sorted.length;
+      const centered = sorted.map((v) => v - mean);
+      centered.sort((a, b) => a - b);
+      const q25 = centered[Math.floor(centered.length * 0.25)];
+      const q75 = centered[Math.floor(centered.length * 0.75)];
+      const iqr = q75 - q25;
+      if (iqr > 1e-12) iqrs.push(iqr);
+    }
+    if (iqrs.length === 0) return 1;
+    // Use the median IQR across channels
+    iqrs.sort((a, b) => a - b);
+    const medianIQR = iqrs[Math.floor(iqrs.length / 2)];
+    return Math.max(0.1, Math.min(20, TARGET_FILL / medianIQR));
+  };
 
   const buildScaledData = (
     timesArr: Float64Array,
@@ -305,6 +349,10 @@ export function TimeseriesSliceView({
 
   const buildChartData = (): [Float64Array, ...Float32Array[]] | null => {
     if (times.length === 0 || series.length === 0) return null;
+    // In auto-gain mode, recompute the optimal gain for each new data payload
+    if (tools.yModeRef.current === "yAuto") {
+      gainMultiplierRef.current = computeAutoGain(series);
+    }
     return buildScaledData(times, series, gainMultiplierRef.current);
   };
 
@@ -592,6 +640,14 @@ export function TimeseriesSliceView({
     chart.over.style.cursor = tools.activeTool === "pan" ? "grab" : "crosshair";
   }, [tools.activeTool]);
 
+  // When switching to auto-gain mode, immediately recompute and apply the optimal gain
+  useEffect(() => {
+    if (tools.yMode !== "yAuto") return;
+    if (series.length === 0) return;
+    gainMultiplierRef.current = computeAutoGain(series);
+    applyGain();
+  }, [tools.yMode, series]);
+
   useEffect(() => {
     const chart = chartRef.current;
     selectionTimeRef.current = selection?.time ?? null;
@@ -647,7 +703,17 @@ export function TimeseriesSliceView({
         title={`${series.length} ch \u00B7 ${times.length} samples`}
       />
       {onTimeWindowChange && (
-        <TimeScaleBar timeCursor={selection?.time ?? times[0] ?? 0} onTimeWindowChange={onTimeWindowChange} />
+        <TimeScaleBar
+          timeCursor={selection?.time ?? times[0] ?? 0}
+          onTimeWindowChange={onTimeWindowChange}
+          onJumpToTime={onSelectTime}
+          onImmediateZoom={(window) => {
+            const chart = chartRef.current;
+            if (!chart) return;
+            xRangeRef.current = window;
+            chart.setScale("x", { min: window[0], max: window[1] });
+          }}
+        />
       )}
     </div>
   );
