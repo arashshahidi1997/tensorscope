@@ -1,9 +1,0 @@
-pyproject.toml
-src/tensorscope/__init__.py
-src/tensorscope.egg-info/PKG-INFO
-src/tensorscope.egg-info/SOURCES.txt
-src/tensorscope.egg-info/dependency_links.txt
-src/tensorscope.egg-info/entry_points.txt
-src/tensorscope.egg-info/requires.txt
-src/tensorscope.egg-info/top_level.txt
-tests/test_tensorscope.py
