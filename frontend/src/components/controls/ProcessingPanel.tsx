@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { ProcessingParamsDTO } from "../../api/types";
+import { useActivityStore } from "../../store/activityStore";
 
 type Props = {
   params: ProcessingParamsDTO;
   onApply: (params: ProcessingParamsDTO) => void;
   isPending?: boolean;
+  tensorName?: string;
+  onClose?: () => void;
 };
 
 const DEFAULT: ProcessingParamsDTO = {
@@ -22,7 +25,7 @@ const DEFAULT: ProcessingParamsDTO = {
   zscore_robust: false,
 };
 
-export function ProcessingPanel({ params, onApply, isPending }: Props) {
+export function ProcessingPanel({ params, onApply, isPending, tensorName, onClose }: Props) {
   const [draft, setDraft] = useState<ProcessingParamsDTO>(params);
   const [notchMode, setNotchMode] = useState<"harmonics" | "list">(
     draft.notch_freqs_list ? "list" : "harmonics",
@@ -33,6 +36,21 @@ export function ProcessingPanel({ params, onApply, isPending }: Props) {
   const [live, setLive] = useState(false);
   const onApplyRef = useRef(onApply);
   useEffect(() => { onApplyRef.current = onApply; });
+
+  const addActivity = useActivityStore((s) => s.addActivity);
+  const updateActivity = useActivityStore((s) => s.updateActivity);
+
+  function handleApply(params: ProcessingParamsDTO) {
+    const actId = crypto.randomUUID();
+    const startedAt = Date.now();
+    addActivity({ id: actId, label: "Processing: apply pipeline", status: "running", startedAt });
+    try {
+      onApply(params);
+      updateActivity(actId, { status: "done", endedAt: Date.now(), elapsed: Date.now() - startedAt });
+    } catch (e) {
+      updateActivity(actId, { status: "error", error: e instanceof Error ? e.message : String(e) });
+    }
+  }
 
   // Reactive mode: debounce Apply calls whenever draft changes
   useEffect(() => {
@@ -82,8 +100,21 @@ export function ProcessingPanel({ params, onApply, isPending }: Props) {
   }
 
   return (
-    <div className="panel">
-      <div className="panel-title">Processing</div>
+    <div
+      className="panel"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && !e.shiftKey && !isPending && !live) {
+          e.preventDefault();
+          handleApply(buildFinal());
+        }
+        if (e.key === "Escape") {
+          onClose?.();
+        }
+      }}
+    >
+      <div className="panel-title">
+        Processing{tensorName ? <span className="panel-title-scope"> — {tensorName}</span> : null}
+      </div>
 
       {/* CMR */}
       <label className="check-row">
@@ -238,7 +269,7 @@ export function ProcessingPanel({ params, onApply, isPending }: Props) {
         <button
           type="button"
           className="action-button"
-          onClick={() => onApply(buildFinal())}
+          onClick={() => handleApply(buildFinal())}
           disabled={isPending || live}
           title={live ? "Disable Live mode to use Apply" : undefined}
         >
@@ -259,7 +290,7 @@ export function ProcessingPanel({ params, onApply, isPending }: Props) {
             setDraft(DEFAULT);
             setNotchMode("harmonics");
             setNotchListText("");
-            onApply(DEFAULT);
+            handleApply(DEFAULT);
           }}
         >
           Reset

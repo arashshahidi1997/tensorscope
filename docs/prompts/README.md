@@ -17,6 +17,10 @@ Use these docs together, not interchangeably.
 - [M4 prompt pack](./tensorscope-m4/README.md): transform registry and derived-tensor milestone
 - [M5 prompt pack](./tensorscope-m5/README.md): transform DAG and workspace-graph milestone
 - [M6 prompt pack](./tensorscope-m6/README.md): pipeline export and workflow-cooking milestone
+- [M7 prompt pack](./tensorscope-m7/README.md): dynamic workspace layout
+- [M8 prompt pack](./tensorscope-m8/README.md): UI polish, stable layout, and PSD panel
+- [M9 prompt pack](./tensorscope-m9/README.md): multi-tensor workspace and interactive exploration
+- [M10 prompt pack](./tensorscope-m10/README.md): object workspace, timeline UX, and generalized propagation
 - [MA1 prompt pack](./tensorscope-ma1/README.md): optional GPU acceleration track
 - [MA2 prompt pack](./tensorscope-ma2/README.md): optional queryable-workspace track
 - [Transform DAG architecture note](../architecture/transform-dag.md): workspace DAG and lineage model
@@ -206,6 +210,25 @@ M9 lives in [`docs/prompts/tensorscope-m9/`](./tensorscope-m9/README.md) and foc
 - generalized heatmap interaction gestures (zoom, pan, drag-select)
 - event detection framework integrated with the transform DAG
 - PSD settings panel and frequency log scale
+
+## Prompt Pack M10: Object Workspace, Timeline UX, And Generalized Propagation
+
+Milestone index:
+
+- [M10 README](./tensorscope-m10/README.md)
+
+M10 turns the multi-tensor workspace into a more legible object-centric scientific environment.
+
+M10 lives in [`docs/prompts/tensorscope-m10/`](./tensorscope-m10/README.md) and focuses on:
+
+- explicit workspace objects for source and derived tensors
+- navigator-led selected-time control and snapped duration presets
+- clearer timeseries controls including discoverable Y modes
+- multi-object row/column/single layouts
+- generalized propagation as a reusable capability
+- object-scoped processing
+- transform activity and feedback
+- cleanup of low-value legacy UI surfaces
 
 ## Optional Prompt Pack MA1: GPU Rendering Acceleration
 

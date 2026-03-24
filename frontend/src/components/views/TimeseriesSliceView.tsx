@@ -4,7 +4,7 @@ import "uplot/dist/uPlot.min.css";
 import { extractTimeseriesColumnarFast } from "../../api/arrow";
 import type { BrainstateIntervalDTO } from "../../api/types";
 import type { SliceViewProps } from "./viewTypes";
-import { ChartToolbar, TimeScaleBar } from "./ChartToolbar";
+import { ChartToolbar } from "./ChartToolbar";
 import { useChartTools } from "./useChartTools";
 import type { GestureTool, YMode } from "./useChartTools";
 import { makeBrainstateDrawHook } from "./brainstateOverlay";
@@ -176,7 +176,7 @@ function attachGestures(chart: uPlot, refs: GestureRefs): () => void {
     const yMax = chart.scales.y?.max ?? 1;
     const factor = e.deltaY > 0 ? 1.25 : 0.8;
 
-    if (refs.yModeRef.current === "yZoom") {
+    if (refs.yModeRef.current === "fixed") {
       const overH = over.clientHeight || 1;
       const yInOver = e.clientY - overRect.top;
       const yFrac = clamp(yInOver / overH, 0, 1);
@@ -350,7 +350,7 @@ export function TimeseriesSliceView({
   const buildChartData = (): [Float64Array, ...Float32Array[]] | null => {
     if (times.length === 0 || series.length === 0) return null;
     // In auto-gain mode, recompute the optimal gain for each new data payload
-    if (tools.yModeRef.current === "yAuto") {
+    if (tools.yModeRef.current === "auto") {
       gainMultiplierRef.current = computeAutoGain(series);
     }
     return buildScaledData(times, series, gainMultiplierRef.current);
@@ -498,6 +498,45 @@ export function TimeseriesSliceView({
                   onTimeWindowChangeRef.current?.([min, max]);
                 },
               ],
+              drawAxes: [
+                (u) => {
+                  // Draw auto-grouped channel labels to the left of the Y-axis.
+                  // Only shown when >= 8 channels are present; groups are 4 channels each.
+                  const offsets = rawDataRef.current?.offsets;
+                  if (!offsets || series.length < 8) return;
+                  const GROUP_SIZE = 4;
+                  const nGroups = Math.ceil(series.length / GROUP_SIZE);
+                  const ctx = u.ctx;
+                  const dpr = window.devicePixelRatio || 1;
+                  ctx.save();
+                  ctx.font = `${Math.round(9 * dpr)}px Inter,ui-sans-serif,sans-serif`;
+                  ctx.textAlign = "right";
+                  ctx.textBaseline = "middle";
+                  for (let g = 0; g < nGroups; g++) {
+                    const firstIdx = g * GROUP_SIZE;
+                    const lastIdx = Math.min(firstIdx + GROUP_SIZE - 1, offsets.length - 1);
+                    if (firstIdx >= offsets.length) break;
+                    const yTop = u.valToPos(offsets[firstIdx], "y", true);
+                    const yBot = u.valToPos(offsets[lastIdx], "y", true);
+                    const yMid = (yTop + yBot) / 2;
+                    if (yMid < u.bbox.top || yMid > u.bbox.top + u.bbox.height) continue;
+                    ctx.fillStyle = "#6b7280";
+                    ctx.fillText(`${firstIdx}–${lastIdx}`, u.bbox.left - 6 * dpr, yMid);
+                    if (g > 0) {
+                      const ySep = (yTop + u.valToPos(offsets[firstIdx - 1], "y", true)) / 2;
+                      if (ySep >= u.bbox.top && ySep <= u.bbox.top + u.bbox.height) {
+                        ctx.strokeStyle = "rgba(148,163,184,0.15)";
+                        ctx.lineWidth = dpr;
+                        ctx.beginPath();
+                        ctx.moveTo(0, ySep);
+                        ctx.lineTo(u.bbox.left - 2 * dpr, ySep);
+                        ctx.stroke();
+                      }
+                    }
+                  }
+                  ctx.restore();
+                },
+              ],
               drawClear: [
                 makeBrainstateDrawHook(brainstateIntervalsRef, brainstateEnabledRef),
               ],
@@ -640,9 +679,9 @@ export function TimeseriesSliceView({
     chart.over.style.cursor = tools.activeTool === "pan" ? "grab" : "crosshair";
   }, [tools.activeTool]);
 
-  // When switching to auto-gain mode, immediately recompute and apply the optimal gain
+  // When switching to auto/fit mode, immediately recompute and apply the optimal gain
   useEffect(() => {
-    if (tools.yMode !== "yAuto") return;
+    if (tools.yMode !== "auto" && tools.yMode !== "fit") return;
     if (series.length === 0) return;
     gainMultiplierRef.current = computeAutoGain(series);
     applyGain();
@@ -702,19 +741,6 @@ export function TimeseriesSliceView({
         style={{ flex: 1, minHeight: 0 }}
         title={`${series.length} ch \u00B7 ${times.length} samples`}
       />
-      {onTimeWindowChange && (
-        <TimeScaleBar
-          timeCursor={selection?.time ?? times[0] ?? 0}
-          onTimeWindowChange={onTimeWindowChange}
-          onJumpToTime={onSelectTime}
-          onImmediateZoom={(window) => {
-            const chart = chartRef.current;
-            if (!chart) return;
-            xRangeRef.current = window;
-            chart.setScale("x", { min: window[0], max: window[1] });
-          }}
-        />
-      )}
     </div>
   );
 }

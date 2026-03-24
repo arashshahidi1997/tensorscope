@@ -7,6 +7,7 @@ beforeEach(() => {
   useSelectionStore.setState({
     timeCursor: 0,
     timeWindow: [0, 2],
+    viewportDuration: 1,
     spatial: { ap: 0, ml: 0, channel: null, hoveredId: null, selectedIds: [] },
     freq: { freq: 0 },
     event: { eventId: null, streamName: null },
@@ -28,17 +29,16 @@ describe("setTimeCursor", () => {
   });
 
   it("re-centers window when cursor jumps outside", () => {
-    useSelectionStore.setState({ timeWindow: [0, 2] });
+    useSelectionStore.setState({ timeWindow: [0, 2], viewportDuration: 2 });
     getStore().setTimeCursor(10);
     expect(getStore().timeWindow[0]).toBeCloseTo(9);
     expect(getStore().timeWindow[1]).toBeCloseTo(11);
   });
 
   it("clamps window start to 0 for very early times", () => {
-    // Start with a window that won't contain 0.3
-    useSelectionStore.setState({ timeWindow: [5, 10] });
+    // Start with a window that won't contain 0.3; viewportDuration=2 → window [-0.7, 1.3] → clamped [0, 1.3]
+    useSelectionStore.setState({ timeWindow: [5, 10], viewportDuration: 2 });
     getStore().setTimeCursor(0.3);
-    // window would be [-0.7, 1.3] — clamp start to 0
     expect(getStore().timeWindow[0]).toBe(0);
     expect(getStore().timeWindow[1]).toBeCloseTo(1.3);
   });
@@ -137,13 +137,14 @@ describe("linked update semantics", () => {
     expect(getStore().spatial.ml).toBe(7);
   });
 
-  it("event navigation updates timeCursor and re-centers window", () => {
-    useSelectionStore.setState({ timeWindow: [0, 2] });
-    // Simulate event table committing a new time
+  it("event navigation updates timeCursor and re-centers window using viewportDuration", () => {
+    useSelectionStore.setState({ timeWindow: [0, 2], viewportDuration: 1 });
+    // Simulate event table committing a new time outside the visible window
     getStore().setTimeCursor(15);
     const s = getStore();
     expect(s.timeCursor).toBe(15);
-    expect(s.timeWindow).toEqual([14, 16]);
+    // Re-centers at viewportDuration=1: [14.5, 15.5]
+    expect(s.timeWindow).toEqual([14.5, 15.5]);
   });
 });
 

@@ -73,3 +73,11 @@
 	path = .claude/worktrees/agent-af36b89c
 	url = ./.claude/worktrees/agent-af36b89c
 	datalad-id = 695eb2c6-b228-452f-8fe5-c7fd1ae42d67
+[submodule ".claude/worktrees/agent-a263e355"]
+	path = .claude/worktrees/agent-a263e355
+	url = ./.claude/worktrees/agent-a263e355
+	datalad-id = 695eb2c6-b228-452f-8fe5-c7fd1ae42d67
+[submodule ".claude/worktrees/agent-aba8bf49"]
+	path = .claude/worktrees/agent-aba8bf49
+	url = ./.claude/worktrees/agent-aba8bf49
+	datalad-id = 695eb2c6-b228-452f-8fe5-c7fd1ae42d67

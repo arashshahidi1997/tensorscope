@@ -23,7 +23,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type uPlot from "uplot";
 
 export type GestureTool = "pan" | "zoom";
-export type YMode = "yZoom" | "yGain" | "yAuto";
+export type YMode = "auto" | "fixed" | "fit";
 
 export type ChartToolsResult = {
   activeTool: GestureTool;
@@ -52,13 +52,13 @@ export function useChartTools(
 ): ChartToolsResult {
   const [activeTool, setActiveTool] = useState<GestureTool>("zoom");
   const [wheelZoom, setWheelZoom] = useState(true);
-  const [yMode, setYMode] = useState<YMode>("yZoom");
+  const [yMode, setYMode] = useState<YMode>("auto");
 
   // Mirror state into refs so gesture handlers always read current values
   // without requiring chart recreation when tool changes.
   const toolRef = useRef<GestureTool>("zoom");
   const wheelZoomRef = useRef(true);
-  const yModeRef = useRef<YMode>("yZoom");
+  const yModeRef = useRef<YMode>("auto");
   useEffect(() => { toolRef.current = activeTool; }, [activeTool]);
   useEffect(() => { wheelZoomRef.current = wheelZoom; }, [wheelZoom]);
   useEffect(() => { yModeRef.current = yMode; }, [yMode]);

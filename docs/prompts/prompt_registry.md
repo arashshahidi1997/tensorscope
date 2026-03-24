@@ -67,3 +67,18 @@ Milestone: M2 - Data And Linked Scientific Views
 - Dependencies here are intentionally conservative and based on documented prompt order plus each prompt's stated prerequisites.
 - Some prompts can likely be run out of strict order once earlier contracts are stable, but that should be decided from the milestone READMEs and current repo state.
 - Update `Status` only when completion is explicitly documented in the milestone docs, context snapshot, or handoff notes.
+
+## M10 Registry
+
+Milestone: M10 - Object Workspace, Timeline UX, And Generalized Propagation
+
+| Prompt | Milestone | Title | Purpose | Likely dependencies | Likely affected subsystem(s) | Status |
+|---|---|---|---|---|---|---|
+| `100` | M10 | Object-centric panel chrome and visibility model | Makes source and derived tensors legible as workspace objects with explicit visibility and actions. | M9 multi-tensor assumptions, workspace shell stability | frontend layout chrome, object model, workspace controls | planned |
+| `101` | M10 | Timeline cursor and snapped duration model | Makes the navigator authoritative for selected time and exact duration presets. | M8 timeseries/navigation behavior | selection state, navigator UI, chart controls | planned |
+| `102` | M10 | Timeseries control cleanup | Replaces hidden or cryptic Y-mode controls with explicit discoverable timeseries control UI. | `101` | timeseries toolbar, chart behavior, UX polish | planned |
+| `103` | M10 | Multi-object layout modes | Adds single/row/column layout semantics for visible objects. | `100` | workspace layout, panel composition, styles | planned |
+| `104` | M10 | General propagation controller | Replaces the one-off propagation frame with a reusable propagation capability. | `100`, `103` | propagation UI, view registry, workspace state | planned |
+| `105` | M10 | Object-scoped processing UX | Moves transform launch/apply workflows onto object-level actions. | `100` | processing panel, object chrome, transform launch UX | planned |
+| `106` | M10 | Execution activity and transform feedback | Makes transform lifecycle visible through logs or activity surfaces. | current transform execution flow | activity/reporting, processing UX, observability | planned |
+| `107` | M10 | Channel-stack grouped labeling and track cleanup | Improves dense channel readability and removes low-value default strips. | `101`, `103` | timeseries/channel labels, layout cleanup | planned |

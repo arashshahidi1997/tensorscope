@@ -15,7 +15,7 @@ Read first:
 MA2 adds optional structured query and assistant-integration capabilities around the TensorScope workspace.
 
 This is an optional MA track, not part of the core M4 through M6 milestone chain.
-
+;
 ## Architectural role
 
 MA2 is an advanced extension track. It exposes existing workspace, graph, and tensor state through structured interfaces for command palettes, queries, and external agents.

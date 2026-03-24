@@ -29,6 +29,7 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
   const brainstateMetaQuery = useBrainstateMetaQuery();
   const brainstateAvailable = brainstateMetaQuery.data?.available ?? false;
   const {
+    selectedTensor,
     brainstateOverlay,
     showHypnogram,
     toggleBrainstateOverlay,
@@ -51,6 +52,7 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
             params={processingQuery.data}
             onApply={(p) => setProcessingMutation.mutate(p)}
             isPending={setProcessingMutation.isPending}
+            tensorName={selectedTensor ?? undefined}
           />
         )}
       </CollapsibleSection>

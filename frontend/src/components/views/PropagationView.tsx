@@ -8,6 +8,9 @@ type PropagationViewProps = SliceViewProps & {
   onHoverElectrode?: (id: number | null) => void;
   hoveredId?: number | null;
   selectedIds?: number[];
+  /** Override color scale min/max (for color-locked multi-frame views). */
+  globalMin?: number;
+  globalMax?: number;
 };
 
 export function PropagationView({
@@ -17,6 +20,8 @@ export function PropagationView({
   onHoverElectrode,
   hoveredId = null,
   selectedIds = [],
+  globalMin,
+  globalMax,
 }: PropagationViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -79,8 +84,8 @@ export function PropagationView({
         colorScale: "sequential",
         hoveredId,
         selectedIds,
-        minValue: minValueRef.current,
-        maxValue: maxValueRef.current,
+        minValue: globalMin ?? minValueRef.current,
+        maxValue: globalMax ?? maxValueRef.current,
       });
     });
 
@@ -104,8 +109,8 @@ export function PropagationView({
       colorScale: "sequential",
       hoveredId: hoveredId ?? null,
       selectedIds,
-      minValue: minValueRef.current,
-      maxValue: maxValueRef.current,
+      minValue: globalMin ?? minValueRef.current,
+      maxValue: globalMax ?? maxValueRef.current,
     });
 
     // Draw the time label overlay on top of the rendered cells.
@@ -123,7 +128,7 @@ export function PropagationView({
         }
       }
     }
-  }, [slice, hoveredId, selectedIds]);
+  }, [slice, hoveredId, selectedIds, globalMin, globalMax]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {

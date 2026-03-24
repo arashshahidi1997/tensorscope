@@ -3,6 +3,14 @@ import type { LayoutDTO } from "../api/types";
 
 export type ThemeId = "plotly-dark" | "bokeh-dark" | "panel-light";
 
+export type WorkspaceObject = {
+  id: string;
+  name: string;
+  tensorName: string;
+  type: "source" | "derived";
+  visible: boolean;
+};
+
 const THEME_IDS: ThemeId[] = ["plotly-dark", "bokeh-dark", "panel-light"];
 
 function getInitialTheme(): ThemeId {
@@ -28,6 +36,11 @@ type AppStore = {
   psdNW: number;
   psdWindowS: number;
   freqLogScale: boolean;
+  workspaceObjects: WorkspaceObject[];
+  setWorkspaceObjects: (objs: WorkspaceObject[]) => void;
+  setObjectVisible: (id: string, visible: boolean) => void;
+  objectLayoutMode: "single" | "row" | "column";
+  setObjectLayoutMode: (m: "single" | "row" | "column") => void;
   setSelectedTensor: (value: string) => void;
   setPanelTensor: (slotId: string, tensorName: string) => void;
   clearPanelTensor: (slotId: string) => void;
@@ -50,7 +63,7 @@ export const useAppStore = create<AppStore>((set) => ({
   layoutDraft: null,
   theme: getInitialTheme(),
   brainstateOverlay: true,
-  showHypnogram: true,
+  showHypnogram: false,
   setSelectedTensor: (value) => set({ selectedTensor: value, activeViews: [], panelTensorOverrides: {} }),
   setPanelTensor: (slotId, tensorName) =>
     set((s) => ({ panelTensorOverrides: { ...s.panelTensorOverrides, [slotId]: tensorName } })),
@@ -79,6 +92,16 @@ export const useAppStore = create<AppStore>((set) => ({
   },
   toggleBrainstateOverlay: () => set((s) => ({ brainstateOverlay: !s.brainstateOverlay })),
   toggleHypnogram: () => set((s) => ({ showHypnogram: !s.showHypnogram })),
+  workspaceObjects: [],
+  setWorkspaceObjects: (objs) => set({ workspaceObjects: objs }),
+  setObjectVisible: (id, visible) =>
+    set((s) => ({
+      workspaceObjects: s.workspaceObjects.map((o) =>
+        o.id === id ? { ...o, visible } : o,
+      ),
+    })),
+  objectLayoutMode: "single",
+  setObjectLayoutMode: (m) => set({ objectLayoutMode: m }),
   psdFmax: 100,
   psdNW: 4,
   psdWindowS: 1,

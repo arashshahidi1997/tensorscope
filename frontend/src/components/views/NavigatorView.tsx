@@ -59,12 +59,10 @@ export function NavigatorView({
   slice,
   selection,
   onSelectTime,
-  timeWindow,
   onTimeWindowChange,
   brainstateIntervals = [],
   brainstateOverlayEnabled = false,
 }: SliceViewProps & {
-  timeWindow?: [number, number];
   onTimeWindowChange?: (window: [number, number]) => void;
   brainstateIntervals?: BrainstateIntervalDTO[];
   brainstateOverlayEnabled?: boolean;
@@ -77,6 +75,7 @@ export function NavigatorView({
   const onWindowRef = useRef(onTimeWindowChange);
   const brainstateIntervalsRef = useRef(brainstateIntervals);
   const brainstateEnabledRef = useRef(brainstateOverlayEnabled);
+  const selectionTimeRef = useRef<number | null>(null);
   useEffect(() => { onSelectTimeRef.current = onSelectTime; });
   useEffect(() => { onWindowRef.current = onTimeWindowChange; });
   useEffect(() => { brainstateIntervalsRef.current = brainstateIntervals; });
@@ -145,6 +144,23 @@ export function NavigatorView({
           drawClear: [
             makeBrainstateDrawHook(brainstateIntervalsRef, brainstateEnabledRef),
           ],
+          draw: [
+            (u) => {
+              const t = selectionTimeRef.current;
+              if (t == null || !Number.isFinite(t)) return;
+              const x = Math.round(u.valToPos(t, "x", true));
+              if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) return;
+              const ctx = u.ctx;
+              ctx.save();
+              ctx.strokeStyle = "rgba(120, 255, 240, 0.9)";
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.moveTo(x, u.bbox.top);
+              ctx.lineTo(x, u.bbox.top + u.bbox.height);
+              ctx.stroke();
+              ctx.restore();
+            },
+          ],
         },
       },
       [new Float64Array(times), new Float32Array(meanValues)],
@@ -185,9 +201,11 @@ export function NavigatorView({
   // ── Hot sync: cursor marker follows selection ────────────────────────────
   useEffect(() => {
     const chart = chartRef.current;
+    selectionTimeRef.current = selection?.time ?? null;
     if (!chart || times.length === 0 || !selection) return;
     const x = chart.valToPos(selection.time, "x");
     if (Number.isFinite(x)) chart.setCursor({ left: x, top: -1 });
+    chart.redraw();
   }, [selection?.time, times]);
 
   // ── Hot sync: redraw when brainstate intervals or overlay toggle change ──

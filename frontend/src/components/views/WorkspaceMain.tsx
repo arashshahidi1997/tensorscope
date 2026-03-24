@@ -13,6 +13,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   clampWindow,
   makeDefaultSliceRequest,
+  useProcessingQuery,
+  useSetProcessing,
   makeNavigatorRequest,
   makePSDLiveRequest,
   useBrainstateIntervalsQuery,
@@ -23,24 +25,25 @@ import {
   useTensorQuery,
 } from "../../api/queries";
 import { decodeArrowSlice, extractPSDHeatmap, extractPSDAverage } from "../../api/arrow";
-import type { SelectionDTO, TensorSliceDTO } from "../../api/types";
+import type { SelectionDTO } from "../../api/types";
 import { useAppStore } from "../../store/appStore";
 import { useSelectionStore, toSelectionDTO } from "../../store/selectionStore";
 import { getAvailableViews, getOrthoPair, viewRegistry } from "../../registry/viewRegistry";
 import { HypnogramView } from "./HypnogramView";
 import { NavigatorView } from "./NavigatorView";
+import { TimeScaleBar } from "./ChartToolbar";
 import { PSDHeatmapView } from "./PSDHeatmapView";
 import { PSDCurveView } from "./PSDCurveView";
 import { PSDSpatialView } from "./PSDSpatialView";
-import { PropagationView } from "./PropagationView";
+import { PropagationController } from "./PropagationController";
 import { SpatialMapSliceView } from "./SpatialMapSliceView";
-import { AnimationController } from "../controls/AnimationController";
 import { SpatialEventView } from "./SpatialEventView";
 import { TimeseriesSliceView } from "./TimeseriesSliceView";
 import { OrthoSlicerView } from "./OrthoSlicerView";
 import { TensorChooser } from "./TensorChooser";
 import { TensorOverview } from "./TensorOverview";
 import { ViewGrid } from "./ViewGrid";
+import { ProcessingPanel } from "../controls/ProcessingPanel";
 
 const PSD_LIVE_EXPANSION = ["psd_heatmap", "psd_curve", "psd_spatial"];
 
@@ -60,7 +63,25 @@ type WorkspaceMainProps = {
   renderNavigator?: (node: ReactNode) => void;
 };
 
+/** Inline processing panel scoped to a specific tensor, used from the chip strip. */
+function ObjectProcessingPanel({ tensorName, onClose }: { tensorName: string; onClose: () => void }) {
+  const processingQuery = useProcessingQuery();
+  const setProcessingMutation = useSetProcessing();
+  if (!processingQuery.data) return null;
+  return (
+    <ProcessingPanel
+      params={processingQuery.data}
+      onApply={(p) => setProcessingMutation.mutate(p)}
+      isPending={setProcessingMutation.isPending}
+      tensorName={tensorName}
+      onClose={onClose}
+    />
+  );
+}
+
 export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceMainProps) {
+  const [processingObjectId, setProcessingObjectId] = useState<string | null>(null);
+
   const {
     selectedTensor,
     activeViews,
@@ -72,9 +93,14 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     psdNW,
     psdWindowS,
     freqLogScale,
+    workspaceObjects,
+    setWorkspaceObjects,
+    setObjectVisible,
+    objectLayoutMode,
+    setObjectLayoutMode,
   } = useAppStore();
   const selectionState = useSelectionStore();
-  const { timeWindow, setTimeWindow, setFreq, setHoveredElectrode } = selectionState;
+  const { timeWindow, setTimeWindow, setFreq, setHoveredElectrode, viewportDuration, setViewportDuration } = selectionState;
 
   // Store-local freq update — no server round-trip; spectrogram and PSD already
   // render the full freq range and project the cursor client-side.
@@ -89,6 +115,21 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     const active = stateQuery.data?.active_tensor;
     if (!selectedTensor && active) setSelectedTensor(active);
   }, [selectedTensor, stateQuery.data?.active_tensor, setSelectedTensor]);
+
+  // Synthesize workspace objects from the tensor list
+  useEffect(() => {
+    const tensors = stateQuery.data?.tensors;
+    if (!tensors) return;
+    setWorkspaceObjects(
+      tensors.map((t) => ({
+        id: t.name,
+        name: t.name,
+        tensorName: t.name,
+        type: t.source !== null ? "derived" : "source",
+        visible: true,
+      })),
+    );
+  }, [stateQuery.data?.tensors, setWorkspaceObjects]);
 
   const tensorQuery = useTensorQuery(selectedTensor);
 
@@ -134,69 +175,6 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     selectedTensor,
     hasSpatial ? makeDefaultSliceRequest("spatial_map", selectionDraft, safeWindow) : null,
   );
-  // Subscribe to timeCursor directly so propagation re-fetches on every
-  // AnimationController tick (timeCursor drives frame_time).
-  const timeCursor = useSelectionStore((s) => s.timeCursor);
-
-  // Propagation frame — sequential fetch with a queue of 1.
-  //
-  // AbortController breaks here: at 10 fps each cursor tick arrives every ~100 ms,
-  // so effect cleanup (abort) fires before the server can respond. The fix: allow
-  // only one request in-flight. When the cursor moves during a pending request,
-  // store the latest cursor in a ref and fetch it immediately upon completion.
-  // This naturally plays at the server's throughput rate, never faster.
-  const [propagationFrame, setPropagationFrame] = useState<TensorSliceDTO | null>(null);
-
-  // Always-current refs so async callbacks never capture stale closures.
-  const propagationSelRef = useRef(selectionDraft);
-  propagationSelRef.current = selectionDraft;
-  const propInFlightRef = useRef(false);
-  const propPendingRef = useRef<{ tensor: string; time: number } | null>(null);
-
-  // Stored in a ref so the async .then() can call it recursively via the ref
-  // without capturing stale deps or needing useCallback dependencies.
-  const fetchPropFrame = useRef<(tensor: string, time: number) => void>(null!);
-  fetchPropFrame.current = (tensor, time) => {
-    propInFlightRef.current = true;
-    fetch(`/api/v1/tensors/${tensor}/slice`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        view_type: "propagation_frame",
-        selection: propagationSelRef.current,
-        frame_time: time,
-      }),
-    })
-      .then((r) => (r.ok ? (r.json() as Promise<TensorSliceDTO>) : Promise.reject()))
-      .then((data) => {
-        setPropagationFrame(data);
-        propInFlightRef.current = false;
-        // If the animation advanced while this request was in-flight, fetch
-        // the queued cursor immediately so the player catches up.
-        const pending = propPendingRef.current;
-        if (pending) {
-          propPendingRef.current = null;
-          fetchPropFrame.current(pending.tensor, pending.time);
-        }
-      })
-      .catch(() => { propInFlightRef.current = false; });
-  };
-
-  useEffect(() => {
-    if (!hasPropagation || !selectedTensor) {
-      propInFlightRef.current = false;
-      propPendingRef.current = null;
-      setPropagationFrame(null);
-      return;
-    }
-    if (propInFlightRef.current) {
-      // A request is in-flight — queue this cursor; .then() will pick it up.
-      propPendingRef.current = { tensor: selectedTensor, time: timeCursor };
-    } else {
-      fetchPropFrame.current(selectedTensor, timeCursor);
-    }
-  }, [hasPropagation, selectedTensor, timeCursor]);
   const psdSliceQuery = useSliceQuery(
     selectedTensor,
     hasPSD ? makeDefaultSliceRequest("psd_average", selectionDraft, safeWindow) : null,
@@ -259,10 +237,15 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
             slice={navigatorData}
             selection={selectionDraft}
             onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
-            timeWindow={timeWindow}
             onTimeWindowChange={setTimeWindow}
             brainstateIntervals={brainstateIntervals}
             brainstateOverlayEnabled={brainstateOverlay && brainstateAvailable}
+          />
+          <TimeScaleBar
+            timeCursor={selectionDraft.time}
+            viewportDuration={viewportDuration}
+            onViewportDurationChange={setViewportDuration}
+            onJumpToTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
           />
           {showHypnogram && brainstateAvailable && brainstateIntervals.length > 0 && (
             <HypnogramView
@@ -319,24 +302,15 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
 
   if (hasPropagation) {
     viewElements["propagation_frame"] = (
-      <div className="propagation-panel">
-        {timeCoord && (
-          <AnimationController
-            timeRange={[timeCoord.min as number ?? 0, timeCoord.max as number ?? 10]}
-            fps={10}
-          />
-        )}
-        {propagationFrame ? (
-          <PropagationView
-            slice={propagationFrame}
-            selection={selectionDraft}
-            onSelectCell={(ap, ml) =>
-              onCommitSelection({ ...selectionDraft, ap, ml, channel: null })
-            }
-            onHoverElectrode={setHoveredElectrode}
-          />
-        ) : null}
-      </div>
+      <PropagationController
+        tensorName={selectedTensor}
+        timeCoord={timeCoord}
+        selectionDraft={selectionDraft}
+        onSelectCell={(ap, ml) =>
+          onCommitSelection({ ...selectionDraft, ap, ml, channel: null })
+        }
+        onHoverElectrode={setHoveredElectrode}
+      />
     );
   }
 
@@ -443,10 +417,15 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
             slice={navigatorData}
             selection={selectionDraft}
             onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
-            timeWindow={timeWindow}
             onTimeWindowChange={setTimeWindow}
             brainstateIntervals={brainstateIntervals}
             brainstateOverlayEnabled={brainstateOverlay && brainstateAvailable}
+          />
+          <TimeScaleBar
+            timeCursor={selectionDraft.time}
+            viewportDuration={viewportDuration}
+            onViewportDurationChange={setViewportDuration}
+            onJumpToTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
           />
           {showHypnogram && brainstateAvailable && brainstateIntervals.length > 0 && (
             <HypnogramView
@@ -463,12 +442,67 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         </>
       )}
 
+      {/* Workspace object chips */}
+      {workspaceObjects.length > 1 && (
+        <div className="workspace-object-strip">
+          <div className="object-layout-toggle">
+            {(["single", "row", "column"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={`ts-tool${objectLayoutMode === m ? " active" : ""}`}
+                title={`Layout: ${m}`}
+                onClick={() => setObjectLayoutMode(m)}
+              >
+                {m === "single" ? "⊡" : m === "row" ? "⊟" : "⊞"}
+              </button>
+            ))}
+          </div>
+          {workspaceObjects.map((obj) => (
+            <div
+              key={obj.id}
+              className={`object-chip object-chip--${obj.type}${obj.tensorName === (selectedTensor ?? stateQuery.data?.active_tensor) ? " object-chip--active" : ""}`}
+              onClick={() => setSelectedTensor(obj.tensorName)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelectedTensor(obj.tensorName); }}
+            >
+              <span className="object-chip-dot" />
+              <span className="object-chip-name">{obj.name}</span>
+              <button
+                type="button"
+                className="object-chip-vis"
+                title={obj.visible ? "Hide" : "Show"}
+                onClick={(e) => { e.stopPropagation(); setObjectVisible(obj.id, !obj.visible); }}
+              >
+                {obj.visible ? "●" : "○"}
+              </button>
+              <button
+                type="button"
+                className="object-chip-vis"
+                title="Process…"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setProcessingObjectId((prev) => prev === obj.id ? null : obj.id);
+                }}
+              >
+                ⚙
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {processingObjectId !== null && workspaceObjects.length > 1 && (() => {
+        const obj = workspaceObjects.find((o) => o.id === processingObjectId);
+        return obj ? (
+          <ObjectProcessingPanel
+            tensorName={obj.tensorName}
+            onClose={() => setProcessingObjectId(null)}
+          />
+        ) : null;
+      })()}
+
       {/* View grid replaces the old hardcoded layout */}
-      {/* TODO: Per-panel tensor overrides currently only update the visual label in
-          the panel header. Actual data fetching for overridden panels requires
-          dynamic hook calls (one useSliceQuery per override) which React doesn't
-          support conditionally. A future enhancement could use a dynamic query
-          component or render-per-tensor pattern to fetch data for pinned panels. */}
       <ViewGrid
         viewElements={viewElements}
         activeViewIds={effectiveActiveViews}

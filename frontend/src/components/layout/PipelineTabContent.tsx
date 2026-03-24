@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { useAppStore } from "../../store/appStore";
 import { useStateQuery } from "../../api/queries";
+import { useActivityStore, type ActivityEntry } from "../../store/activityStore";
 import { CollapsibleSection } from "./CollapsibleSection";
 import type { TransformDefinitionDTO, TransformParamSpec } from "../../types/transform";
 import type { DerivedTensorDTO } from "../../types/transform";
@@ -20,6 +21,7 @@ export function PipelineTabContent() {
   const selectedTensor = useAppStore((s) => s.selectedTensor);
   const stateQuery = useStateQuery();
   const activeTensor = selectedTensor ?? stateQuery.data?.active_tensor ?? null;
+  const { entries: activityEntries, addActivity, updateActivity } = useActivityStore();
 
   const [transforms, setTransforms] = useState<TransformDefinitionDTO[]>([]);
   const [selectedTransform, setSelectedTransform] = useState<TransformDefinitionDTO | null>(null);
@@ -70,6 +72,20 @@ export function PipelineTabContent() {
     setExecuting(true);
     setError(null);
     setResult(null);
+    const actId = crypto.randomUUID();
+    const startedAt = Date.now();
+    const transformLabel = selectedTransform.name;
+    addActivity({
+      id: actId,
+      label: `Transform: ${transformLabel}`,
+      status: "running",
+      startedAt,
+      params,
+    });
+    if (import.meta.env.DEV) {
+      console.group(`Transform: ${transformLabel}`);
+      console.log("params:", params);
+    }
     try {
       const derived = await api.executeTransform({
         transform_name: selectedTransform.name,
@@ -77,14 +93,26 @@ export function PipelineTabContent() {
         params,
         tensor_id: outputId || undefined,
       });
+      const elapsed = Date.now() - startedAt;
       setResult(derived);
       setHistory((prev) => [derived, ...prev]);
+      updateActivity(actId, { status: "done", endedAt: Date.now(), elapsed });
+      if (import.meta.env.DEV) {
+        console.log(`done in ${elapsed.toFixed(0)}ms`);
+        console.groupEnd();
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      updateActivity(actId, { status: "error", endedAt: Date.now(), error: msg });
+      if (import.meta.env.DEV) {
+        console.error("error:", msg);
+        console.groupEnd();
+      }
     } finally {
       setExecuting(false);
     }
-  }, [activeTensor, selectedTransform, params, outputId]);
+  }, [activeTensor, selectedTransform, params, outputId, addActivity, updateActivity]);
 
   if (!activeTensor) {
     return <p className="muted">Select a tensor first.</p>;
@@ -177,7 +205,7 @@ export function PipelineTabContent() {
       </CollapsibleSection>
 
       <CollapsibleSection title="Run Detector" defaultOpen={false}>
-        <DetectorSection tensorName={activeTensor} />
+        <DetectorSection tensorName={activeTensor} addActivity={addActivity} updateActivity={updateActivity} />
       </CollapsibleSection>
 
       {history.length > 0 && (
@@ -200,6 +228,26 @@ export function PipelineTabContent() {
           </div>
         </CollapsibleSection>
       )}
+
+      <CollapsibleSection title="Activity" defaultOpen={false}>
+        <div className="activity-log">
+          {activityEntries.slice(-10).reverse().map((e) => (
+            <div key={e.id} className={`activity-entry activity-entry--${e.status}`}>
+              <span className="activity-label">{e.label}</span>
+              {e.status === "running" && <span className="activity-spinner" />}
+              {e.status === "done" && e.elapsed != null && (
+                <span className="activity-elapsed">{(e.elapsed / 1000).toFixed(2)}s</span>
+              )}
+              {e.status === "error" && (
+                <span className="activity-error">{e.error ?? "Error"}</span>
+              )}
+            </div>
+          ))}
+          {activityEntries.length === 0 && (
+            <span className="activity-empty">No activity yet</span>
+          )}
+        </div>
+      </CollapsibleSection>
     </>
   );
 }
@@ -345,8 +393,15 @@ function NumericInput({
   );
 }
 
+type AddActivity = (entry: ActivityEntry) => void;
+type UpdateActivity = (id: string, patch: Partial<Omit<ActivityEntry, "id">>) => void;
+
 /** Detector section — lets the user pick a detector, configure params, and run it. */
-function DetectorSection({ tensorName }: { tensorName: string }) {
+function DetectorSection({ tensorName, addActivity, updateActivity }: {
+  tensorName: string;
+  addActivity: AddActivity;
+  updateActivity: UpdateActivity;
+}) {
   const [detectors, setDetectors] = useState<DetectorDefinitionDTO[]>([]);
   const [selectedDetector, setSelectedDetector] = useState<DetectorDefinitionDTO | null>(null);
   const [params, setParams] = useState<Record<string, unknown>>({});
@@ -388,6 +443,9 @@ function DetectorSection({ tensorName }: { tensorName: string }) {
     setExecuting(true);
     setError(null);
     setResult(null);
+    const actId = crypto.randomUUID();
+    const startedAt = Date.now();
+    addActivity({ id: actId, label: `Detector: ${selectedDetector.name}`, status: "running", startedAt });
     try {
       const res = await api.runDetector({
         detector_name: selectedDetector.name,
@@ -396,12 +454,15 @@ function DetectorSection({ tensorName }: { tensorName: string }) {
         stream_name: streamName || undefined,
       });
       setResult({ stream_name: res.stream_name, n_events: res.n_events });
+      updateActivity(actId, { status: "done", endedAt: Date.now(), elapsed: Date.now() - startedAt });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      updateActivity(actId, { status: "error", endedAt: Date.now(), error: msg });
     } finally {
       setExecuting(false);
     }
-  }, [selectedDetector, tensorName, params, streamName]);
+  }, [selectedDetector, tensorName, params, streamName, addActivity, updateActivity]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "4px 0" }}>

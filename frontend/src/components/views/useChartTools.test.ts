@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useRef } from "react";
 import { useChartTools } from "./useChartTools";
 import type uPlot from "uplot";
 
@@ -20,11 +19,26 @@ function makeChartStub(initMin = 0, initMax = 10): uPlot {
 }
 
 describe("useChartTools", () => {
-  it("initialises with zoom tool and wheel zoom on", () => {
+  it("initialises with zoom tool, wheel zoom on, and auto y-mode", () => {
     const chartRef = { current: null as uPlot | null };
     const { result } = renderHook(() => useChartTools(chartRef));
     expect(result.current.activeTool).toBe("zoom");
     expect(result.current.wheelZoom).toBe(true);
+    expect(result.current.yMode).toBe("auto");
+  });
+
+  it("cycles through y-modes: auto → fixed → fit", () => {
+    const chartRef = { current: null as uPlot | null };
+    const { result } = renderHook(() => useChartTools(chartRef));
+    expect(result.current.yMode).toBe("auto");
+    act(() => result.current.setYMode("fixed"));
+    expect(result.current.yMode).toBe("fixed");
+    expect(result.current.yModeRef.current).toBe("fixed");
+    act(() => result.current.setYMode("fit"));
+    expect(result.current.yMode).toBe("fit");
+    expect(result.current.yModeRef.current).toBe("fit");
+    act(() => result.current.setYMode("auto"));
+    expect(result.current.yMode).toBe("auto");
   });
 
   it("switches tool via setActiveTool", () => {

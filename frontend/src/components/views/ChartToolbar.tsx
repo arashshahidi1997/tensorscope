@@ -62,22 +62,22 @@ export function ChartToolbar({
       <div className="ts-toolbar-sep" />
       <button
         type="button"
-        className={`ts-tool${yMode === "yZoom" ? " active" : ""}`}
-        title="Y Zoom — scroll on Y axis to zoom Y range (Shift+scroll for gain)"
-        onClick={() => onSetYMode("yZoom")}
-      >&#x21D5;</button>
+        className={`ts-tool${yMode === "auto" ? " active" : ""}`}
+        title="Auto — rescale amplitude on every data refresh"
+        onClick={() => onSetYMode("auto")}
+      >A</button>
       <button
         type="button"
-        className={`ts-tool${yMode === "yGain" ? " active" : ""}`}
-        title="Gain — scroll on Y axis to scale waveform amplitude (Shift+scroll always activates gain)"
-        onClick={() => onSetYMode("yGain")}
+        className={`ts-tool${yMode === "fixed" ? " active" : ""}`}
+        title="Fixed — lock Y range; scroll on Y axis or Shift+scroll to adjust"
+        onClick={() => onSetYMode("fixed")}
       >&#x00B1;</button>
       <button
         type="button"
-        className={`ts-tool${yMode === "yAuto" ? " active" : ""}`}
-        title="Auto Gain — automatically scale amplitude to fit visible signal variance"
-        onClick={() => onSetYMode("yAuto")}
-      >A</button>
+        className={`ts-tool${yMode === "fit" ? " active" : ""}`}
+        title="Fit — scale once to fit all channels, then hold"
+        onClick={() => onSetYMode("fit")}
+      >&#x21D5;</button>
       <div className="ts-toolbar-sep" />
       <button
         type="button"
@@ -92,13 +92,18 @@ export function ChartToolbar({
 /** TimeScaleBar — horizontal bar with time scale preset pills and a time input. Sits below the chart. */
 type TimeScaleBarProps = {
   timeCursor: number;
-  onTimeWindowChange: (window: [number, number]) => void;
+  /** Called when user picks a preset; receives the new duration in seconds. */
+  onViewportDurationChange?: (d: number) => void;
+  /** Fallback: called with a computed [start, end] window (used by views without viewportDuration in store). */
+  onTimeWindowChange?: (window: [number, number]) => void;
   onJumpToTime?: (t: number) => void;
   /** Optional: immediately zoom the chart to the window (optimistic local update). */
   onImmediateZoom?: (window: [number, number]) => void;
+  /** Current viewport duration in seconds — highlights the matching preset pill. */
+  viewportDuration?: number;
 };
 
-export function TimeScaleBar({ timeCursor, onTimeWindowChange, onJumpToTime, onImmediateZoom }: TimeScaleBarProps) {
+export function TimeScaleBar({ timeCursor, onViewportDurationChange, onTimeWindowChange, onJumpToTime, onImmediateZoom, viewportDuration }: TimeScaleBarProps) {
   const [draft, setDraft] = useState("");
   const lastCursor = useRef(timeCursor);
 
@@ -122,7 +127,11 @@ export function TimeScaleBar({ timeCursor, onTimeWindowChange, onJumpToTime, onI
     const window: [number, number] = [timeCursor - half, timeCursor + half];
     // Instantly zoom the chart (optimistic) before the server round-trip
     onImmediateZoom?.(window);
-    onTimeWindowChange(window);
+    if (onViewportDurationChange) {
+      onViewportDurationChange(seconds);
+    } else {
+      onTimeWindowChange?.(window);
+    }
   };
 
   const handleSubmit = () => {
@@ -149,7 +158,7 @@ export function TimeScaleBar({ timeCursor, onTimeWindowChange, onJumpToTime, onI
         <button
           key={ts.label}
           type="button"
-          className="ts-timescale-pill"
+          className={`ts-timescale-pill${viewportDuration === ts.seconds ? " active" : ""}`}
           title={`Set window to ${ts.label}`}
           onClick={() => handleTimeScale(ts.seconds)}
         >

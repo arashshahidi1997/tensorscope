@@ -10,6 +10,8 @@ import type {
 import type { SelectionDTO } from "../api/types";
 
 type SelectionStore = SelectionState & {
+  viewportDuration: number;
+  setViewportDuration: (d: number) => void;
   setTimeCursor: (t: number) => void;
   setTimeWindow: (w: TimeWindow) => void;
   setSpatial: (s: SpatialSelection) => void;
@@ -58,16 +60,26 @@ const DEFAULT_STATE: SelectionState = {
 
 export const useSelectionStore = create<SelectionStore>((set) => ({
   ...DEFAULT_STATE,
+  viewportDuration: 1,
+
+  setViewportDuration: (d) =>
+    set((s) => ({
+      viewportDuration: d,
+      timeWindow: [Math.max(0, s.timeCursor - d / 2), s.timeCursor + d / 2],
+    })),
 
   setTimeCursor: (t) =>
-    set((s) => ({
-      timeCursor: t,
-      // Re-center window when cursor jumps outside the visible range.
-      timeWindow:
-        t < s.timeWindow[0] || t > s.timeWindow[1]
-          ? [Math.max(0, t - 1), t + 1]
-          : s.timeWindow,
-    })),
+    set((s) => {
+      const half = s.viewportDuration / 2;
+      return {
+        timeCursor: t,
+        // Re-center window when cursor jumps outside the visible range.
+        timeWindow:
+          t < s.timeWindow[0] || t > s.timeWindow[1]
+            ? [Math.max(0, t - half), t + half]
+            : s.timeWindow,
+      };
+    }),
 
   setTimeWindow: (timeWindow) => set({ timeWindow }),
 
@@ -123,7 +135,8 @@ export const useSelectionStore = create<SelectionStore>((set) => ({
       if (p.time !== undefined) {
         next.timeCursor = p.time;
         if (p.time < s.timeWindow[0] || p.time > s.timeWindow[1]) {
-          next.timeWindow = [Math.max(0, p.time - 1), p.time + 1];
+          const half = s.viewportDuration / 2;
+          next.timeWindow = [Math.max(0, p.time - half), p.time + half];
         }
       }
       if (p.freq !== undefined) {
@@ -149,14 +162,15 @@ export const useSelectionStore = create<SelectionStore>((set) => ({
       //    apply a 1s default centered on the cursor.
       // 3. If cursor jumps outside the visible range, re-center with 1s window.
       // 4. Otherwise preserve the current window.
+      const half = s.viewportDuration / 2;
       let nextWindow: TimeWindow;
       if (timeWindow) {
         nextWindow = timeWindow;
       } else if (s.timeWindow[0] === 0 && s.timeWindow[1] === 2) {
-        // First load — apply 1s initial scale
-        nextWindow = [Math.max(0, dto.time - 0.5), dto.time + 0.5];
+        // First load — apply viewportDuration initial scale
+        nextWindow = [Math.max(0, dto.time - half), dto.time + half];
       } else if (dto.time < s.timeWindow[0] || dto.time > s.timeWindow[1]) {
-        nextWindow = [Math.max(0, dto.time - 0.5), dto.time + 0.5];
+        nextWindow = [Math.max(0, dto.time - half), dto.time + half];
       } else {
         nextWindow = s.timeWindow;
       }
