@@ -4,24 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Environment
 
-- **Conda env: `cogpy`** — always prefix Python commands with `conda run -n cogpy`
-- Demo dataset: `data/demo_lfp.nc` (generated via `make demo-data`)
+- **Pixi env (project-local)** — prefix Python commands with `pixi run`. First run: `pixi install`.
+- Demo dataset: `data/demo_lfp.nc` (generated via `pixi run demo-data`)
 
 ## Common Commands
 
 ```bash
 # Backend
-conda run -n cogpy python -m pytest tests/ -q              # run all backend tests
-conda run -n cogpy python -m pytest tests/test_foo.py -q   # single test file
-conda run -n cogpy python -m pytest tests/test_foo.py::test_bar -q  # single test
+pixi run test                                   # full backend suite (pixi task)
+pixi run pytest tests/test_foo.py -q            # single test file
+pixi run pytest tests/test_foo.py::test_bar -q  # single test
 
 # Frontend
-cd frontend && npm run test                     # run all frontend tests (vitest)
+pixi run frontend-test                          # full frontend suite (vitest)
 cd frontend && npx vitest run src/store/selectionStore.test.ts  # single test file
-cd frontend && npm run build                    # typecheck + build
+pixi run frontend-build                         # typecheck + build
 
 # Full stack dev
-make dev-ui                                     # FastAPI backend + Vite dev server together
+pixi run serve                                  # FastAPI backend (demo dataset)
+pixi run frontend-dev                           # Vite dev server
+# or: make dev-ui — runs both in screen sessions (uses `python` from current env)
 ```
 
 ## Architecture

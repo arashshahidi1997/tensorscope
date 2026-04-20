@@ -11,15 +11,15 @@ Use this file as the default working guide for changes in this repository. `CLAU
 ## Environment
 
 - Python: `>=3.11`
-- Preferred conda env from existing repo guidance: `cogpy`
-- Backend imports rely on `PYTHONPATH=src`
+- Project env is managed by **pixi** (`pyproject.toml` → `[tool.pixi.*]`). First run: `pixi install`.
+- tensorscope is installed editable by pixi, so `PYTHONPATH=src` is not required inside pixi run.
 - Demo dataset: `data/demo_lfp.nc`
 
 Prefer these forms when running Python locally:
 
 ```bash
-conda run -n cogpy python -m pytest tests -q
-PYTHONPATH=src conda run -n cogpy python -m tensorscope.cli serve data/demo_lfp.nc
+pixi run test                                   # or: pixi run pytest tests -q
+pixi run python -m tensorscope.cli serve data/demo_lfp.nc
 ```
 
 ## Repo Map
@@ -39,9 +39,9 @@ PYTHONPATH=src conda run -n cogpy python -m tensorscope.cli serve data/demo_lfp.
 Backend:
 
 ```bash
-make test
-PYTHONPATH=src conda run -n cogpy python -m pytest tests/test_server_api.py -q
-PYTHONPATH=src conda run -n cogpy python -m tensorscope.cli serve data/demo_lfp.nc --host 127.0.0.1 --port 8000
+pixi run test
+pixi run pytest tests/test_server_api.py -q
+pixi run python -m tensorscope.cli serve data/demo_lfp.nc --host 127.0.0.1 --port 8000
 ```
 
 Frontend:

@@ -510,7 +510,7 @@ tensorscope (pip)
   ├── numpy
   ├── pandas
   ├── scipy          # or optional
-  └── cogpy          # pinned: git+https://github.com/arashshahidi1997/cogpy.git@v0.2.0
+  └── ecogpy         # pinned: git+https://github.com/arashshahidi1997/cogpy.git@v0.2.0 (imports as `cogpy`)
 
 tensorscope (npm/vite — frontend build artifact, included in Python package)
   ├── react

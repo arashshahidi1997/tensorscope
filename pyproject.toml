@@ -19,7 +19,7 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     "pyarrow>=15.0",
     "pyyaml>=6.0",
-    "cogpy @ git+https://github.com/arashshahidi1997/cogpy.git@v0.2.0",
+    "ecogpy[io,signal,perf] @ git+https://github.com/arashshahidi1997/cogpy.git@v0.2.0",
 ]
 
 [project.optional-dependencies]
@@ -33,3 +33,57 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 tensorscope = ["static/**/*"]
+
+# ── Pixi configuration ──────────────────────────────────────────────────────
+# The conda deps below are pre-built wheels (numpy/scipy/pyarrow etc. via
+# conda-forge) that the editable pypi install of tensorscope will reuse.
+# cogpy comes in transitively via [project] dependencies as a pip/git dep.
+
+[tool.pixi.workspace]
+name = "tensorscope"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tool.pixi.dependencies]
+python = "3.11.*"
+pip = "*"
+git = "*"
+nodejs = ">=20,<23"  # node 25 breaks jsdom localStorage in vitest
+numpy = ">=1.24"
+scipy = "*"
+pandas = ">=2.0"
+xarray = ">=2024.0"
+pyarrow = ">=15.0"
+pyyaml = ">=6.0"
+fastapi = ">=0.110"
+uvicorn-standard = ">=0.29"
+pydantic = ">=2.0"
+# C-heavy deps pulled in by `ecogpy[io,signal,perf]` — installing from
+# conda-forge gets pre-built binaries instead of pip compiling from source.
+dask = "*"
+h5py = "*"
+zarr = "*"
+scikit-image = "*"
+pyfftw = "*"
+
+[tool.pixi.pypi-dependencies]
+tensorscope = { path = ".", editable = true }
+
+[tool.pixi.feature.dev.dependencies]
+pytest = "*"
+pytest-cov = "*"
+python-build = "*"
+twine = "*"
+
+[tool.pixi.environments]
+default = { features = ["dev"] }
+
+[tool.pixi.tasks]
+test = "pytest tests/ -q"
+demo-data = "python scripts/generate_demo_data.py --output-dir data/demo"
+serve = "python -m tensorscope.cli serve data/demo_lfp.nc --host 127.0.0.1 --port 8000"
+build-py = "python -m build"
+frontend-install = { cmd = "npm install", cwd = "frontend" }
+frontend-dev = { cmd = "npm run dev", cwd = "frontend" }
+frontend-test = { cmd = "npm run test", cwd = "frontend" }
+frontend-build = { cmd = "npm run build", cwd = "frontend" }
