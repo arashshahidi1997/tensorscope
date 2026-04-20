@@ -367,7 +367,7 @@ def apply_slice_request(
 
     # 2b. PSD live: compute multitaper PSD, replacing time dim with freq.
     if request.view_type == "psd_live" and "time" in sliced.dims:
-        from cogpy.core.spectral.psd import psd_multitaper
+        from cogpy.spectral.psd import psd_multitaper
 
         time_vals = np.asarray(sliced.coords["time"].values, dtype=float)
         fs = 1.0 / np.median(np.diff(time_vals)) if len(time_vals) > 1 else 1.0
@@ -466,7 +466,7 @@ def apply_processing(data: xr.DataArray, params: ProcessingParamsDTO) -> xr.Data
     Steps (fixed order matching cogpy v2.8):
     CMR → bandpass → notch → spatial median → z-score
     """
-    from cogpy.core.preprocess.filtx import (
+    from cogpy.preprocess.filtering import (
         bandpassx,
         cmrx,
         median_spatialx,
@@ -534,7 +534,7 @@ def _median_spatial_flat(data: xr.DataArray, *, size: int = 3) -> xr.DataArray:
     Reconstructs a dense (time, AP, ML) grid, applies median_spatialx,
     then samples back at original (AP, ML) positions.
     """
-    from cogpy.core.preprocess.filtx import median_spatialx
+    from cogpy.preprocess.filtering import median_spatialx
 
     sig = data.transpose("time", "channel")
     ap_vals = np.asarray(sig.coords["AP"].values)
