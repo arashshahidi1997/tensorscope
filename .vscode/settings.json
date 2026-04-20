@@ -1,17 +1,6 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
-    "files.watcherExclude": {
-        "**/resources/**": true,
-        "**/frontend/node_modules/**": true,
-        "**/frontend/dist/**": true,
-        "**/docs/reference-studies/my-awesome-app/node_modules/**": true,
-        "**/docs/reference-studies/my-awesome-app/dist/**": true,
-        "**/__pycache__/**": true,
-        "**/.pytest_cache/**": true,
-        "**/*.egg-info/**": true,
-        "**/*.tsbuildinfo": true
-    },
     "search.exclude": {
         "**/resources/**": true,
         "**/frontend/node_modules/**": true,
@@ -23,4 +12,28 @@
         "**/*.egg-info/**": true,
         "**/*.tsbuildinfo": true
     }
+
+  // >>> projio >>>
+  "PandocCiter.DefaultBibs": [".projio/render/compiled.bib"],
+  "PandocCiter.UseDefaultBib": true,
+  "pandocCiter.csl": ".projio/render/csl/apa.csl",
+  "files.watcherExclude": {
+    "**/*.egg-info/**": true,
+    "**/*.tsbuildinfo": true,
+    "**/.git/**": true,
+    "**/.projio/indexio/index/**": true,
+    "**/.pytest_cache/**": true,
+    "**/.snakemake/**": true,
+    "**/__pycache__/**": true,
+    "**/_build/**": true,
+    "**/_site/**": true,
+    "**/build/**": true,
+    "**/docs/reference-studies/my-awesome-app/dist/**": true,
+    "**/docs/reference-studies/my-awesome-app/node_modules/**": true,
+    "**/frontend/dist/**": true,
+    "**/frontend/node_modules/**": true,
+    "**/resources/**": true,
+    "**/site/**": true,
+  },
+  // <<< projio <<<
 }
