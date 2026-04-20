@@ -24,7 +24,10 @@ frontend/*.tsbuildinfo
 .DS_Store
 
 # >>> projio >>>
+.claude/settings.json
+.mcp.json
 .projio.mkdocs.yml
+.projio/indexio/index/
 .projio/servers.json
 .projio/site/
 site/
