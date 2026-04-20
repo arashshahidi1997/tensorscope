@@ -1,0 +1,290 @@
+import { describe, it, expect } from "vitest";
+import { tableFromArrays, tableToIPC } from "apache-arrow";
+import {
+  decodeArrowSlice,
+  extractTimeseriesColumnar,
+  extractTimeseriesColumnarFast,
+  extractSpatialCells,
+  extractFreqCurve,
+  extractPSDHeatmap,
+  extractPSDAverage,
+  extractPSDSpatialAtFreq,
+  extractSpectrogram,
+  toNumber,
+} from "./arrow";
+import type { TensorSliceDTO } from "./types";
+
+function buildSlice(columns: Record<string, number[]>): TensorSliceDTO {
+  const table = tableFromArrays(columns as Record<string, Float64Array | number[]>);
+  const payload = Buffer.from(tableToIPC(table)).toString("base64");
+  return {
+    name: "test",
+    view_type: "timeseries",
+    dims: Object.keys(columns),
+    shape: [Object.values(columns)[0]?.length ?? 0],
+    encoding: "arrow_ipc",
+    payload,
+    meta: {},
+  };
+}
+
+describe("decodeArrowSlice", () => {
+  it("round-trips columns and rows from Arrow IPC payload", () => {
+    const slice = buildSlice({ time: [0, 1, 2], value: [10, 20, 30] });
+    const decoded = decodeArrowSlice(slice);
+    expect(decoded.columns.sort()).toEqual(["time", "value"]);
+    expect(decoded.rows).toHaveLength(3);
+    expect(Number(decoded.rows[1].time)).toBe(1);
+    expect(Number(decoded.rows[1].value)).toBe(20);
+  });
+});
+
+describe("extractTimeseriesColumnar", () => {
+  it("groups rows by channel onto a shared time axis", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({
+        time: [0, 1, 2, 0, 1, 2],
+        channel: [0, 0, 0, 1, 1, 1],
+        value: [10, 11, 12, 20, 21, 22],
+      }),
+    );
+    const result = extractTimeseriesColumnar(decoded);
+    expect(result.times).toEqual([0, 1, 2]);
+    expect(result.series).toHaveLength(2);
+    const ch0 = result.series.find((s) => s.key === "ch-0")!;
+    const ch1 = result.series.find((s) => s.key === "ch-1")!;
+    expect(ch0.label).toBe("Ch 0");
+    expect(ch0.values).toEqual([10, 11, 12]);
+    expect(ch1.values).toEqual([20, 21, 22]);
+  });
+
+  it("groups by (AP, ML) when channel column is absent", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({
+        time: [0, 1, 0, 1],
+        AP: [0, 0, 1, 1],
+        ML: [0, 0, 2, 2],
+        value: [1, 2, 3, 4],
+      }),
+    );
+    const result = extractTimeseriesColumnar(decoded);
+    expect(result.times).toEqual([0, 1]);
+    const keys = result.series.map((s) => s.key).sort();
+    expect(keys).toEqual(["ap-0-ml-0", "ap-1-ml-2"]);
+  });
+
+  it("fills NaN for missing (time, series) cells", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({
+        time: [0, 1, 2, 0, 2], // ch=1 missing at t=1
+        channel: [0, 0, 0, 1, 1],
+        value: [10, 11, 12, 20, 22],
+      }),
+    );
+    const ch1 = extractTimeseriesColumnar(decoded).series.find((s) => s.key === "ch-1")!;
+    expect(ch1.values[0]).toBe(20);
+    expect(Number.isNaN(ch1.values[1])).toBe(true);
+    expect(ch1.values[2]).toBe(22);
+  });
+
+  it("returns empty when required columns are missing", () => {
+    const decoded = decodeArrowSlice(buildSlice({ foo: [1, 2] }));
+    expect(extractTimeseriesColumnar(decoded)).toEqual({ times: [], series: [] });
+  });
+});
+
+describe("extractTimeseriesColumnarFast", () => {
+  it("matches the row-based extractor on channel-keyed data", () => {
+    const slice = buildSlice({
+      time: [0, 1, 0, 1],
+      channel: [0, 0, 1, 1],
+      value: [10, 11, 20, 21],
+    });
+    const slow = extractTimeseriesColumnar(decodeArrowSlice(slice));
+    const fast = extractTimeseriesColumnarFast(slice);
+    expect(fast.times).toEqual(slow.times);
+    expect(fast.series.map((s) => s.key).sort()).toEqual(slow.series.map((s) => s.key).sort());
+    // Verify values line up for ch-0
+    const fastCh0 = fast.series.find((s) => s.key === "ch-0")!;
+    const slowCh0 = slow.series.find((s) => s.key === "ch-0")!;
+    expect(fastCh0.values).toEqual(slowCh0.values);
+  });
+});
+
+describe("extractSpatialCells", () => {
+  it("ranks AP and ML and averages duplicates", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({
+        AP: [0.5, 0.5, 1.5, 1.5],
+        ML: [0, 0, 2, 2], // duplicate (0.5, 0) pair
+        value: [10, 20, 100, 100], // averages to (15, 100)
+      }),
+    );
+    const cells = extractSpatialCells(decoded);
+    expect(cells).toHaveLength(2);
+    expect(cells[0]).toEqual({ ap: 0, ml: 0, value: 15 });
+    expect(cells[1]).toEqual({ ap: 1, ml: 1, value: 100 });
+  });
+
+  it("returns empty when columns missing", () => {
+    const decoded = decodeArrowSlice(buildSlice({ AP: [0], value: [1] })); // no ML
+    expect(extractSpatialCells(decoded)).toEqual([]);
+  });
+});
+
+describe("extractFreqCurve", () => {
+  it("averages values across spatial dims at each freq", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({
+        freq: [10, 10, 20, 20],
+        AP: [0, 1, 0, 1],
+        ML: [0, 0, 0, 0],
+        value: [4, 8, 10, 20], // mean at 10 = 6, at 20 = 15
+      }),
+    );
+    const curve = extractFreqCurve(decoded);
+    expect(curve.freqs).toEqual([10, 20]);
+    expect(curve.values).toEqual([6, 15]);
+  });
+});
+
+describe("extractPSDHeatmap", () => {
+  it("builds (freq × channel) matrix with AP-then-ML ordering", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({
+        freq: [10, 10, 20, 20],
+        AP: [0, 1, 0, 1],
+        ML: [0, 0, 0, 0],
+        value: [1, 2, 3, 4],
+      }),
+    );
+    const hm = extractPSDHeatmap(decoded);
+    expect(hm.freqs).toEqual([10, 20]);
+    expect(hm.channelLabels).toEqual(["AP0_ML0", "AP1_ML0"]);
+    expect(hm.matrix).toEqual([
+      [1, 2],
+      [3, 4],
+    ]);
+  });
+
+  it("fills NaN for missing (freq, channel) cells", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({
+        freq: [10, 10, 20], // AP1 missing at freq=20
+        AP: [0, 1, 0],
+        ML: [0, 0, 0],
+        value: [1, 2, 3],
+      }),
+    );
+    const hm = extractPSDHeatmap(decoded);
+    expect(hm.matrix[0]).toEqual([1, 2]);
+    expect(hm.matrix[1][0]).toBe(3);
+    expect(Number.isNaN(hm.matrix[1][1])).toBe(true);
+  });
+
+  it("supports channel-keyed tensors without AP/ML", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({ freq: [10, 10], channel: [0, 1], value: [5, 7] }),
+    );
+    const hm = extractPSDHeatmap(decoded);
+    expect(hm.channelLabels).toEqual(["Ch0", "Ch1"]);
+    expect(hm.matrix).toEqual([[5, 7]]);
+  });
+});
+
+describe("extractPSDAverage", () => {
+  it("returns per-freq mean and std across channels", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({
+        freq: [10, 10, 10, 20, 20, 20],
+        channel: [0, 1, 2, 0, 1, 2],
+        value: [2, 4, 6, 10, 10, 10], // mean 4/σ≈1.633, mean 10/σ=0
+      }),
+    );
+    const avg = extractPSDAverage(decoded);
+    expect(avg.freqs).toEqual([10, 20]);
+    expect(avg.mean).toEqual([4, 10]);
+    expect(avg.std[0]).toBeCloseTo(Math.sqrt(8 / 3), 5);
+    expect(avg.std[1]).toBe(0);
+  });
+
+  it("reports std=0 when only one sample per freq", () => {
+    const decoded = decodeArrowSlice(buildSlice({ freq: [10, 20], value: [1, 2] }));
+    expect(extractPSDAverage(decoded).std).toEqual([0, 0]);
+  });
+});
+
+describe("extractPSDSpatialAtFreq", () => {
+  it("snaps to the nearest freq", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({
+        freq: [10, 10, 50, 50],
+        AP: [0, 1, 0, 1],
+        ML: [0, 0, 0, 0],
+        value: [1, 2, 3, 4],
+      }),
+    );
+    // target=48 → nearest is 50
+    const cells = extractPSDSpatialAtFreq(decoded, 48);
+    expect(cells).toEqual([
+      { ap: 0, ml: 0, value: 3 },
+      { ap: 1, ml: 0, value: 4 },
+    ]);
+  });
+
+  it("returns empty when spatial columns are missing", () => {
+    const decoded = decodeArrowSlice(buildSlice({ freq: [10], value: [1] }));
+    expect(extractPSDSpatialAtFreq(decoded, 10)).toEqual([]);
+  });
+});
+
+describe("extractSpectrogram", () => {
+  it("produces a (time × freq) matrix", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({
+        time: [0, 0, 1, 1],
+        freq: [10, 20, 10, 20],
+        value: [1, 2, 3, 4],
+      }),
+    );
+    const spec = extractSpectrogram(decoded);
+    expect(spec.times).toEqual([0, 1]);
+    expect(spec.freqs).toEqual([10, 20]);
+    expect(spec.values).toEqual([
+      [1, 2],
+      [3, 4],
+    ]);
+  });
+
+  it("averages over a trailing spatial dim", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({
+        time: [0, 0, 0, 0],
+        freq: [10, 10, 20, 20],
+        channel: [0, 1, 0, 1],
+        value: [2, 4, 10, 20], // (t=0, f=10) → 3, (t=0, f=20) → 15
+      }),
+    );
+    expect(extractSpectrogram(decoded).values).toEqual([[3, 15]]);
+  });
+});
+
+describe("toNumber", () => {
+  it("returns finite numbers as-is", () => {
+    expect(toNumber(3.14)).toBe(3.14);
+  });
+  it("rejects NaN/Infinity", () => {
+    expect(toNumber(NaN)).toBeNull();
+    expect(toNumber(Infinity)).toBeNull();
+  });
+  it("coerces bigint and numeric strings", () => {
+    expect(toNumber(BigInt(42))).toBe(42);
+    expect(toNumber(" 2.5 ")).toBe(2.5);
+  });
+  it("returns null for non-numeric input", () => {
+    expect(toNumber("abc")).toBeNull();
+    expect(toNumber(null)).toBeNull();
+    expect(toNumber(undefined)).toBeNull();
+    expect(toNumber("")).toBeNull();
+  });
+});
