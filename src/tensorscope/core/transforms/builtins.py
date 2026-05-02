@@ -397,6 +397,236 @@ def _compute_prewhiten(inputs: list[xr.DataArray], params: dict[str, Any]) -> xr
 
 
 # ---------------------------------------------------------------------------
+# cogpy-backed compute functions
+# ---------------------------------------------------------------------------
+
+def _ensure_fs(data: xr.DataArray) -> xr.DataArray:
+    """Ensure the DataArray carries an ``fs`` attr inferred from time coords."""
+    if "fs" in data.attrs or "time" not in data.dims or "time" not in data.coords:
+        return data
+    time_vals = np.asarray(data.coords["time"].values, dtype=float)
+    if len(time_vals) < 2:
+        return data
+    diffs = np.diff(time_vals[:101])
+    pos = diffs[diffs > 0]
+    if not pos.size:
+        return data
+    return data.assign_attrs({**dict(data.attrs), "fs": float(1.0 / pos.mean())})
+
+
+def _compute_cmr(inputs: list[xr.DataArray], params: dict[str, Any]) -> xr.DataArray:
+    """Common median reference via cogpy.cmrx."""
+    from cogpy.preprocess.filtering import cmrx
+
+    return cmrx(inputs[0], skipna=bool(params.get("skipna", True)))
+
+
+def _compute_notch(inputs: list[xr.DataArray], params: dict[str, Any]) -> xr.DataArray:
+    """Multi-notch IIR filter via cogpy.notchesx."""
+    from cogpy.preprocess.filtering import notchesx
+
+    data = _ensure_fs(inputs[0])
+    freqs = list(params.get("freqs") or [])
+    if not freqs:
+        raise ValueError("notch requires a non-empty list of frequencies")
+    return notchesx(data, freqs=[float(f) for f in freqs], Q=float(params.get("Q", 30.0)))
+
+
+def _compute_spatial_median(inputs: list[xr.DataArray], params: dict[str, Any]) -> xr.DataArray:
+    """Spatial median smoother over (AP, ML) via cogpy.median_spatialx."""
+    from cogpy.preprocess.filtering import median_spatialx
+
+    return median_spatialx(inputs[0], size=int(params.get("size", 3)))
+
+
+def _compute_zscore(inputs: list[xr.DataArray], params: dict[str, Any]) -> xr.DataArray:
+    """Z-score normalization via cogpy.zscorex."""
+    from cogpy.preprocess.filtering import zscorex
+
+    return zscorex(
+        inputs[0],
+        dim=str(params.get("dim", "time")),
+        robust=bool(params.get("robust", False)),
+        eps=float(params.get("eps", 1e-12)),
+    )
+
+
+def _infer_fs(data: xr.DataArray) -> float:
+    time_vals = np.asarray(data.coords["time"].values, dtype=float)
+    if len(time_vals) < 2:
+        raise ValueError("need at least 2 time samples to infer fs")
+    return float(1.0 / np.median(np.diff(time_vals)))
+
+
+def _compute_psd_multitaper(inputs: list[xr.DataArray], params: dict[str, Any]) -> xr.DataArray:
+    """Multitaper PSD via cogpy.spectral.psd.psd_multitaper."""
+    from cogpy.spectral.psd import psd_multitaper
+
+    data = inputs[0]
+    if "time" not in data.dims:
+        raise ValueError("psd_multitaper requires 'time' dimension")
+
+    fs = _infer_fs(data)
+    non_time = [d for d in data.dims if d != "time"]
+
+    # Sentinel convention: K=0 and fmax=0 mean "use cogpy default"
+    # (ParamSpec.validate treats default=None as "required", so we can't
+    # carry a real None through the schema).
+    k_val = int(params.get("K", 0) or 0)
+    fmax_val = float(params.get("fmax", 0.0) or 0.0)
+    kwargs: dict[str, Any] = {
+        "NW": float(params.get("NW", 4.0)),
+        "fmin": float(params.get("fmin", 0.0)),
+        "detrend": bool(params.get("detrend", True)),
+    }
+    if k_val > 0:
+        kwargs["K"] = k_val
+    if fmax_val > 0:
+        kwargs["fmax"] = fmax_val
+
+    if non_time:
+        reordered = data.transpose("time", *non_time)
+        arr = np.asarray(reordered.values)
+        orig_shape = arr.shape[1:]
+        flat = arr.reshape(arr.shape[0], -1).T  # (n_ch, time)
+        psd_vals, freqs = psd_multitaper(flat, fs, **kwargs)
+        psd_vals = psd_vals.reshape(*orig_shape, -1)  # (*spatial, freq)
+        psd_vals = np.moveaxis(psd_vals, -1, 0)  # (freq, *spatial)
+    else:
+        psd_vals, freqs = psd_multitaper(np.asarray(data.values), fs, **kwargs)
+
+    coords: dict[str, Any] = {"freq": freqs}
+    for d in non_time:
+        if d in data.coords:
+            coords[d] = data.coords[d].values
+    return xr.DataArray(
+        psd_vals,
+        dims=("freq",) + tuple(non_time),
+        coords=coords,
+        attrs=dict(data.attrs),
+    )
+
+
+def _compute_psd_welch(inputs: list[xr.DataArray], params: dict[str, Any]) -> xr.DataArray:
+    """Welch PSD via cogpy.spectral.psd.psd_welch."""
+    from cogpy.spectral.psd import psd_welch
+
+    data = inputs[0]
+    if "time" not in data.dims:
+        raise ValueError("psd_welch requires 'time' dimension")
+
+    fs = _infer_fs(data)
+    non_time = [d for d in data.dims if d != "time"]
+
+    # Sentinel convention (see _compute_psd_multitaper).
+    fmax_val = float(params.get("fmax", 0.0) or 0.0)
+    noverlap_val = int(params.get("noverlap", -1) or -1)
+    kwargs: dict[str, Any] = {
+        "fmin": float(params.get("fmin", 0.0)),
+        "nperseg": int(params.get("nperseg", 256)),
+        "detrend": str(params.get("detrend", "constant")),
+    }
+    if fmax_val > 0:
+        kwargs["fmax"] = fmax_val
+    if noverlap_val >= 0:
+        kwargs["noverlap"] = noverlap_val
+
+    if non_time:
+        reordered = data.transpose("time", *non_time)
+        arr = np.asarray(reordered.values)
+        orig_shape = arr.shape[1:]
+        flat = arr.reshape(arr.shape[0], -1).T  # (n_ch, time)
+        psd_vals, freqs = psd_welch(flat, fs, **kwargs)
+        psd_vals = psd_vals.reshape(*orig_shape, -1)
+        psd_vals = np.moveaxis(psd_vals, -1, 0)
+    else:
+        psd_vals, freqs = psd_welch(np.asarray(data.values), fs, **kwargs)
+
+    coords: dict[str, Any] = {"freq": freqs}
+    for d in non_time:
+        if d in data.coords:
+            coords[d] = data.coords[d].values
+    return xr.DataArray(
+        psd_vals,
+        dims=("freq",) + tuple(non_time),
+        coords=coords,
+        attrs=dict(data.attrs),
+    )
+
+
+def _compute_restrict_intervals(inputs: list[xr.DataArray], params: dict[str, Any]) -> xr.DataArray:
+    """Restrict a tensor to time intervals via cogpy.brainstates.intervals.restrict."""
+    from cogpy.brainstates.intervals import restrict
+
+    intervals = params.get("intervals") or []
+    if not intervals:
+        raise ValueError("restrict_intervals requires at least one [t0, t1] interval")
+    # Accept list of [t0, t1] pairs or (n,2) array.
+    arr = np.asarray(intervals, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] != 2:
+        raise ValueError("intervals must be a list of [t0, t1] pairs")
+    return restrict(inputs[0], arr, time_dim=str(params.get("time_dim", "time")))
+
+
+def _compute_perievent_epochs(inputs: list[xr.DataArray], params: dict[str, Any]) -> xr.DataArray:
+    """Event-locked epoch extraction via cogpy.brainstates.intervals.perievent_epochs."""
+    from cogpy.brainstates.intervals import perievent_epochs
+
+    data = inputs[0]
+    if "time" not in data.dims:
+        raise ValueError("perievent_epochs requires 'time' dimension")
+
+    events = params.get("event_times") or []
+    if len(events) == 0:
+        raise ValueError("perievent_epochs requires non-empty event_times")
+    events_arr = np.asarray(events, dtype=float)
+
+    fs = _infer_fs(data)
+    return perievent_epochs(
+        data,
+        events_arr,
+        fs,
+        pre=float(params.get("pre", 0.5)),
+        post=float(params.get("post", 1.0)),
+        time_dim=str(params.get("time_dim", "time")),
+    )
+
+
+def _compute_triggered_average(inputs: list[xr.DataArray], params: dict[str, Any]) -> xr.DataArray:
+    """Event-triggered average via cogpy.triggered.triggered_average."""
+    from cogpy.triggered import triggered_average
+
+    return triggered_average(
+        inputs[0], event_dim=str(params.get("event_dim", "event"))
+    )
+
+
+def _compute_triggered_std(inputs: list[xr.DataArray], params: dict[str, Any]) -> xr.DataArray:
+    """Event-triggered std via cogpy.triggered.triggered_std."""
+    from cogpy.triggered import triggered_std
+
+    return triggered_std(
+        inputs[0],
+        event_dim=str(params.get("event_dim", "event")),
+        ddof=int(params.get("ddof", 1)),
+    )
+
+
+def _compute_triggered_median(inputs: list[xr.DataArray], params: dict[str, Any]) -> xr.DataArray:
+    """Event-triggered median via cogpy.triggered.triggered_median."""
+    from cogpy.triggered import triggered_median
+
+    return triggered_median(inputs[0], event_dim=str(params.get("event_dim", "event")))
+
+
+def _compute_triggered_snr(inputs: list[xr.DataArray], params: dict[str, Any]) -> xr.DataArray:
+    """Event-triggered SNR via cogpy.triggered.triggered_snr."""
+    from cogpy.triggered import triggered_snr
+
+    return triggered_snr(inputs[0], event_dim=str(params.get("event_dim", "event")))
+
+
+# ---------------------------------------------------------------------------
 # Transform definitions
 # ---------------------------------------------------------------------------
 
@@ -504,6 +734,163 @@ PREWHITEN = TransformDefinition(
     compute=_compute_prewhiten,
 )
 
+# ---------------------------------------------------------------------------
+# cogpy-backed transform definitions
+# ---------------------------------------------------------------------------
+
+CMR = TransformDefinition(
+    name="cmr",
+    description="Common median reference (cogpy.cmrx): subtract median across channels",
+    input_spec=InputSpec(required_dims=("time",)),
+    param_schema={
+        "skipna": ParamSpec(dtype="bool", default=True, description="Use nanmedian"),
+    },
+    output_spec=OutputSpec(dims=(), coord_rules={"time": "passthrough"}),
+    compute=_compute_cmr,
+)
+
+NOTCH = TransformDefinition(
+    name="notch",
+    description="Multi-notch IIR filter (cogpy.notchesx)",
+    input_spec=InputSpec(required_dims=("time",)),
+    param_schema={
+        "freqs": ParamSpec(
+            dtype="list", description="Notch frequencies in Hz (e.g. [50, 100, 150])"
+        ),
+        "Q": ParamSpec(dtype="float", default=30.0, description="Quality factor", min_value=1.0),
+    },
+    output_spec=OutputSpec(dims=(), coord_rules={"time": "passthrough"}),
+    compute=_compute_notch,
+)
+
+SPATIAL_MEDIAN = TransformDefinition(
+    name="spatial_median",
+    description="Spatial median smoother over (AP, ML) (cogpy.median_spatialx)",
+    input_spec=InputSpec(required_dims=("AP", "ML")),
+    param_schema={
+        "size": ParamSpec(dtype="int", default=3, description="Window size", min_value=1, max_value=15),
+    },
+    output_spec=OutputSpec(dims=(), coord_rules={}),
+    compute=_compute_spatial_median,
+)
+
+ZSCORE = TransformDefinition(
+    name="zscore",
+    description="Z-score normalization along a dimension (cogpy.zscorex)",
+    input_spec=InputSpec(required_dims=()),
+    param_schema={
+        "dim": ParamSpec(dtype="str", default="time", description="Normalization dimension"),
+        "robust": ParamSpec(dtype="bool", default=False, description="Use median/MAD"),
+        "eps": ParamSpec(dtype="float", default=1e-12, description="Zero-division guard", min_value=0.0),
+    },
+    output_spec=OutputSpec(dims=(), coord_rules={}),
+    compute=_compute_zscore,
+)
+
+PSD_MULTITAPER = TransformDefinition(
+    name="psd_multitaper",
+    description="Multitaper PSD over the time axis (cogpy.spectral.psd.psd_multitaper)",
+    input_spec=InputSpec(required_dims=("time",)),
+    param_schema={
+        "NW": ParamSpec(dtype="float", default=4.0, description="Time-bandwidth product", min_value=0.5),
+        # K=0 and fmax=0 are sentinels meaning "use cogpy default"; ParamSpec
+        # treats default=None as a required parameter.
+        "K": ParamSpec(dtype="int", default=0, description="Number of tapers (0 = auto)", min_value=0),
+        "fmin": ParamSpec(dtype="float", default=0.0, description="Min freq (Hz)", min_value=0.0),
+        "fmax": ParamSpec(dtype="float", default=0.0, description="Max freq (Hz); 0 = Nyquist", min_value=0.0),
+        "detrend": ParamSpec(dtype="bool", default=True, description="Linear detrend before tapering"),
+    },
+    output_spec=OutputSpec(dims=("freq",), dtype="float64"),
+    compute=_compute_psd_multitaper,
+)
+
+PSD_WELCH = TransformDefinition(
+    name="psd_welch",
+    description="Welch PSD over the time axis (cogpy.spectral.psd.psd_welch)",
+    input_spec=InputSpec(required_dims=("time",)),
+    param_schema={
+        "nperseg": ParamSpec(dtype="int", default=256, description="Segment length (samples)", min_value=4),
+        # noverlap=-1 sentinel means "nperseg//2".
+        "noverlap": ParamSpec(dtype="int", default=-1, description="Overlap samples (-1 = nperseg//2)", min_value=-1),
+        "fmin": ParamSpec(dtype="float", default=0.0, description="Min freq (Hz)", min_value=0.0),
+        "fmax": ParamSpec(dtype="float", default=0.0, description="Max freq (Hz); 0 = Nyquist", min_value=0.0),
+        "detrend": ParamSpec(dtype="str", default="constant", description="scipy.signal.welch detrend mode"),
+    },
+    output_spec=OutputSpec(dims=("freq",), dtype="float64"),
+    compute=_compute_psd_welch,
+)
+
+RESTRICT_INTERVALS = TransformDefinition(
+    name="restrict_intervals",
+    description="Restrict to time intervals (cogpy.brainstates.intervals.restrict)",
+    input_spec=InputSpec(required_dims=("time",)),
+    param_schema={
+        "intervals": ParamSpec(dtype="list", description="List of [t0, t1] pairs in seconds"),
+        "time_dim": ParamSpec(dtype="str", default="time", description="Time dimension name"),
+    },
+    output_spec=OutputSpec(dims=(), coord_rules={"time": "subset"}),
+    compute=_compute_restrict_intervals,
+)
+
+PEREVENT_EPOCHS = TransformDefinition(
+    name="perievent_epochs",
+    description="Event-locked epoch extraction (cogpy.brainstates.intervals.perievent_epochs)",
+    input_spec=InputSpec(required_dims=("time",)),
+    param_schema={
+        "event_times": ParamSpec(dtype="list", description="Event times in seconds"),
+        "pre": ParamSpec(dtype="float", default=0.5, description="Seconds before event", min_value=0.0),
+        "post": ParamSpec(dtype="float", default=1.0, description="Seconds after event", min_value=0.0),
+        "time_dim": ParamSpec(dtype="str", default="time", description="Time dimension name"),
+    },
+    output_spec=OutputSpec(dims=("event", "lag"), dtype="float64"),
+    compute=_compute_perievent_epochs,
+)
+
+TRIGGERED_AVERAGE = TransformDefinition(
+    name="triggered_average",
+    description="Mean across events / ETA (cogpy.triggered.triggered_average)",
+    input_spec=InputSpec(required_dims=("event",)),
+    param_schema={
+        "event_dim": ParamSpec(dtype="str", default="event", description="Event dimension name"),
+    },
+    output_spec=OutputSpec(dims=(), coord_rules={}),
+    compute=_compute_triggered_average,
+)
+
+TRIGGERED_STD = TransformDefinition(
+    name="triggered_std",
+    description="Std across events (cogpy.triggered.triggered_std)",
+    input_spec=InputSpec(required_dims=("event",)),
+    param_schema={
+        "event_dim": ParamSpec(dtype="str", default="event", description="Event dimension name"),
+        "ddof": ParamSpec(dtype="int", default=1, description="Delta degrees of freedom", min_value=0),
+    },
+    output_spec=OutputSpec(dims=(), coord_rules={}),
+    compute=_compute_triggered_std,
+)
+
+TRIGGERED_MEDIAN = TransformDefinition(
+    name="triggered_median",
+    description="Median across events (cogpy.triggered.triggered_median)",
+    input_spec=InputSpec(required_dims=("event",)),
+    param_schema={
+        "event_dim": ParamSpec(dtype="str", default="event", description="Event dimension name"),
+    },
+    output_spec=OutputSpec(dims=(), coord_rules={}),
+    compute=_compute_triggered_median,
+)
+
+TRIGGERED_SNR = TransformDefinition(
+    name="triggered_snr",
+    description="SNR of the triggered average (cogpy.triggered.triggered_snr)",
+    input_spec=InputSpec(required_dims=("event",)),
+    param_schema={
+        "event_dim": ParamSpec(dtype="str", default="event", description="Event dimension name"),
+    },
+    output_spec=OutputSpec(dims=(), coord_rules={}),
+    compute=_compute_triggered_snr,
+)
+
 # All built-in transforms for bulk registration.
 BUILTIN_TRANSFORMS: list[TransformDefinition] = [
     BANDPASS,
@@ -514,6 +901,19 @@ BUILTIN_TRANSFORMS: list[TransformDefinition] = [
     EVENT_ALIGN,
     DIM_REDUCTION,
     PREWHITEN,
+    # cogpy-backed transforms
+    CMR,
+    NOTCH,
+    SPATIAL_MEDIAN,
+    ZSCORE,
+    PSD_MULTITAPER,
+    PSD_WELCH,
+    RESTRICT_INTERVALS,
+    PEREVENT_EPOCHS,
+    TRIGGERED_AVERAGE,
+    TRIGGERED_STD,
+    TRIGGERED_MEDIAN,
+    TRIGGERED_SNR,
 ]
 
 

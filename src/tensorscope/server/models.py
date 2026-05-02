@@ -109,6 +109,28 @@ class LayoutUpdateDTO(BaseModel):
     preset: str = Field(min_length=1)
 
 
+class PsdParamsDTO(BaseModel):
+    """Multitaper PSD parameters.
+
+    Mirrors the kwargs of ``cogpy.spectral.psd.psd_multitaper``. Field names
+    match cogpy exactly so the server can forward them verbatim.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    NW: float = Field(default=4.0, ge=0.5, description="Time-bandwidth product")
+    K: int | None = Field(
+        default=None, ge=1, description="Number of tapers (defaults to int(2*NW-1))"
+    )
+    fmin: float = Field(default=0.0, ge=0.0, description="Minimum frequency (Hz)")
+    fmax: float | None = Field(
+        default=None, ge=0.1, description="Maximum frequency (Hz); None = Nyquist"
+    )
+    detrend: bool = Field(
+        default=True, description="Remove linear trend before tapering"
+    )
+
+
 class TensorSliceRequestDTO(BaseModel):
     """Slice request body."""
 
@@ -124,7 +146,7 @@ class TensorSliceRequestDTO(BaseModel):
     frame_time: float | None = Field(default=None, ge=0.0)
     max_points: int | None = Field(default=None, ge=1)
     downsample: DownsampleMethod = DownsampleMethod.MINMAX
-    psd_params: dict[str, float] | None = None
+    psd_params: PsdParamsDTO | None = None
 
     @model_validator(mode="after")
     def validate_request(self) -> "TensorSliceRequestDTO":

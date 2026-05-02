@@ -369,11 +369,21 @@ def apply_slice_request(
     if request.view_type == "psd_live" and "time" in sliced.dims:
         from cogpy.spectral.psd import psd_multitaper
 
+        from tensorscope.server.models import PsdParamsDTO
+
         time_vals = np.asarray(sliced.coords["time"].values, dtype=float)
         fs = 1.0 / np.median(np.diff(time_vals)) if len(time_vals) > 1 else 1.0
 
-        nw = float(request.psd_params.get("NW", 4)) if request.psd_params else 4.0
-        fmax = float(request.psd_params.get("fmax", 100)) if request.psd_params else 100.0
+        psd_params = request.psd_params or PsdParamsDTO()
+        mt_kwargs: dict[str, Any] = {
+            "NW": psd_params.NW,
+            "fmin": psd_params.fmin,
+            "detrend": psd_params.detrend,
+        }
+        if psd_params.K is not None:
+            mt_kwargs["K"] = psd_params.K
+        if psd_params.fmax is not None:
+            mt_kwargs["fmax"] = psd_params.fmax
 
         non_time_dims = [d for d in sliced.dims if d != "time"]
 
@@ -382,13 +392,13 @@ def apply_slice_request(
             arr = np.asarray(reordered.values)
             orig_shape = arr.shape[1:]
             flat = arr.reshape(arr.shape[0], -1).T  # (n_ch, time)
-            psd_vals, freqs = psd_multitaper(flat, fs, NW=nw, fmax=fmax)
+            psd_vals, freqs = psd_multitaper(flat, fs, **mt_kwargs)
             # psd_vals: (n_ch, freq) -> reshape to (*orig_shape, freq) -> (freq, *orig_shape)
             psd_vals = psd_vals.reshape(*orig_shape, -1)
             psd_vals = np.moveaxis(psd_vals, -1, 0)
         else:
             arr = np.asarray(sliced.values)  # (time,)
-            psd_vals, freqs = psd_multitaper(arr, fs, NW=nw, fmax=fmax)
+            psd_vals, freqs = psd_multitaper(arr, fs, **mt_kwargs)
 
         coords = {"freq": freqs}
         for d in non_time_dims:

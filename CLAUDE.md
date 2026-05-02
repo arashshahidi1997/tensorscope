@@ -61,7 +61,31 @@ Views toggle visibility in-place without reflowing neighbors. `ViewPanel` provid
 
 ### PSD live computation
 
-Server's `psd_live` view type computes on-the-fly multitaper PSD using `cogpy.core.spectral.psd.psd_multitaper`. The frontend's `expandPSDLive()` maps the server's single `psd_live` to three sub-view IDs (`psd_heatmap`, `psd_curve`, `psd_spatial`), all populated from one server round-trip.
+Server's `psd_live` view type computes on-the-fly multitaper PSD using `cogpy.spectral.psd.psd_multitaper` (cogpy v0.2.0 flat layout). The frontend's `expandPSDLive()` maps the server's single `psd_live` to three sub-view IDs (`psd_heatmap`, `psd_curve`, `psd_spatial`), all populated from one server round-trip.
+
+`psd_params` is a typed `PsdParamsDTO` mirroring cogpy kwargs: `NW`, `K`, `fmin`, `fmax`, `detrend`. Default `fmax` is `None` (Nyquist) — matches cogpy's default.
+
+### cogpy-backed transforms
+
+`TransformRegistry` includes cogpy wrappers alongside the scipy-backed transforms:
+
+- Pre-processing (DAG-only): `cmr`, `notch`, `spatial_median`, `zscore`
+- Spectral: `psd_multitaper`, `psd_welch`
+- Intervals / epochs: `restrict_intervals`, `perievent_epochs`
+- Triggered stats (consume `(event, ..., lag)` tensors): `triggered_average`, `triggered_std`, `triggered_median`, `triggered_snr`
+
+Optional cogpy kwargs that accept `None` (e.g. `K`, `fmax`, `noverlap`) are carried through `ParamSpec` as sentinel defaults (`0` / `-1`) because `ParamSpec(default=None)` means "required".
+
+### cogpy-backed event detectors
+
+`core/events/detectors.py` registers wrappers for `cogpy.detect`:
+
+- `cogpy_ripple` → `RippleDetector` (100–250 Hz bandpass + envelope + dual threshold)
+- `cogpy_spindle` → `SpindleDetector` (11–16 Hz)
+- `cogpy_burst` → `BurstDetector` (h-maxima on multitaper spectrogram)
+- `cogpy_threshold` → `ThresholdDetector` (crossings with optional bandpass/envelope)
+
+All four return `EventStream`s built from the cogpy `EventCatalog.df`.
 
 ### Data flow
 
@@ -72,8 +96,8 @@ Server's `psd_live` view type computes on-the-fly multitaper PSD using `cogpy.co
 
 ## Testing
 
-- **Backend**: pytest, fixtures in `tests/conftest.py`. Run with `PYTHONPATH=src`. 126 tests.
-- **Frontend**: vitest 4.x. Per-file environment override via `// @vitest-environment jsdom` comment (not `environmentMatchGlobs`). 39 tests across store and view files.
+- **Backend**: pytest, fixtures in `tests/conftest.py`. Run with `PYTHONPATH=src`. 139 tests.
+- **Frontend**: vitest 4.x. Per-file environment override via `// @vitest-environment jsdom` comment (not `environmentMatchGlobs`). 106 tests across store, api, and view files.
 
 ## Key Conventions
 
@@ -88,3 +112,5 @@ Server's `psd_live` view type computes on-the-fly multitaper PSD using `cogpy.co
 - Never cast server fields with `as number`; use `parseFloat` + `Number.isFinite` guard
 - For cursor-driven animations, use a sequential fetch queue of 1 (not React Query or AbortController)
 - Slot-based layout: views have fixed home slots; toggling shows/hides in-place (no reflow)
+- FastAPI routers: declare specific paths (e.g. `/events/detectors`) before parameterized ones (`/events/{name}`); FastAPI matches in declaration order
+- cogpy detectors that bandpass (ripple/spindle/burst) require an `fs` attr on the input — `core/events/detectors.py` calls `_ensure_fs()` to infer it from the time coord before handing the array to cogpy

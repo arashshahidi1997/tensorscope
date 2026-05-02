@@ -3,8 +3,12 @@
 from tensorscope.core.events.model import EventStream, EventStyle
 from tensorscope.core.events.registry import EventRegistry
 from tensorscope.core.events.detectors import (
-    EventDetector,
+    CogpyBurstDetector,
+    CogpyRippleDetector,
+    CogpySpindleDetector,
+    CogpyThresholdDetector,
     DetectorParamSpec,
+    EventDetector,
     ThresholdDetector,
     get_detector,
     list_detectors,
@@ -18,6 +22,10 @@ __all__ = [
     "EventDetector",
     "DetectorParamSpec",
     "ThresholdDetector",
+    "CogpyBurstDetector",
+    "CogpyRippleDetector",
+    "CogpySpindleDetector",
+    "CogpyThresholdDetector",
     "get_detector",
     "list_detectors",
     "register_detector",

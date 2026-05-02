@@ -441,3 +441,152 @@ class TestTransformDefinition:
         )
         validated = defn.validate_params({"window_s": 1.0})
         assert validated["window_s"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# cogpy-backed transforms
+# ---------------------------------------------------------------------------
+
+class TestCogpyTransforms:
+    """End-to-end exercises of the cogpy-backed compute functions."""
+
+    def _setup(self):
+        treg = TransformRegistry()
+        register_builtins(treg)
+        tensor_reg = TensorRegistry()
+        tensor_reg.add(_make_grid_tensor("signal"))
+        tensor_reg.add(_make_flat_tensor("signal_flat"))
+        executor = TransformExecutor(treg, tensor_reg, TransformCache())
+        return executor, tensor_reg
+
+    def test_cmr(self):
+        executor, _ = self._setup()
+        result = executor.execute("cmr", ["signal"])
+        assert result.status == "computed"
+        assert result.data.dims == ("time", "AP", "ML")
+        # Median over spatial dims should be near zero after CMR.
+        med = np.abs(result.data.median(dim=("AP", "ML")).values)
+        assert float(med.max()) < 1e-10
+
+    def test_notch(self):
+        executor, _ = self._setup()
+        result = executor.execute("notch", ["signal"], {"freqs": [10.0, 20.0], "Q": 30.0})
+        assert result.status == "computed"
+        assert result.data.dims == ("time", "AP", "ML")
+
+    def test_spatial_median(self):
+        executor, _ = self._setup()
+        result = executor.execute("spatial_median", ["signal"], {"size": 3})
+        assert result.status == "computed"
+        assert set(result.data.dims) == {"time", "AP", "ML"}
+
+    def test_zscore(self):
+        executor, _ = self._setup()
+        result = executor.execute("zscore", ["signal"], {"dim": "time", "robust": False})
+        assert result.status == "computed"
+        # Each channel's z-scored mean ≈ 0, std ≈ 1.
+        mean = result.data.mean(dim="time")
+        std = result.data.std(dim="time")
+        assert float(np.abs(mean.values).max()) < 1e-6
+        assert float(np.abs(std.values - 1.0).max()) < 1e-6
+
+    def test_psd_multitaper(self):
+        executor, _ = self._setup()
+        result = executor.execute(
+            "psd_multitaper",
+            ["signal"],
+            {"NW": 3.0, "fmax": 40.0},
+        )
+        assert result.status == "computed"
+        assert "freq" in result.data.dims
+        freq = np.asarray(result.data.coords["freq"].values)
+        assert freq.max() <= 40.0 + 1e-6
+
+    def test_psd_welch(self):
+        executor, _ = self._setup()
+        result = executor.execute(
+            "psd_welch",
+            ["signal_flat"],
+            {"nperseg": 64, "fmax": 30.0},
+        )
+        assert result.status == "computed"
+        assert "freq" in result.data.dims
+
+    def test_restrict_intervals(self):
+        executor, tensor_reg = self._setup()
+        # signal fixture: fs=100, n_time=200 → t in [0, 1.99)
+        result = executor.execute(
+            "restrict_intervals",
+            ["signal"],
+            {"intervals": [[0.0, 0.5], [1.0, 1.5]]},
+        )
+        assert result.status == "computed"
+        t = np.asarray(result.data.coords["time"].values)
+        # Every surviving time falls inside one of the two intervals (half-open).
+        inside = ((t >= 0.0) & (t < 0.5)) | ((t >= 1.0) & (t < 1.5))
+        assert inside.all()
+        assert t.size > 0 and t.size < 200
+
+    def test_perievent_epochs_then_triggered_average(self):
+        executor, tensor_reg = self._setup()
+        epochs = executor.execute(
+            "perievent_epochs",
+            ["signal"],
+            {"event_times": [0.5, 1.0, 1.5], "pre": 0.1, "post": 0.1},
+            tensor_id="epochs",
+        )
+        assert epochs.status == "computed"
+        assert "event" in epochs.data.dims
+        assert "lag" in epochs.data.dims
+        assert epochs.data.sizes["event"] == 3
+
+        eta = executor.execute(
+            "triggered_average", ["epochs"], {"event_dim": "event"}
+        )
+        assert eta.status == "computed"
+        assert "event" not in eta.data.dims
+        assert "lag" in eta.data.dims
+
+    def test_triggered_std_and_snr(self):
+        executor, _ = self._setup()
+        executor.execute(
+            "perievent_epochs",
+            ["signal"],
+            {"event_times": [0.3, 0.6, 0.9, 1.2, 1.5], "pre": 0.1, "post": 0.1},
+            tensor_id="epochs_many",
+        )
+        std = executor.execute("triggered_std", ["epochs_many"])
+        snr = executor.execute("triggered_snr", ["epochs_many"])
+        assert std.status == "computed"
+        assert snr.status == "computed"
+        assert "event" not in std.data.dims
+        assert "event" not in snr.data.dims
+
+
+class TestCogpyDetectors:
+    """Smoke tests for cogpy-backed event detectors."""
+
+    def _signal_with_spike(self, n_time: int = 1000, fs: float = 1000.0) -> xr.DataArray:
+        t = np.arange(n_time) / fs
+        y = 0.05 * np.random.default_rng(0).standard_normal(n_time)
+        # Inject a single large deflection at t=0.5s.
+        i = int(0.5 * fs)
+        y[i : i + 20] += 10.0
+        return xr.DataArray(y, dims=("time",), coords={"time": t}, attrs={"fs": fs})
+
+    def test_registry_contains_cogpy_detectors(self):
+        from tensorscope.core.events import list_detectors
+
+        names = {d.name for d in list_detectors()}
+        assert {"cogpy_ripple", "cogpy_spindle", "cogpy_burst", "cogpy_threshold"} <= names
+
+    def test_cogpy_threshold_detects(self):
+        from tensorscope.core.events import get_detector
+
+        det = get_detector("cogpy_threshold")
+        stream = det.detect(
+            self._signal_with_spike(),
+            {"threshold": 1.0, "direction": "positive", "min_duration": 0.0},
+        )
+        assert stream.name.startswith("cogpy_thresh")
+        assert len(stream) >= 1

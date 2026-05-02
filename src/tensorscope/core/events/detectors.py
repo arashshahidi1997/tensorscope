@@ -161,6 +161,181 @@ class ThresholdDetector(EventDetector):
         )
 
 
+# --- cogpy-backed detectors ----------------------------------------------
+#
+# These thin wrappers adapt the class-based detectors in ``cogpy.detect`` to
+# TensorScope's instance-based ``EventDetector`` interface. The cogpy
+# detectors produce ``EventCatalog`` objects; we map the underlying
+# DataFrame onto an ``EventStream`` and pick a stream name/style here.
+
+
+def _ensure_fs(data: xr.DataArray) -> xr.DataArray:
+    """Attach an `fs` attr inferred from the time coord if missing.
+
+    cogpy's ripple/spindle/burst detectors require a sampling-frequency
+    attribute; tensor datasets loaded via xarray often only carry the time
+    coordinate.
+    """
+    if "fs" in data.attrs or "time" not in data.dims or "time" not in data.coords:
+        return data
+    time_vals = np.asarray(data.coords["time"].values, dtype=float)
+    if time_vals.size < 2:
+        return data
+    diffs = np.diff(time_vals[:101])
+    pos = diffs[diffs > 0]
+    if pos.size == 0:
+        return data
+    return data.assign_attrs({**dict(data.attrs), "fs": float(1.0 / pos.mean())})
+
+
+def _catalog_to_stream(
+    catalog: Any,
+    *,
+    name_prefix: str,
+    color: str,
+) -> EventStream:
+    """Convert a ``cogpy.events.EventCatalog`` to a TensorScope ``EventStream``."""
+    df = catalog.df.copy() if hasattr(catalog, "df") else pd.DataFrame(catalog)
+    if "t" not in df.columns:
+        raise ValueError(f"{name_prefix}: catalog missing 't' column")
+    if "event_id" not in df.columns:
+        df["event_id"] = [f"{name_prefix}_{i:06d}" for i in range(len(df))]
+    stream_name = f"{name_prefix}_{uuid.uuid4().hex[:8]}"
+    return EventStream(
+        name=stream_name,
+        df=df,
+        style=EventStyle(color=color, marker="triangle", alpha=0.85),
+    )
+
+
+class CogpyRippleDetector(EventDetector):
+    """Ripple detector (``cogpy.detect.RippleDetector``): bandpass→envelope→z-score."""
+
+    name = "cogpy_ripple"
+    description = "Ripples via cogpy (bandpass + Hilbert envelope + dual threshold)."
+    param_schema = {
+        "freq_lo": DetectorParamSpec(dtype="float", default=100.0, description="Bandpass low (Hz)", min_value=0.1),
+        "freq_hi": DetectorParamSpec(dtype="float", default=250.0, description="Bandpass high (Hz)", min_value=0.1),
+        "threshold_low": DetectorParamSpec(dtype="float", default=2.0, description="Lower z-score threshold"),
+        "threshold_high": DetectorParamSpec(dtype="float", default=3.0, description="Upper z-score threshold"),
+        "min_duration": DetectorParamSpec(dtype="float", default=0.02, description="Minimum duration (s)", min_value=0.0),
+        "max_duration": DetectorParamSpec(dtype="float", default=0.2, description="Maximum duration (s)", min_value=0.0),
+        "filter_order": DetectorParamSpec(dtype="int", default=4, description="Butterworth order", min_value=1, max_value=8),
+    }
+
+    def detect(self, data: xr.DataArray, params: dict[str, Any]) -> EventStream:
+        from cogpy.detect import RippleDetector
+
+        det = RippleDetector(
+            freq_range=(
+                float(params.get("freq_lo", 100.0)),
+                float(params.get("freq_hi", 250.0)),
+            ),
+            threshold_low=float(params.get("threshold_low", 2.0)),
+            threshold_high=float(params.get("threshold_high", 3.0)),
+            min_duration=float(params.get("min_duration", 0.02)),
+            max_duration=float(params.get("max_duration", 0.2)),
+            filter_order=int(params.get("filter_order", 4)),
+        )
+        return _catalog_to_stream(det.detect(_ensure_fs(data)), name_prefix="ripple", color="#4e9bff")
+
+
+class CogpySpindleDetector(EventDetector):
+    """Spindle detector (``cogpy.detect.SpindleDetector``): sigma-band ripples."""
+
+    name = "cogpy_spindle"
+    description = "Sleep spindles via cogpy (11–16 Hz bandpass + envelope + threshold)."
+    param_schema = {
+        "freq_lo": DetectorParamSpec(dtype="float", default=11.0, description="Bandpass low (Hz)", min_value=0.1),
+        "freq_hi": DetectorParamSpec(dtype="float", default=16.0, description="Bandpass high (Hz)", min_value=0.1),
+        "threshold_low": DetectorParamSpec(dtype="float", default=2.0, description="Lower z-score threshold"),
+        "threshold_high": DetectorParamSpec(dtype="float", default=3.0, description="Upper z-score threshold"),
+        "min_duration": DetectorParamSpec(dtype="float", default=0.5, description="Minimum duration (s)", min_value=0.0),
+        "max_duration": DetectorParamSpec(dtype="float", default=3.0, description="Maximum duration (s)", min_value=0.0),
+        "filter_order": DetectorParamSpec(dtype="int", default=4, description="Butterworth order", min_value=1, max_value=8),
+    }
+
+    def detect(self, data: xr.DataArray, params: dict[str, Any]) -> EventStream:
+        from cogpy.detect import SpindleDetector
+
+        det = SpindleDetector(
+            freq_range=(
+                float(params.get("freq_lo", 11.0)),
+                float(params.get("freq_hi", 16.0)),
+            ),
+            threshold_low=float(params.get("threshold_low", 2.0)),
+            threshold_high=float(params.get("threshold_high", 3.0)),
+            min_duration=float(params.get("min_duration", 0.5)),
+            max_duration=float(params.get("max_duration", 3.0)),
+            filter_order=int(params.get("filter_order", 4)),
+        )
+        return _catalog_to_stream(det.detect(_ensure_fs(data)), name_prefix="spindle", color="#b388ff")
+
+
+class CogpyBurstDetector(EventDetector):
+    """Burst detector (``cogpy.detect.BurstDetector``): h-maxima on spectrograms."""
+
+    name = "cogpy_burst"
+    description = "Burst peaks via cogpy (h-maxima on multitaper spectrogram)."
+    param_schema = {
+        "h_quantile": DetectorParamSpec(dtype="float", default=0.9, description="Height quantile", min_value=0.0, max_value=1.0),
+        "nperseg": DetectorParamSpec(dtype="int", default=256, description="Spectrogram window (samples)", min_value=16),
+        "noverlap": DetectorParamSpec(dtype="int", default=128, description="Spectrogram overlap (samples)", min_value=0),
+        "bandwidth": DetectorParamSpec(dtype="float", default=4.0, description="Multitaper bandwidth (Hz)", min_value=0.1),
+    }
+
+    def detect(self, data: xr.DataArray, params: dict[str, Any]) -> EventStream:
+        from cogpy.detect import BurstDetector
+
+        det = BurstDetector(
+            h_quantile=float(params.get("h_quantile", 0.9)),
+            nperseg=int(params.get("nperseg", 256)),
+            noverlap=int(params.get("noverlap", 128)),
+            bandwidth=float(params.get("bandwidth", 4.0)),
+        )
+        return _catalog_to_stream(det.detect(_ensure_fs(data)), name_prefix="burst", color="#ff6b6b")
+
+
+class CogpyThresholdDetector(EventDetector):
+    """Threshold detector (``cogpy.detect.ThresholdDetector``): threshold crossings."""
+
+    name = "cogpy_threshold"
+    description = "Threshold crossings via cogpy (optional bandpass + envelope)."
+    param_schema = {
+        "threshold": DetectorParamSpec(dtype="float", default=3.0, description="Threshold value"),
+        "direction": DetectorParamSpec(
+            dtype="str", default="both", description="Direction", choices=["positive", "negative", "both"]
+        ),
+        "bandpass_lo": DetectorParamSpec(dtype="float", default=None, description="Optional bandpass low (Hz)"),
+        "bandpass_hi": DetectorParamSpec(dtype="float", default=None, description="Optional bandpass high (Hz)"),
+        "use_envelope": DetectorParamSpec(dtype="bool", default=False, description="Hilbert envelope pre-threshold"),
+        "min_duration": DetectorParamSpec(dtype="float", default=0.0, description="Minimum duration (s)", min_value=0.0),
+        "merge_gap": DetectorParamSpec(dtype="float", default=0.0, description="Merge events within this gap (s)", min_value=0.0),
+        "filter_order": DetectorParamSpec(dtype="int", default=4, description="Bandpass order", min_value=1, max_value=8),
+    }
+
+    def detect(self, data: xr.DataArray, params: dict[str, Any]) -> EventStream:
+        from cogpy.detect import ThresholdDetector as _CogpyThreshold
+
+        bp_lo = params.get("bandpass_lo")
+        bp_hi = params.get("bandpass_hi")
+        bandpass = (
+            (float(bp_lo), float(bp_hi))
+            if bp_lo is not None and bp_hi is not None
+            else None
+        )
+        det = _CogpyThreshold(
+            threshold=float(params.get("threshold", 3.0)),
+            direction=str(params.get("direction", "both")),
+            bandpass=bandpass,
+            use_envelope=bool(params.get("use_envelope", False)),
+            min_duration=float(params.get("min_duration", 0.0)),
+            merge_gap=float(params.get("merge_gap", 0.0)),
+            filter_order=int(params.get("filter_order", 4)),
+        )
+        return _catalog_to_stream(det.detect(_ensure_fs(data)), name_prefix="cogpy_thresh", color="#ff6b35")
+
+
 # --- Detector Registry ---
 
 _DETECTOR_REGISTRY: dict[str, EventDetector] = {}
@@ -183,3 +358,7 @@ def list_detectors() -> list[EventDetector]:
 
 # Register built-in detectors
 register_detector(ThresholdDetector())
+register_detector(CogpyRippleDetector())
+register_detector(CogpySpindleDetector())
+register_detector(CogpyBurstDetector())
+register_detector(CogpyThresholdDetector())
