@@ -372,6 +372,38 @@ class ApiErrorDTO(BaseModel):
     details: dict[str, Any] | None = None
 
 
+class TensorPostDTO(BaseModel):
+    """Body for POST /tensors — runtime tensor injection.
+
+    ``payload`` follows the envelope defined in
+    ``tensorscope.pairing.wire.dataarray_to_payload``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    payload: dict[str, Any]
+    source: str | None = None
+    transform: str = "signal"
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class EventStreamPostDTO(BaseModel):
+    """Body for POST /events — runtime event-stream injection.
+
+    ``df_b64`` is base64-encoded parquet bytes (see
+    ``tensorscope.pairing.wire.dataframe_to_b64``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    df_b64: str
+    time_col: str = "t"
+    id_col: str = "event_id"
+    style: dict[str, Any] | None = None
+
+
 class StateDTO(BaseModel):
     """Top-level state payload."""
 

@@ -5,7 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Query
 
 from tensorscope.core.events.detectors import get_detector, list_detectors
-from tensorscope.core.events.model import EventStream
+from tensorscope.core.events.model import EventStream, EventStyle
+from tensorscope.pairing.wire import b64_to_dataframe
 from tensorscope.server.models import (
     ApiErrorDTO,
     DetectorDefinitionDTO,
@@ -14,6 +15,7 @@ from tensorscope.server.models import (
     DetectResultDTO,
     EventRecordDTO,
     EventStreamMetaDTO,
+    EventStreamPostDTO,
 )
 from tensorscope.server.routers.deps import SessionState, SessionStateDep
 from tensorscope.server.state import event_stream_meta
@@ -25,6 +27,25 @@ router = APIRouter(prefix="/events", tags=["events"])
 def list_event_streams(session: SessionState = SessionStateDep) -> list[EventStreamMetaDTO]:
     _, state = session
     return [event_stream_meta(stream) for stream in state.iter_events()]
+
+
+@router.post("", response_model=EventStreamMetaDTO, responses={400: {"model": ApiErrorDTO}})
+def post_event_stream(body: EventStreamPostDTO, session: SessionState = SessionStateDep) -> EventStreamMetaDTO:
+    """Register or replace an event stream by name. Used by the agent-pairing API."""
+    _, state = session
+    df = b64_to_dataframe(body.df_b64)
+    style = EventStyle(**body.style) if body.style else None
+    stream = EventStream(
+        name=body.name,
+        df=df,
+        time_col=body.time_col,
+        id_col=body.id_col,
+        style=style,
+    )
+    state.events.register(stream)
+    meta = event_stream_meta(stream)
+    state.publish("events_added", meta.model_dump())
+    return meta
 
 
 @router.get("/detectors", response_model=list[DetectorDefinitionDTO])

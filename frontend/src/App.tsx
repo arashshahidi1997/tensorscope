@@ -2,6 +2,7 @@ import { useEffect, useCallback, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
 import { useEventWindowQuery, useStateQuery } from "./api/queries";
+import { usePairingStream } from "./api/pairingStream";
 import type { EventRecordDTO, SelectionDTO } from "./api/types";
 import { WorkspaceMain } from "./components/views/WorkspaceMain";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -19,6 +20,7 @@ import { useSelectionStore, toSelectionDTO } from "./store/selectionStore";
 function App() {
   const queryClient = useQueryClient();
   const stateQuery = useStateQuery();
+  usePairingStream(queryClient);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [navigatorElement, setNavigatorElement] = useState<ReactNode>(null);
 

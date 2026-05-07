@@ -67,6 +67,13 @@ class TensorRegistry:
             raise ValueError(f"Tensor {node.name!r} already registered")
         self._tensors[str(node.name)] = node
 
+    def replace(self, node: TensorNode) -> None:
+        """Insert or overwrite a tensor by name. Used by runtime injection."""
+        self._tensors[str(node.name)] = node
+
+    def remove(self, name: str) -> None:
+        self._tensors.pop(str(name), None)
+
     def get(self, name: str) -> TensorNode:
         key = str(name)
         if key not in self._tensors:

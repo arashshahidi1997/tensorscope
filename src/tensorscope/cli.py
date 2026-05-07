@@ -31,6 +31,11 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--tensor-name", default="signal", help="Registered tensor name")
     serve.add_argument("--host", default="127.0.0.1", help="Bind host")
     serve.add_argument("--port", type=int, default=8000, help="Bind port")
+    serve.add_argument(
+        "--pair",
+        action="store_true",
+        help="Enable agent-pairing mode (all clients share one session).",
+    )
     return parser
 
 
@@ -196,19 +201,27 @@ def _choose_port(host: str, preferred_port: int, max_attempts: int = 100) -> int
     )
 
 
-def _cmd_serve(data_path: Path, tensor_name: str, host: str, port: int) -> int:
+def _cmd_serve(data_path: Path, tensor_name: str, host: str, port: int, pair: bool = False) -> int:
     if data_path.is_dir():
         tensors, brainstates, events = _load_bundle(data_path)
         if brainstates is not None:
             print(f"Loaded brainstates: {brainstates.dims} {brainstates.shape}")
-        app = create_app(tensors, tensor_name=tensor_name, events_registry=events, brainstates=brainstates)
+        app = create_app(
+            tensors, tensor_name=tensor_name, events_registry=events,
+            brainstates=brainstates, pair_mode=pair,
+        )
     else:
         data = _load_dataarray(data_path)
         brainstates = _load_brainstates(data_path)
         events = _load_events(data_path)
         if brainstates is not None:
             print(f"Loaded brainstates: {brainstates.dims} {brainstates.shape}")
-        app = create_app(data, tensor_name=tensor_name, events_registry=events, brainstates=brainstates)
+        app = create_app(
+            data, tensor_name=tensor_name, events_registry=events,
+            brainstates=brainstates, pair_mode=pair,
+        )
+    if pair:
+        print("Agent-pairing mode: all clients share one session.")
     chosen_port = _choose_port(str(host), int(port))
     if chosen_port != int(port):
         print(f"Port {port} is in use on {host}; using {chosen_port} instead.")
@@ -236,6 +249,7 @@ def main(argv: list[str] | None = None) -> None:
                 tensor_name=str(ns.tensor_name),
                 host=str(ns.host),
                 port=int(ns.port),
+                pair=bool(ns.pair),
             )
         )
 

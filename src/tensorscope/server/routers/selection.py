@@ -22,4 +22,6 @@ def update_selection(
     session: SessionState = SessionStateDep,
 ) -> SelectionDTO:
     _, state = session
-    return state.update_selection(selection)
+    updated = state.update_selection(selection)
+    state.publish("selection_changed", updated.model_dump())
+    return updated

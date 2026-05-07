@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Any
 
@@ -46,6 +47,14 @@ _VIEW_REGISTRY: dict[frozenset[str], list[str]] = {
 
 
 @dataclass
+class _Subscriber:
+    """One SSE subscriber: an asyncio queue plus the loop it lives on."""
+
+    queue: asyncio.Queue
+    loop: asyncio.AbstractEventLoop
+
+
+@dataclass
 class ServerState:
     """Single-session mutable server state."""
 
@@ -60,6 +69,7 @@ class ServerState:
     _dag: WorkspaceDAG = None  # type: ignore[assignment]
     _processed_cache: dict = None  # type: ignore[assignment]  # {tensor_name: xr.DataArray}
     _processed_params_hash: str | None = None
+    _subscribers: list[_Subscriber] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.processing is None:
@@ -113,6 +123,33 @@ class ServerState:
     def update_selection(self, selection: SelectionDTO) -> SelectionDTO:
         self.app_state.selection = SelectionState(**selection.model_dump())
         return SelectionDTO.from_selection(self.app_state.selection)
+
+    def subscribe(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop) -> _Subscriber:
+        """Register an async subscriber that will receive published events.
+
+        Caller is responsible for invoking ``unsubscribe`` when done.
+        """
+        sub = _Subscriber(queue=queue, loop=loop)
+        self._subscribers.append(sub)
+        return sub
+
+    def unsubscribe(self, sub: _Subscriber) -> None:
+        try:
+            self._subscribers.remove(sub)
+        except ValueError:
+            pass
+
+    def publish(self, event_type: str, payload: Any) -> None:
+        """Broadcast an event to all subscribers. Safe to call from sync routes."""
+        if not self._subscribers:
+            return
+        message = {"type": event_type, "payload": payload}
+        for sub in list(self._subscribers):
+            try:
+                sub.loop.call_soon_threadsafe(sub.queue.put_nowait, message)
+            except Exception:  # noqa: BLE001
+                # Loop closed or queue full — drop the subscriber silently.
+                self.unsubscribe(sub)
 
     def layout_dto(self) -> LayoutDTO:
         return LayoutDTO(**self.layout.to_dict())

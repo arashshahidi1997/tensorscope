@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from tensorscope.core.events import EventRegistry, EventStream
 from tensorscope.server.models import ApiErrorDTO
 from tensorscope.server.routers import brainstates as brainstates_router_mod
-from tensorscope.server.routers import dag, events, layout, pipeline, processing, selection, state, tensors, transforms
+from tensorscope.server.routers import dag, events, layout, pipeline, processing, selection, state, stream, tensors, transforms
 from tensorscope.server.session import SESSION_COOKIE_NAME, SessionManager
 from tensorscope.server.state import ServerState, create_server_state
 
@@ -50,11 +50,22 @@ def create_app(
     brainstates: xr.DataArray | None = None,
     static_dir: Path | None = None,
     title: str = "TensorScope API",
+    pair_mode: bool = False,
 ) -> FastAPI:
-    """Create a FastAPI app bound to one or more tensors."""
+    """Create a FastAPI app bound to one or more tensors.
+
+    Parameters
+    ----------
+    pair_mode
+        When True, all clients share one authoritative ServerState (no
+        per-cookie isolation). Used by the agent-pairing workflow so that a
+        Python agent and a browser session see the same tensors, events, and
+        selection.
+    """
     base_state = create_server_state(data, tensor_name=tensor_name, events=events_registry, brainstates=brainstates)
     app = FastAPI(title=title, version="0.2.0")
-    app.state.session_manager = SessionManager(base_state)
+    app.state.session_manager = SessionManager(base_state, pair_mode=pair_mode)
+    app.state.pair_mode = pair_mode
 
     register_error_handlers(app)
 
@@ -68,6 +79,7 @@ def create_app(
     app.include_router(dag.router, prefix="/api/v1")
     app.include_router(pipeline.router, prefix="/api/v1")
     app.include_router(brainstates_router_mod.router, prefix="/api/v1")
+    app.include_router(stream.router, prefix="/api/v1")
 
     # Serve frontend static files if available
     dist_dir = static_dir if static_dir is not None else _find_frontend_dist()
