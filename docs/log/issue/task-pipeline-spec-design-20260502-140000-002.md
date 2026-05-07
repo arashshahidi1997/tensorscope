@@ -4,9 +4,15 @@ status: done
 result_note: /storage2/arash/worklog/workflow/captures/20260502-171436-f8ff5e/note.md
 completed: 2026-05-02T17:14:37+02:00
 created: 2026-05-02
-updated: 2026-05-02
+updated: 2026-05-07
 timestamp: 20260502-140000-002
 tags: [task, design, architecture, pipeline, cache, snakemake]
+implementation:
+  partial: true
+  shipped_commit: 7884a88
+  shipped_on: 2026-05-07
+  shipped_scope: "YAML/JSON pipeline serialise + replay-on-import; stable tensor IDs"
+  deferred: ["persistent cache", "wildcard fan-out", "stale-cache visibility", "provenance → captions"]
 ---
 
 # Design proposal: declarative pipeline spec + persistent cache

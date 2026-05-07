@@ -238,6 +238,8 @@ list each item exactly once under its primary frame.
   the prereq for sharing analyses, regression tests on pipelines, and
   CI for derived-tensor stability.
 
+> **Shipped 2026-05-07** (commit `7884a88`). `POST /api/v1/pipeline/serialize?fmt=yaml|json` returns a downloadable file; `POST /api/v1/pipeline/import` parses YAML/JSON and replays via `core/pipeline/replay.replay_pipeline` against the session's transform executor with stable user-controlled tensor IDs. Frontend Pipeline tab gained an Export/Import section. Persistent cache, wildcard fan-out, and stale-cache visibility (other items in §3) intentionally deferred.
+
 ### Stable IDs
 
 - `tensor_id` defaults to `{transform_name}_{uuid4[:8]}`. For
@@ -288,6 +290,9 @@ compatible. That's a strategy decision.
    metadata object. Unblocks neuroscience use cases and per-region CMR.
 2. Add a `pipeline.yaml` spec the UI reads/writes; persist the
    transform cache to disk under `.tensorscope-cache/`.
+   *(Half shipped 2026-05-07 in `7884a88`: YAML/JSON round-trip via
+   `/pipeline/serialize` + `/pipeline/import` with stable tensor IDs.
+   Persistent cache deferred.)*
 3. Fix the `K=0` / `fmax=0` / `noverlap=-1` sentinel leak by extending
    `ParamSpec` to a tri-state (required / default-None / default-value).
 4. Default `fmin` to 1 Hz (not 0) and add `freq_scale: log|linear` to
