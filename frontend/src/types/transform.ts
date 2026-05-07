@@ -9,6 +9,7 @@
 export type TransformParamSpec = {
   dtype: string;
   default: unknown;
+  required: boolean;
   description: string;
   min_value: number | null;
   max_value: number | null;

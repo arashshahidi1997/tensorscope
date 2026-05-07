@@ -198,3 +198,27 @@ def test_openapi_schema_exposes_phase2_routes() -> None:
     assert "/api/v1/tensors/{name}/slice" in schema["paths"]
     assert "/api/v1/events/{name}/window" in schema["paths"]
     assert "TensorSliceDTO" in schema["components"]["schemas"]
+
+
+def test_transform_param_schema_no_sentinel_leak() -> None:
+    """Optional cogpy params expose default=null + required=false (no 0/-1 leak)."""
+    client = _client()
+
+    mt = client.get("/api/v1/transforms/psd_multitaper").json()
+    assert mt["param_schema"]["K"]["default"] is None
+    assert mt["param_schema"]["K"]["required"] is False
+    assert mt["param_schema"]["fmax"]["default"] is None
+    assert mt["param_schema"]["fmax"]["required"] is False
+    # NW has a concrete default; not required.
+    assert mt["param_schema"]["NW"]["default"] == 4.0
+    assert mt["param_schema"]["NW"]["required"] is False
+
+    welch = client.get("/api/v1/transforms/psd_welch").json()
+    assert welch["param_schema"]["noverlap"]["default"] is None
+    assert welch["param_schema"]["noverlap"]["required"] is False
+    assert welch["param_schema"]["fmax"]["default"] is None
+
+    # Truly required params (e.g. notch.freqs) surface required=true.
+    notch = client.get("/api/v1/transforms/notch").json()
+    assert notch["param_schema"]["freqs"]["required"] is True
+    assert notch["param_schema"]["freqs"]["default"] is None

@@ -10,16 +10,50 @@ import xarray as xr
 from tensorscope.core.state import TensorNode
 
 
+class _RequiredSentinel:
+    """Singleton marker for "no default → parameter is required".
+
+    Survives ``copy.deepcopy`` (used by the per-session state cloning) so that
+    ``ParamSpec.is_required`` keeps comparing by identity across sessions.
+    """
+
+    _instance: "_RequiredSentinel | None" = None
+
+    def __new__(cls) -> "_RequiredSentinel":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self) -> str:
+        return "<REQUIRED>"
+
+    def __copy__(self) -> "_RequiredSentinel":
+        return self
+
+    def __deepcopy__(self, memo: dict) -> "_RequiredSentinel":
+        return self
+
+
+_REQUIRED: Any = _RequiredSentinel()
+
+
 @dataclass(frozen=True, slots=True)
 class ParamSpec:
     """Specification for a single transform parameter.
+
+    Tri-state semantics for ``default``:
+
+    - Omitted (``_REQUIRED`` sentinel) → parameter is **required**; absence raises.
+    - ``default=None`` → optional; ``None`` is a valid value passed through to the
+      compute function (typically meaning "use the underlying library's default").
+    - ``default=value`` → optional with a concrete fallback when omitted.
 
     Parameters
     ----------
     dtype
         Expected type name: "float", "int", "str", "bool", or "list[float]" etc.
     default
-        Default value (None = required parameter).
+        See tri-state semantics above. Omit for required.
     description
         Human-readable description.
     min_value / max_value
@@ -29,18 +63,22 @@ class ParamSpec:
     """
 
     dtype: str
-    default: Any = None
+    default: Any = _REQUIRED
     description: str = ""
     min_value: float | None = None
     max_value: float | None = None
     choices: tuple[str, ...] | None = None
 
+    @property
+    def is_required(self) -> bool:
+        return self.default is _REQUIRED
+
     def validate(self, value: Any) -> Any:
         """Basic validation; returns coerced value or raises ValueError."""
         if value is None:
-            if self.default is not None:
-                return self.default
-            raise ValueError(f"required parameter not provided")
+            if self.is_required:
+                raise ValueError("required parameter not provided")
+            return self.default
         if self.min_value is not None and isinstance(value, (int, float)):
             if value < self.min_value:
                 raise ValueError(f"value {value} below minimum {self.min_value}")

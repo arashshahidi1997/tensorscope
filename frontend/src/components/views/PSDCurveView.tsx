@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { PSDAvgData } from "../../api/arrow";
+import { useAppStore } from "../../store/appStore";
 import { YTicks } from "./AxisTicks";
 
 type PSDCurveProps = {
@@ -14,6 +15,7 @@ type PSDCurveProps = {
  * Draws mean line and +/-1 std band.
  */
 export function PSDCurveView({ data, selectedFreq, onSelectFreq, freqLogScale = false }: PSDCurveProps) {
+  const toggleFreqLogScale = useAppStore((s) => s.toggleFreqLogScale);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dataRef = useRef(data);
@@ -148,6 +150,9 @@ export function PSDCurveView({ data, selectedFreq, onSelectFreq, freqLogScale = 
     draw();
   }, [data, selectedFreq, draw]);
 
+  const freqLogScaleRef = useRef(freqLogScale);
+  useEffect(() => { freqLogScaleRef.current = freqLogScale; });
+
   // Click handler
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -164,7 +169,7 @@ export function PSDCurveView({ data, selectedFreq, onSelectFreq, freqLogScale = 
       const yInPlot = e.clientY - rect.top - MARGIN.top;
       const yFrac = yInPlot / plotH;
       let freq: number;
-      if (freqLogScale && fMin > 0) {
+      if (freqLogScaleRef.current && fMin > 0) {
         const logFMin = Math.log10(fMin);
         const logFMax = Math.log10(fMax);
         freq = Math.pow(10, logFMax - yFrac * (logFMax - logFMin));
@@ -184,14 +189,26 @@ export function PSDCurveView({ data, selectedFreq, onSelectFreq, freqLogScale = 
   const fMax = data.freqs[data.freqs.length - 1];
 
   return (
-    <div className="axis-canvas-wrap" title="Click to select frequency">
-      <div className="axis-y-label">Freq (Hz)</div>
-      <YTicks lo={fMin} hi={fMax} />
-      <div ref={containerRef} className="axis-canvas-area">
-        <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%", cursor: "crosshair" }} />
+    <div style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column" }}>
+      <div className="ts-toolbar">
+        <button
+          type="button"
+          className={`ts-tool${freqLogScale ? " active" : ""}`}
+          title={`Frequency axis: ${freqLogScale ? "log" : "linear"}`}
+          onClick={toggleFreqLogScale}
+          aria-label="Toggle log frequency"
+          aria-pressed={freqLogScale}
+        >log</button>
       </div>
-      <div className="axis-x-ticks" />
-      <div className="axis-x-label">Power (log₁₀)</div>
+      <div className="axis-canvas-wrap" title="Click to select frequency" style={{ flex: 1, minHeight: 0 }}>
+        <div className="axis-y-label">Freq (Hz)</div>
+        <YTicks lo={fMin} hi={fMax} logScale={freqLogScale && fMin > 0} />
+        <div ref={containerRef} className="axis-canvas-area">
+          <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%", cursor: "crosshair" }} />
+        </div>
+        <div className="axis-x-ticks" />
+        <div className="axis-x-label">Power (log₁₀)</div>
+      </div>
     </div>
   );
 }

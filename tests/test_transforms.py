@@ -214,6 +214,25 @@ class TestParamSpec:
         with pytest.raises(ValueError, match="not in"):
             spec.validate("tsne")
 
+    def test_default_none_is_optional(self):
+        """default=None means optional with library-default fallback (not required)."""
+        spec = ParamSpec(dtype="int", default=None)
+        assert not spec.is_required
+        assert spec.validate(None) is None
+        assert spec.validate(7) == 7
+
+    def test_omitted_default_is_required(self):
+        spec = ParamSpec(dtype="int")
+        assert spec.is_required
+        with pytest.raises(ValueError, match="required"):
+            spec.validate(None)
+
+    def test_concrete_default_falls_back(self):
+        spec = ParamSpec(dtype="int", default=4)
+        assert not spec.is_required
+        assert spec.validate(None) == 4
+        assert spec.validate(2) == 2
+
 
 # ---------------------------------------------------------------------------
 # InputSpec
@@ -502,6 +521,23 @@ class TestCogpyTransforms:
         freq = np.asarray(result.data.coords["freq"].values)
         assert freq.max() <= 40.0 + 1e-6
 
+    def test_psd_multitaper_empty_params_matches_explicit_none(self):
+        """Empty params should behave the same as K=None / fmax=None."""
+        executor, _ = self._setup()
+        empty = executor.execute("psd_multitaper", ["signal"], {}, tensor_id="a")
+        explicit = executor.execute(
+            "psd_multitaper",
+            ["signal"],
+            {"K": None, "fmax": None},
+            tensor_id="b",
+        )
+        assert empty.status == "computed"
+        assert explicit.status == "computed"
+        np.testing.assert_array_equal(empty.data.values, explicit.data.values)
+        # fmax=None → cogpy default is Nyquist (fs/2 = 50). Should not be capped.
+        freq = np.asarray(empty.data.coords["freq"].values)
+        assert freq.max() > 40.0
+
     def test_psd_welch(self):
         executor, _ = self._setup()
         result = executor.execute(
@@ -561,6 +597,104 @@ class TestCogpyTransforms:
         assert snr.status == "computed"
         assert "event" not in std.data.dims
         assert "event" not in snr.data.dims
+
+    def test_triggered_average_baseline_window(self):
+        """Per-epoch DC offsets cancel under `baseline_window`; persist without it."""
+        treg = TransformRegistry()
+        register_builtins(treg)
+
+        n_events, n_ch, n_lag = 3, 2, 21
+        lag = np.linspace(-0.2, 0.2, n_lag)
+        epoch_data = np.zeros((n_events, n_ch, n_lag), dtype=float)
+        for i in range(n_events):
+            epoch_data[i] = (i + 1) * 100.0  # constant DC offset per epoch
+        epochs = xr.DataArray(
+            epoch_data,
+            dims=("event", "channel", "lag"),
+            coords={
+                "event": np.arange(n_events),
+                "channel": np.arange(n_ch),
+                "lag": lag,
+            },
+        )
+        tensor_reg = TensorRegistry()
+        tensor_reg.add(TensorNode(name="epochs_dc", data=epochs))
+        executor = TransformExecutor(treg, tensor_reg, TransformCache())
+
+        # Without baseline correction: ETA = mean(100, 200, 300) = 200.
+        eta = executor.execute(
+            "triggered_average", ["epochs_dc"], tensor_id="eta_raw"
+        )
+        assert eta.status == "computed"
+        assert np.allclose(eta.data.values, 200.0)
+
+        # With baseline_window = pre-event interval: each epoch's mean over the
+        # window equals its DC offset, so subtraction zeros the entire epoch.
+        eta_bc = executor.execute(
+            "triggered_average",
+            ["epochs_dc"],
+            {"baseline_window": [-0.2, 0.0]},
+            tensor_id="eta_bc",
+        )
+        assert eta_bc.status == "computed"
+        assert np.allclose(eta_bc.data.values, 0.0)
+
+    def test_triggered_average_baseline_window_no_overlap_raises(self):
+        treg = TransformRegistry()
+        register_builtins(treg)
+
+        n_events, n_lag = 2, 11
+        lag = np.linspace(-0.1, 0.1, n_lag)
+        epochs = xr.DataArray(
+            np.zeros((n_events, n_lag)),
+            dims=("event", "lag"),
+            coords={"event": np.arange(n_events), "lag": lag},
+        )
+        tensor_reg = TensorRegistry()
+        tensor_reg.add(TensorNode(name="epochs_short", data=epochs))
+        executor = TransformExecutor(treg, tensor_reg, TransformCache())
+
+        result = executor.execute(
+            "triggered_average",
+            ["epochs_short"],
+            {"baseline_window": [1.0, 2.0]},
+            tensor_id="bad",
+        )
+        assert result.status == "error"
+        assert "baseline_window" in str(result.error)
+
+    def test_triggered_snr_pins_definition(self):
+        """Verify SNR = mean / (std/sqrt(n)) — i.e. mean divided by SEM."""
+        treg = TransformRegistry()
+        register_builtins(treg)
+
+        rng = np.random.default_rng(42)
+        n_events, n_lag = 500, 8
+        signal_mean = 2.0
+        noise_std = 1.0
+        data = signal_mean + noise_std * rng.standard_normal((n_events, n_lag))
+        epochs = xr.DataArray(
+            data,
+            dims=("event", "lag"),
+            coords={"event": np.arange(n_events), "lag": np.arange(n_lag)},
+        )
+        tensor_reg = TensorRegistry()
+        tensor_reg.add(TensorNode(name="epochs_noise", data=epochs))
+        executor = TransformExecutor(treg, tensor_reg, TransformCache())
+
+        snr = executor.execute("triggered_snr", ["epochs_noise"])
+        assert snr.status == "computed"
+
+        # Compute the same definition by hand and compare.
+        avg = data.mean(axis=0)
+        sd = data.std(axis=0, ddof=1)
+        expected = avg / (sd / np.sqrt(n_events))
+        np.testing.assert_allclose(
+            np.asarray(snr.data.values), expected, rtol=1e-10, atol=1e-10
+        )
+
+        # Sanity: with n=500, mean=2, std≈1, SNR ≈ 2*sqrt(500) ≈ 44.7.
+        assert float(np.mean(snr.data.values)) > 30.0
 
 
 class TestCogpyDetectors:

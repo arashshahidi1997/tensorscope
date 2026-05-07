@@ -128,5 +128,7 @@ describe("PSD settings", () => {
     expect(getStore().freqLogScale).toBe(false);
     getStore().toggleFreqLogScale();
     expect(getStore().freqLogScale).toBe(true);
+    getStore().toggleFreqLogScale();
+    expect(getStore().freqLogScale).toBe(false);
   });
 });

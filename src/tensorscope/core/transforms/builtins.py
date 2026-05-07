@@ -469,20 +469,17 @@ def _compute_psd_multitaper(inputs: list[xr.DataArray], params: dict[str, Any]) 
     fs = _infer_fs(data)
     non_time = [d for d in data.dims if d != "time"]
 
-    # Sentinel convention: K=0 and fmax=0 mean "use cogpy default"
-    # (ParamSpec.validate treats default=None as "required", so we can't
-    # carry a real None through the schema).
-    k_val = int(params.get("K", 0) or 0)
-    fmax_val = float(params.get("fmax", 0.0) or 0.0)
+    k_val = params.get("K")
+    fmax_val = params.get("fmax")
     kwargs: dict[str, Any] = {
         "NW": float(params.get("NW", 4.0)),
         "fmin": float(params.get("fmin", 0.0)),
         "detrend": bool(params.get("detrend", True)),
     }
-    if k_val > 0:
-        kwargs["K"] = k_val
-    if fmax_val > 0:
-        kwargs["fmax"] = fmax_val
+    if k_val is not None:
+        kwargs["K"] = int(k_val)
+    if fmax_val is not None:
+        kwargs["fmax"] = float(fmax_val)
 
     if non_time:
         reordered = data.transpose("time", *non_time)
@@ -518,18 +515,17 @@ def _compute_psd_welch(inputs: list[xr.DataArray], params: dict[str, Any]) -> xr
     fs = _infer_fs(data)
     non_time = [d for d in data.dims if d != "time"]
 
-    # Sentinel convention (see _compute_psd_multitaper).
-    fmax_val = float(params.get("fmax", 0.0) or 0.0)
-    noverlap_val = int(params.get("noverlap", -1) or -1)
+    fmax_val = params.get("fmax")
+    noverlap_val = params.get("noverlap")
     kwargs: dict[str, Any] = {
         "fmin": float(params.get("fmin", 0.0)),
         "nperseg": int(params.get("nperseg", 256)),
         "detrend": str(params.get("detrend", "constant")),
     }
-    if fmax_val > 0:
-        kwargs["fmax"] = fmax_val
-    if noverlap_val >= 0:
-        kwargs["noverlap"] = noverlap_val
+    if fmax_val is not None:
+        kwargs["fmax"] = float(fmax_val)
+    if noverlap_val is not None:
+        kwargs["noverlap"] = int(noverlap_val)
 
     if non_time:
         reordered = data.transpose("time", *non_time)
@@ -592,12 +588,43 @@ def _compute_perievent_epochs(inputs: list[xr.DataArray], params: dict[str, Any]
     )
 
 
+def _apply_baseline_correction(
+    epochs: xr.DataArray, baseline_window: Any
+) -> xr.DataArray:
+    """Per-epoch DC subtraction over a lag window.
+
+    ``baseline_window`` is a ``[t0, t1]`` pair in lag-coordinate seconds. For
+    each epoch, the mean of values where ``lag ∈ [t0, t1]`` is subtracted
+    before any reduction across events. Returns the input unchanged when
+    ``baseline_window`` is None.
+    """
+    if baseline_window is None:
+        return epochs
+    if "lag" not in epochs.dims or "lag" not in epochs.coords:
+        raise ValueError("baseline_window requires a 'lag' dimension with coordinates")
+    pair = list(baseline_window)
+    if len(pair) != 2:
+        raise ValueError("baseline_window must be a [t0, t1] pair")
+    t0, t1 = float(pair[0]), float(pair[1])
+    if t1 < t0:
+        raise ValueError(f"baseline_window t1={t1} must be >= t0={t0}")
+    lag_vals = np.asarray(epochs.coords["lag"].values, dtype=float)
+    mask = (lag_vals >= t0) & (lag_vals <= t1)
+    if not mask.any():
+        raise ValueError(
+            f"baseline_window [{t0}, {t1}] does not overlap any lag samples"
+        )
+    baseline = epochs.isel(lag=mask).mean(dim="lag")
+    return epochs - baseline
+
+
 def _compute_triggered_average(inputs: list[xr.DataArray], params: dict[str, Any]) -> xr.DataArray:
     """Event-triggered average via cogpy.triggered.triggered_average."""
     from cogpy.triggered import triggered_average
 
+    epochs = _apply_baseline_correction(inputs[0], params.get("baseline_window"))
     return triggered_average(
-        inputs[0], event_dim=str(params.get("event_dim", "event"))
+        epochs, event_dim=str(params.get("event_dim", "event"))
     )
 
 
@@ -605,8 +632,9 @@ def _compute_triggered_std(inputs: list[xr.DataArray], params: dict[str, Any]) -
     """Event-triggered std via cogpy.triggered.triggered_std."""
     from cogpy.triggered import triggered_std
 
+    epochs = _apply_baseline_correction(inputs[0], params.get("baseline_window"))
     return triggered_std(
-        inputs[0],
+        epochs,
         event_dim=str(params.get("event_dim", "event")),
         ddof=int(params.get("ddof", 1)),
     )
@@ -793,11 +821,9 @@ PSD_MULTITAPER = TransformDefinition(
     input_spec=InputSpec(required_dims=("time",)),
     param_schema={
         "NW": ParamSpec(dtype="float", default=4.0, description="Time-bandwidth product", min_value=0.5),
-        # K=0 and fmax=0 are sentinels meaning "use cogpy default"; ParamSpec
-        # treats default=None as a required parameter.
-        "K": ParamSpec(dtype="int", default=0, description="Number of tapers (0 = auto)", min_value=0),
+        "K": ParamSpec(dtype="int", default=None, description="Number of tapers (None = floor(2*NW-1))", min_value=1),
         "fmin": ParamSpec(dtype="float", default=0.0, description="Min freq (Hz)", min_value=0.0),
-        "fmax": ParamSpec(dtype="float", default=0.0, description="Max freq (Hz); 0 = Nyquist", min_value=0.0),
+        "fmax": ParamSpec(dtype="float", default=None, description="Max freq (Hz); None = Nyquist", min_value=0.1),
         "detrend": ParamSpec(dtype="bool", default=True, description="Linear detrend before tapering"),
     },
     output_spec=OutputSpec(dims=("freq",), dtype="float64"),
@@ -810,10 +836,9 @@ PSD_WELCH = TransformDefinition(
     input_spec=InputSpec(required_dims=("time",)),
     param_schema={
         "nperseg": ParamSpec(dtype="int", default=256, description="Segment length (samples)", min_value=4),
-        # noverlap=-1 sentinel means "nperseg//2".
-        "noverlap": ParamSpec(dtype="int", default=-1, description="Overlap samples (-1 = nperseg//2)", min_value=-1),
+        "noverlap": ParamSpec(dtype="int", default=None, description="Overlap samples (None = nperseg//2)", min_value=0),
         "fmin": ParamSpec(dtype="float", default=0.0, description="Min freq (Hz)", min_value=0.0),
-        "fmax": ParamSpec(dtype="float", default=0.0, description="Max freq (Hz); 0 = Nyquist", min_value=0.0),
+        "fmax": ParamSpec(dtype="float", default=None, description="Max freq (Hz); None = Nyquist", min_value=0.1),
         "detrend": ParamSpec(dtype="str", default="constant", description="scipy.signal.welch detrend mode"),
     },
     output_spec=OutputSpec(dims=("freq",), dtype="float64"),
@@ -848,10 +873,24 @@ PEREVENT_EPOCHS = TransformDefinition(
 
 TRIGGERED_AVERAGE = TransformDefinition(
     name="triggered_average",
-    description="Mean across events / ETA (cogpy.triggered.triggered_average)",
+    description=(
+        "Event-triggered average / ETA: mean across the event axis "
+        "(cogpy.triggered.triggered_average). When `baseline_window=[t0, t1]` "
+        "is set, each epoch is DC-corrected by subtracting its mean over "
+        "lag ∈ [t0, t1] before averaging across events; without it the "
+        "result is dominated by per-epoch DC offsets."
+    ),
     input_spec=InputSpec(required_dims=("event",)),
     param_schema={
         "event_dim": ParamSpec(dtype="str", default="event", description="Event dimension name"),
+        "baseline_window": ParamSpec(
+            dtype="list",
+            default=None,
+            description=(
+                "Optional [t0, t1] in seconds (lag coords) for per-epoch "
+                "baseline subtraction; None = no correction"
+            ),
+        ),
     },
     output_spec=OutputSpec(dims=(), coord_rules={}),
     compute=_compute_triggered_average,
@@ -859,11 +898,24 @@ TRIGGERED_AVERAGE = TransformDefinition(
 
 TRIGGERED_STD = TransformDefinition(
     name="triggered_std",
-    description="Std across events (cogpy.triggered.triggered_std)",
+    description=(
+        "Std across events (cogpy.triggered.triggered_std). When "
+        "`baseline_window=[t0, t1]` is set, each epoch is DC-corrected over "
+        "lag ∈ [t0, t1] before the std reduction (matches the convention used "
+        "for `triggered_average`)."
+    ),
     input_spec=InputSpec(required_dims=("event",)),
     param_schema={
         "event_dim": ParamSpec(dtype="str", default="event", description="Event dimension name"),
         "ddof": ParamSpec(dtype="int", default=1, description="Delta degrees of freedom", min_value=0),
+        "baseline_window": ParamSpec(
+            dtype="list",
+            default=None,
+            description=(
+                "Optional [t0, t1] in seconds (lag coords) for per-epoch "
+                "baseline subtraction; None = no correction"
+            ),
+        ),
     },
     output_spec=OutputSpec(dims=(), coord_rules={}),
     compute=_compute_triggered_std,
@@ -882,10 +934,25 @@ TRIGGERED_MEDIAN = TransformDefinition(
 
 TRIGGERED_SNR = TransformDefinition(
     name="triggered_snr",
-    description="SNR of the triggered average (cogpy.triggered.triggered_snr)",
+    description=(
+        "SNR of the triggered average (cogpy.triggered.triggered_snr). "
+        "Computed per (channel, lag) as `mean / SEM`, where "
+        "`SEM = std(events, ddof=1) / sqrt(n_events)` — i.e. the across-events "
+        "mean divided by its standard error. Large |SNR| ⇒ a consistent "
+        "event-locked component relative to across-trial variability. Note: "
+        "this is dimensionless and grows with `sqrt(n_events)`; it is not the "
+        "classical `peak(post)/rms(pre)` waveform SNR."
+    ),
     input_spec=InputSpec(required_dims=("event",)),
     param_schema={
-        "event_dim": ParamSpec(dtype="str", default="event", description="Event dimension name"),
+        "event_dim": ParamSpec(
+            dtype="str",
+            default="event",
+            description=(
+                "Event dimension name. Output = mean / (std/sqrt(n)) reduced "
+                "along this axis."
+            ),
+        ),
     },
     output_spec=OutputSpec(dims=(), coord_rules={}),
     compute=_compute_triggered_snr,

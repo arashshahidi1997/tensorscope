@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from tensorscope.server.models import SelectionDTO, TensorSliceRequestDTO
+from tensorscope.server.models import PsdParamsDTO, SelectionDTO, TensorSliceRequestDTO
 from tensorscope.server.state import create_server_state
 
 
@@ -55,6 +55,13 @@ def test_psd_live_fmax_clip():
         c for c in result.meta["coords"] if c["name"] == "freq"
     ][0]
     assert freq_coord["max"] <= 50.0
+
+
+def test_psd_params_default_fmin_is_1hz():
+    """Default fmin=1.0 — hides the DC bin that dominates linear-power displays.
+    Users can still pass 0.0 explicitly to see DC."""
+    assert PsdParamsDTO().fmin == 1.0
+    assert PsdParamsDTO(fmin=0.0).fmin == 0.0
 
 
 def test_psd_live_available_in_views():

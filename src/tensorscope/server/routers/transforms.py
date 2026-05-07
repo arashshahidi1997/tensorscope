@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from tensorscope.core.transforms.registry import ParamSpec, TransformDefinition
 from tensorscope.server.models import (
     DerivedTensorDTO,
     TransformDefinitionDTO,
@@ -12,9 +13,34 @@ from tensorscope.server.models import (
     TransformRequestDTO,
 )
 from tensorscope.server.routers.deps import SessionState, SessionStateDep
-from tensorscope.server.state import ServerState
 
 router = APIRouter(prefix="/transforms", tags=["transforms"])
+
+
+def _param_spec_to_dto(spec: ParamSpec) -> TransformParamSpecDTO:
+    return TransformParamSpecDTO(
+        dtype=spec.dtype,
+        default=None if spec.is_required else spec.default,
+        required=spec.is_required,
+        description=spec.description,
+        min_value=spec.min_value,
+        max_value=spec.max_value,
+        choices=list(spec.choices) if spec.choices else None,
+    )
+
+
+def _defn_to_dto(defn: TransformDefinition) -> TransformDefinitionDTO:
+    return TransformDefinitionDTO(
+        name=defn.name,
+        description=defn.description,
+        required_dims=list(defn.input_spec.required_dims),
+        param_schema={
+            pname: _param_spec_to_dto(spec)
+            for pname, spec in defn.param_schema.items()
+        },
+        output_dims=list(defn.output_spec.dims),
+        output_dtype=defn.output_spec.dtype,
+    )
 
 
 @router.get("", response_model=list[TransformDefinitionDTO])
@@ -23,27 +49,7 @@ async def list_transforms(
 ) -> list[TransformDefinitionDTO]:
     """List all registered transforms."""
     _sid, state = session
-    return [
-        TransformDefinitionDTO(
-            name=defn.name,
-            description=defn.description,
-            required_dims=list(defn.input_spec.required_dims),
-            param_schema={
-                name: TransformParamSpecDTO(
-                    dtype=spec.dtype,
-                    default=spec.default,
-                    description=spec.description,
-                    min_value=spec.min_value,
-                    max_value=spec.max_value,
-                    choices=list(spec.choices) if spec.choices else None,
-                )
-                for name, spec in defn.param_schema.items()
-            },
-            output_dims=list(defn.output_spec.dims),
-            output_dtype=defn.output_spec.dtype,
-        )
-        for defn in state.transform_registry.list_definitions()
-    ]
+    return [_defn_to_dto(defn) for defn in state.transform_registry.list_definitions()]
 
 
 @router.get("/{name}", response_model=TransformDefinitionDTO)
@@ -54,24 +60,7 @@ async def get_transform(
     """Get a specific transform definition."""
     _sid, state = session
     defn = state.transform_registry.get(name)
-    return TransformDefinitionDTO(
-        name=defn.name,
-        description=defn.description,
-        required_dims=list(defn.input_spec.required_dims),
-        param_schema={
-            pname: TransformParamSpecDTO(
-                dtype=spec.dtype,
-                default=spec.default,
-                description=spec.description,
-                min_value=spec.min_value,
-                max_value=spec.max_value,
-                choices=list(spec.choices) if spec.choices else None,
-            )
-            for pname, spec in defn.param_schema.items()
-        },
-        output_dims=list(defn.output_spec.dims),
-        output_dtype=defn.output_spec.dtype,
-    )
+    return _defn_to_dto(defn)
 
 
 @router.get("/compatible/{tensor_name}", response_model=list[TransformDefinitionDTO])
@@ -83,27 +72,7 @@ async def list_compatible_transforms(
     _sid, state = session
     node = state.get_node(tensor_name)
     compatible = state.transform_registry.list_compatible(node)
-    return [
-        TransformDefinitionDTO(
-            name=defn.name,
-            description=defn.description,
-            required_dims=list(defn.input_spec.required_dims),
-            param_schema={
-                pname: TransformParamSpecDTO(
-                    dtype=spec.dtype,
-                    default=spec.default,
-                    description=spec.description,
-                    min_value=spec.min_value,
-                    max_value=spec.max_value,
-                    choices=list(spec.choices) if spec.choices else None,
-                )
-                for pname, spec in defn.param_schema.items()
-            },
-            output_dims=list(defn.output_spec.dims),
-            output_dtype=defn.output_spec.dtype,
-        )
-        for defn in compatible
-    ]
+    return [_defn_to_dto(defn) for defn in compatible]
 
 
 @router.post("/execute", response_model=DerivedTensorDTO)

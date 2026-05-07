@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { PSDHeatmapData } from "../../api/arrow";
 import { useHeatmapGestures } from "../../hooks/useHeatmapGestures";
+import { useAppStore } from "../../store/appStore";
 import { YTicks } from "./AxisTicks";
 
 type PSDHeatmapProps = {
@@ -20,6 +21,7 @@ function infernoColor(t: number): [number, number, number] {
 }
 
 export function PSDHeatmapView({ data, selectedFreq, onSelectFreq, freqLogScale = false }: PSDHeatmapProps) {
+  const toggleFreqLogScale = useAppStore((s) => s.toggleFreqLogScale);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const sizeRef = useRef({ w: 0, h: 0 });
@@ -202,12 +204,21 @@ export function PSDHeatmapView({ data, selectedFreq, onSelectFreq, freqLogScale 
         >&#x2299;</button>
         <div className="ts-toolbar-sep" />
         <button type="button" className="ts-tool" title="Reset view" onClick={resetViewport}>&#x21BA;</button>
+        <div className="ts-toolbar-sep" />
+        <button
+          type="button"
+          className={`ts-tool${freqLogScale ? " active" : ""}`}
+          title={`Frequency axis: ${freqLogScale ? "log" : "linear"}`}
+          onClick={toggleFreqLogScale}
+          aria-label="Toggle log frequency"
+          aria-pressed={freqLogScale}
+        >log</button>
       </div>
 
       {/* Heatmap with axes */}
       <div className="axis-canvas-wrap" style={{ flex: 1, minHeight: 0 }}>
         <div className="axis-y-label">Freq (Hz)</div>
-        <YTicks lo={vpFLo} hi={vpFHi} />
+        <YTicks lo={vpFLo} hi={vpFHi} logScale={freqLogScale && vpFLo > 0} />
         <div ref={containerRef} className="axis-canvas-area">
           <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%", cursor: "crosshair" }} />
         </div>

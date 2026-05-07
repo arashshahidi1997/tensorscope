@@ -68,6 +68,7 @@ export type StateDTO = {
 
 export type PSDParamsDTO = {
   NW?: number;
+  fmin?: number;
   fmax?: number;
 };
 

@@ -122,7 +122,11 @@ class PsdParamsDTO(BaseModel):
     K: int | None = Field(
         default=None, ge=1, description="Number of tapers (defaults to int(2*NW-1))"
     )
-    fmin: float = Field(default=0.0, ge=0.0, description="Minimum frequency (Hz)")
+    fmin: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="Minimum frequency (Hz). Default 1.0 hides DC/sub-Hz drift; pass 0.0 to include them.",
+    )
     fmax: float | None = Field(
         default=None, ge=0.1, description="Maximum frequency (Hz); None = Nyquist"
     )
@@ -221,10 +225,17 @@ class ProcessingParamsDTO(BaseModel):
 
 
 class TransformParamSpecDTO(BaseModel):
-    """Single transform parameter specification."""
+    """Single transform parameter specification.
+
+    ``required`` distinguishes "must be supplied" (``required=True``, ``default``
+    is ``None`` because no fallback exists) from "optional, library default"
+    (``required=False``, ``default=None``) and "optional with fallback"
+    (``required=False``, ``default=value``).
+    """
 
     dtype: str
     default: Any = None
+    required: bool = False
     description: str = ""
     min_value: float | None = None
     max_value: float | None = None

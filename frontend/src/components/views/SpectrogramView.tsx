@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { decodeArrowSlice, extractSpectrogram } from "../../api/arrow";
 import { useHeatmapGestures } from "../../hooks/useHeatmapGestures";
+import { useAppStore } from "../../store/appStore";
 import type { SliceViewProps } from "./viewTypes";
 import { XTicks, YTicks } from "./AxisTicks";
 import { TimeScaleBar } from "./ChartToolbar";
@@ -27,6 +28,8 @@ export function SpectrogramView({
 }: SliceViewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const freqLogScale = useAppStore((s) => s.freqLogScale);
+  const toggleFreqLogScale = useAppStore((s) => s.toggleFreqLogScale);
 
   // Stable callback refs
   const onSelectTimeRef = useRef(onSelectTime);
@@ -75,6 +78,10 @@ export function SpectrogramView({
     const { xLo: tLo, xHi: tHi, yLo: fLo, yHi: fHi } = viewport;
     const tRange = tHi - tLo || 1;
     const fRange = fHi - fLo || 1;
+    const useLog = freqLogScale && fLo > 0;
+    const logFLo = useLog ? Math.log10(fLo) : 0;
+    const logFHi = useLog ? Math.log10(fHi) : 0;
+    const logFRange = logFHi - logFLo || 1;
 
     // Find min/max within viewport for color scaling
     let cMin = Infinity;
@@ -97,7 +104,9 @@ export function SpectrogramView({
       const ti = nearestIdx(times, t);
       for (let py = 0; py < canvasH; py++) {
         // Map pixel y → freq (top = fHi, bottom = fLo)
-        const f = fHi - (py / canvasH) * fRange;
+        const f = useLog
+          ? Math.pow(10, logFHi - (py / canvasH) * logFRange)
+          : fHi - (py / canvasH) * fRange;
         const fi = nearestIdx(freqs, f);
         const idx = (py * canvasW + px) * 4;
         const [r, g, b] = valueToColor(values[ti][fi], cMin, cMax);
@@ -108,7 +117,7 @@ export function SpectrogramView({
       }
     }
     ctx.putImageData(imgData, 0, 0);
-  }, [times, freqs, values, viewport]);
+  }, [times, freqs, values, viewport, freqLogScale]);
 
   // Rules of Hooks: all hooks above, conditional return below
   if (!selection || times.length === 0 || freqs.length === 0) {
@@ -145,12 +154,21 @@ export function SpectrogramView({
         >&#x2299;</button>
         <div className="ts-toolbar-sep" />
         <button type="button" className="ts-tool" title="Reset view" onClick={resetViewport}>&#x21BA;</button>
+        <div className="ts-toolbar-sep" />
+        <button
+          type="button"
+          className={`ts-tool${freqLogScale ? " active" : ""}`}
+          title={`Frequency axis: ${freqLogScale ? "log" : "linear"}`}
+          onClick={toggleFreqLogScale}
+          aria-label="Toggle log frequency"
+          aria-pressed={freqLogScale}
+        >log</button>
       </div>
 
       {/* Spectrogram with axes */}
       <div className="axis-canvas-wrap" style={{ flex: 1, minHeight: 0 }}>
         <div className="axis-y-label">Freq (Hz)</div>
-        <YTicks lo={fLo} hi={fHi} />
+        <YTicks lo={fLo} hi={fHi} logScale={freqLogScale && fLo > 0} />
         <div className="axis-canvas-area">
           <canvas
             ref={canvasRef}
@@ -177,7 +195,10 @@ export function SpectrogramView({
                 position: "absolute",
                 left: 0,
                 right: 0,
-                top: `${((fHi - selection.freq) / (fHi - fLo)) * 100}%`,
+                top: `${freqLogScale && fLo > 0
+                  ? ((Math.log10(fHi) - Math.log10(selection.freq)) /
+                      (Math.log10(fHi) - Math.log10(fLo))) * 100
+                  : ((fHi - selection.freq) / (fHi - fLo)) * 100}%`,
                 height: "1px",
                 background: "rgba(115,210,222,0.7)",
                 pointerEvents: "none",

@@ -27,9 +27,53 @@ export function makeTicks(lo: number, hi: number, count = 4): TickDef[] {
   return ticks;
 }
 
+/**
+ * Generate log-spaced tick values. Anchors on decades (…, 1, 10, 100, …) and
+ * adds {2, 5} sub-decade ticks when the visible span is narrow enough that
+ * decades alone would be sparse.
+ *
+ * Returns ticks ordered with `pct` measured along the linear log axis, so
+ * callers position them with the same `bottom`/`left` percentage they'd use
+ * for the linear case.
+ */
+export function makeLogTicks(lo: number, hi: number): TickDef[] {
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo || lo <= 0) return [];
+  const logLo = Math.log10(lo);
+  const logHi = Math.log10(hi);
+  const logRange = logHi - logLo;
+
+  const decadeFloor = Math.floor(logLo);
+  const decadeCeil = Math.ceil(logHi);
+  // Add 2× and 5× sub-decade ticks when fewer than 2 full decades are visible.
+  const sub = logRange < 2 ? [1, 2, 5] : [1];
+
+  const ticks: TickDef[] = [];
+  for (let d = decadeFloor; d <= decadeCeil; d++) {
+    const base = Math.pow(10, d);
+    for (const m of sub) {
+      const v = m * base;
+      if (v < lo || v > hi) continue;
+      const pct = ((Math.log10(v) - logLo) / logRange) * 100;
+      const label = v >= 1 ? v.toFixed(0) : v.toString();
+      ticks.push({ value: v, label, pct });
+    }
+  }
+  return ticks;
+}
+
 /** Y-axis ticks: top = max, bottom = min. pct is measured from top. */
-export function YTicks({ lo, hi, count = 4 }: { lo: number; hi: number; count?: number }) {
-  const ticks = makeTicks(lo, hi, count);
+export function YTicks({
+  lo,
+  hi,
+  count = 4,
+  logScale = false,
+}: {
+  lo: number;
+  hi: number;
+  count?: number;
+  logScale?: boolean;
+}) {
+  const ticks = logScale ? makeLogTicks(lo, hi) : makeTicks(lo, hi, count);
   return (
     <div className="axis-y-ticks">
       {ticks.map((t) => (
@@ -42,8 +86,18 @@ export function YTicks({ lo, hi, count = 4 }: { lo: number; hi: number; count?: 
 }
 
 /** X-axis ticks: left = min, right = max. pct is measured from left. */
-export function XTicks({ lo, hi, count = 4 }: { lo: number; hi: number; count?: number }) {
-  const ticks = makeTicks(lo, hi, count);
+export function XTicks({
+  lo,
+  hi,
+  count = 4,
+  logScale = false,
+}: {
+  lo: number;
+  hi: number;
+  count?: number;
+  logScale?: boolean;
+}) {
+  const ticks = logScale ? makeLogTicks(lo, hi) : makeTicks(lo, hi, count);
   return (
     <div className="axis-x-ticks">
       {ticks.map((t) => (

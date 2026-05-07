@@ -114,3 +114,4 @@ All four return `EventStream`s built from the cogpy `EventCatalog.df`.
 - Slot-based layout: views have fixed home slots; toggling shows/hides in-place (no reflow)
 - FastAPI routers: declare specific paths (e.g. `/events/detectors`) before parameterized ones (`/events/{name}`); FastAPI matches in declaration order
 - cogpy detectors that bandpass (ripple/spindle/burst) require an `fs` attr on the input — `core/events/detectors.py` calls `_ensure_fs()` to infer it from the time coord before handing the array to cogpy
+- Per-session `ServerState` is built via `deepcopy(template_state)` (see `server/session.py`). Anything used as an identity-checked sentinel (e.g. `_REQUIRED` in `core/transforms/registry.py`) must override `__deepcopy__` to return self — bare `object()` instances get cloned and break `is` checks across sessions
