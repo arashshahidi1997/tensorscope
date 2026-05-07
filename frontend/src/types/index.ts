@@ -55,4 +55,6 @@ export type {
   PipelineExportRequest,
   WorkflowArtifact,
   PipelineExportResponse,
+  PipelineImportRequest,
+  PipelineImportResponse,
 } from "./pipeline";

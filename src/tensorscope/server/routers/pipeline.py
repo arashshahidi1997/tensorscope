@@ -1,22 +1,44 @@
-"""Pipeline export API endpoints."""
+"""Pipeline export/import API endpoints."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 
 from tensorscope.server.models import (
     PipelineExportRequestDTO,
     PipelineExportResponseDTO,
+    PipelineImportRequestDTO,
+    PipelineImportResponseDTO,
     PipelineSpecDTO,
     WorkflowArtifactDTO,
 )
 from tensorscope.server.routers.deps import SessionState, SessionStateDep
-from tensorscope.server.state import ServerState
 from tensorscope.core.pipeline.selection import extract_pipeline, PipelineSelectionError
 from tensorscope.core.pipeline.cooker import get_cooker
+from tensorscope.core.pipeline.export import (
+    export_yaml,
+    export_json,
+    import_json,
+    import_yaml,
+)
+from tensorscope.core.pipeline.replay import replay_pipeline, PipelineReplayError
 
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
+
+
+def _build_spec(state, output_tensor_ids, name, cooker_profile, description):
+    try:
+        return extract_pipeline(
+            dag=state._dag,
+            output_tensor_ids=output_tensor_ids,
+            name=name,
+            cooker_profile=cooker_profile,
+            description=description,
+        )
+    except PipelineSelectionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/export", response_model=PipelineExportResponseDTO)
@@ -30,22 +52,12 @@ def export_pipeline(
     builds a PipelineSpec, and optionally generates workflow artifacts.
     """
     _sid, state = session
-    try:
-        spec = extract_pipeline(
-            dag=state._dag,
-            output_tensor_ids=req.output_tensor_ids,
-            name=req.name,
-            cooker_profile=req.cooker_profile,
-            description=req.description,
-        )
-    except PipelineSelectionError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    spec = _build_spec(
+        state, req.output_tensor_ids, req.name, req.cooker_profile, req.description,
+    )
 
-    # Convert spec to DTO
-    spec_dict = spec.to_dict()
-    spec_dto = PipelineSpecDTO(**spec_dict)
+    spec_dto = PipelineSpecDTO(**spec.to_dict())
 
-    # Generate workflow artifacts if cooker specified
     artifacts: list[WorkflowArtifactDTO] = []
     if spec.cooker_profile:
         try:
@@ -59,6 +71,86 @@ def export_pipeline(
             raise HTTPException(status_code=400, detail=str(exc))
 
     return PipelineExportResponseDTO(spec=spec_dto, workflow_artifacts=artifacts)
+
+
+@router.post("/serialize", response_class=PlainTextResponse)
+def serialize_pipeline(
+    req: PipelineExportRequestDTO,
+    fmt: str = Query("yaml", pattern="^(yaml|json)$"),
+    session: SessionState = SessionStateDep,
+) -> PlainTextResponse:
+    """Serialise a pipeline directly to a downloadable text file.
+
+    Same selection semantics as ``/export`` but returns the raw YAML/JSON
+    document with a ``Content-Disposition: attachment`` header so the
+    browser saves it as ``pipeline.yaml`` / ``pipeline.json``.
+    """
+    _sid, state = session
+    spec = _build_spec(
+        state, req.output_tensor_ids, req.name, req.cooker_profile, req.description,
+    )
+
+    if fmt == "yaml":
+        body = export_yaml(spec)
+        media_type = "application/yaml"
+        filename = "pipeline.yaml"
+    else:
+        body = export_json(spec)
+        media_type = "application/json"
+        filename = "pipeline.json"
+
+    return PlainTextResponse(
+        content=body,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _detect_format(text: str) -> str:
+    stripped = text.lstrip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        return "json"
+    return "yaml"
+
+
+@router.post("/import", response_model=PipelineImportResponseDTO)
+def import_pipeline(
+    req: PipelineImportRequestDTO,
+    session: SessionState = SessionStateDep,
+) -> PipelineImportResponseDTO:
+    """Parse a serialised pipeline and replay its transforms.
+
+    Source tensors named in the spec must already be loaded in the
+    workspace; the import does not load datasets. Transforms run in
+    topological order; per-transform failures are reported in
+    ``response.errors`` rather than aborting the whole replay.
+    """
+    _sid, state = session
+
+    fmt = req.format if req.format != "auto" else _detect_format(req.content)
+    try:
+        if fmt == "json":
+            spec = import_json(req.content)
+        elif fmt == "yaml":
+            spec = import_yaml(req.content)
+        else:
+            raise HTTPException(status_code=400, detail=f"unknown format {fmt!r}")
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=f"failed to parse pipeline: {exc}")
+
+    try:
+        result = replay_pipeline(
+            spec, state._transform_executor, skip_existing=req.skip_existing,
+        )
+    except PipelineReplayError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return PipelineImportResponseDTO(
+        spec=PipelineSpecDTO(**spec.to_dict()),
+        executed=result.executed,
+        skipped=result.skipped,
+        errors=result.errors,
+    )
 
 
 @router.post("/promote/{tensor_node_id}")

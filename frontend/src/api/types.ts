@@ -141,6 +141,7 @@ export type DetectorParamSpecDTO = {
   dtype: string;
   default: unknown;
   description: string;
+  required: boolean;
   min_value: number | null;
   max_value: number | null;
   choices: string[] | null;

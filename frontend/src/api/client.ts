@@ -31,6 +31,8 @@ import type {
 import type {
   PipelineExportRequest,
   PipelineExportResponse,
+  PipelineImportRequest,
+  PipelineImportResponse,
 } from "../types/pipeline";
 
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
@@ -193,6 +195,36 @@ export const api = {
   // Pipeline API (M6)
   exportPipeline(body: PipelineExportRequest): Promise<PipelineExportResponse> {
     return request<PipelineExportResponse>("/api/v1/pipeline/export", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  },
+
+  async serializePipeline(
+    body: PipelineExportRequest,
+    fmt: "yaml" | "json" = "yaml",
+  ): Promise<{ filename: string; content: string }> {
+    const response = await fetch(
+      `/api/v1/pipeline/serialize?fmt=${fmt}`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    if (!response.ok) {
+      throw new Error((await response.text()) || `Request failed: ${response.status}`);
+    }
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const match = disposition.match(/filename="?([^"]+)"?/i);
+    const filename = match?.[1] ?? `pipeline.${fmt}`;
+    const content = await response.text();
+    return { filename, content };
+  },
+
+  importPipeline(body: PipelineImportRequest): Promise<PipelineImportResponse> {
+    return request<PipelineImportResponse>("/api/v1/pipeline/import", {
       method: "POST",
       body: JSON.stringify(body),
     });

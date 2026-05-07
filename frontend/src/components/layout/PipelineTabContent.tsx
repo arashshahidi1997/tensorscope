@@ -16,6 +16,7 @@ import { CollapsibleSection } from "./CollapsibleSection";
 import type { TransformDefinitionDTO, TransformParamSpec } from "../../types/transform";
 import type { DerivedTensorDTO } from "../../types/transform";
 import type { DetectorDefinitionDTO } from "../../api/types";
+import type { DAGTensorNodeDTO } from "../../types/dag";
 
 export function PipelineTabContent() {
   const selectedTensor = useAppStore((s) => s.selectedTensor);
@@ -206,6 +207,10 @@ export function PipelineTabContent() {
 
       <CollapsibleSection title="Run Detector" defaultOpen={false}>
         <DetectorSection tensorName={activeTensor} addActivity={addActivity} updateActivity={updateActivity} />
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Export / Import Pipeline" defaultOpen={false}>
+        <PipelineIOSection />
       </CollapsibleSection>
 
       {history.length > 0 && (
@@ -530,6 +535,226 @@ function DetectorSection({ tensorName, addActivity, updateActivity }: {
       {result && (
         <div style={{ fontSize: 11, color: "#3fb950" }}>
           Found <strong>{result.n_events}</strong> events in stream <strong>{result.stream_name}</strong>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * PipelineIOSection — export the curated subgraph as YAML/JSON, and replay
+ * a previously exported file by uploading it.
+ *
+ * Export targets are tensor nodes flagged as ``pipeline_selected`` on the
+ * DAG. If none are selected, the user can also export "all derived tensors".
+ */
+function PipelineIOSection() {
+  const [tensors, setTensors] = useState<DAGTensorNodeDTO[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [pipelineName, setPipelineName] = useState("pipeline");
+  const [format, setFormat] = useState<"yaml" | "json">("yaml");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refreshDag = useCallback(async () => {
+    try {
+      const dag = await api.getDAG();
+      setTensors(dag.tensor_nodes);
+      // Default selection = pipeline_selected derived tensors.
+      const sel = new Set(
+        dag.tensor_nodes
+          .filter((n) => n.pipeline_selected && n.node_type === "derived")
+          .map((n) => n.id),
+      );
+      setSelectedIds(sel);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshDag();
+  }, [refreshDag]);
+
+  const derivedTensors = tensors.filter((t) => t.node_type === "derived");
+
+  const toggleId = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handleExport = useCallback(async () => {
+    setError(null);
+    setMessage(null);
+    if (selectedIds.size === 0) {
+      setError("Select at least one output tensor.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const { filename, content } = await api.serializePipeline(
+        {
+          output_tensor_ids: Array.from(selectedIds),
+          name: pipelineName || "pipeline",
+        },
+        format,
+      );
+      const blob = new Blob([content], {
+        type: format === "yaml" ? "application/yaml" : "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setMessage(`Saved ${filename}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [selectedIds, pipelineName, format]);
+
+  const handleImport = useCallback(async (file: File) => {
+    setError(null);
+    setMessage(null);
+    setBusy(true);
+    try {
+      const content = await file.text();
+      const fmt: "yaml" | "json" | "auto" =
+        file.name.endsWith(".json") ? "json"
+          : file.name.endsWith(".yaml") || file.name.endsWith(".yml") ? "yaml"
+          : "auto";
+      const res = await api.importPipeline({ content, format: fmt });
+      const errCount = Object.keys(res.errors).length;
+      const parts = [
+        `executed ${res.executed.length}`,
+        res.skipped.length ? `skipped ${res.skipped.length}` : null,
+        errCount ? `errors ${errCount}` : null,
+      ].filter(Boolean);
+      setMessage(parts.join(", "));
+      if (errCount > 0) {
+        setError(
+          Object.entries(res.errors)
+            .map(([id, msg]) => `${id}: ${msg}`)
+            .join("\n"),
+        );
+      }
+      await refreshDag();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [refreshDag]);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "4px 0" }}>
+      <div style={{ fontSize: 11, color: "#8b949e" }}>
+        Export the selected derived tensors and their upstream transforms as a
+        reproducible pipeline file. Importing a file replays the transforms
+        against the currently loaded source tensors.
+      </div>
+
+      <label style={{ fontSize: 12 }}>
+        Name
+        <input
+          type="text"
+          value={pipelineName}
+          onChange={(e) => setPipelineName(e.target.value)}
+          style={{ display: "block", width: "100%", fontSize: 12, marginTop: 2 }}
+        />
+      </label>
+
+      <label style={{ fontSize: 12 }}>
+        Format
+        <select
+          value={format}
+          onChange={(e) => setFormat(e.target.value as "yaml" | "json")}
+          style={{ display: "block", width: "100%", fontSize: 12, marginTop: 2 }}
+        >
+          <option value="yaml">YAML</option>
+          <option value="json">JSON</option>
+        </select>
+      </label>
+
+      <div style={{ fontSize: 12 }}>
+        <span style={{ color: "#8b949e" }}>Output tensors</span>
+        <div style={{
+          maxHeight: 140,
+          overflowY: "auto",
+          border: "1px solid #30363d",
+          padding: 4,
+          marginTop: 2,
+          borderRadius: 3,
+        }}>
+          {derivedTensors.length === 0 && (
+            <span className="muted" style={{ fontSize: 11 }}>
+              No derived tensors yet.
+            </span>
+          )}
+          {derivedTensors.map((t) => (
+            <label key={t.id} style={{
+              display: "flex", alignItems: "center", gap: 6,
+              fontSize: 11, cursor: "pointer", padding: "2px 0",
+            }}>
+              <input
+                type="checkbox"
+                checked={selectedIds.has(t.id)}
+                onChange={() => toggleId(t.id)}
+              />
+              <span style={{ color: "var(--accent)" }}>{t.id}</span>
+              {t.pipeline_selected && (
+                <span style={{ fontSize: 10, color: "#8b949e" }}>★</span>
+              )}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 6 }}>
+        <button
+          onClick={handleExport}
+          disabled={busy || selectedIds.size === 0}
+          style={{ fontSize: 12, padding: "4px 12px", flex: 1 }}
+        >
+          {busy ? "..." : `Export ${format.toUpperCase()}`}
+        </button>
+        <label style={{
+          fontSize: 12, padding: "4px 12px", flex: 1,
+          textAlign: "center", border: "1px solid #30363d",
+          borderRadius: 3, cursor: busy ? "wait" : "pointer",
+          background: "#21262d",
+        }}>
+          {busy ? "..." : "Import file"}
+          <input
+            type="file"
+            accept=".yaml,.yml,.json"
+            style={{ display: "none" }}
+            disabled={busy}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleImport(f);
+              e.target.value = "";
+            }}
+          />
+        </label>
+      </div>
+
+      {message && (
+        <div style={{ fontSize: 11, color: "#3fb950" }}>{message}</div>
+      )}
+      {error && (
+        <div style={{ fontSize: 11, color: "#f85149", whiteSpace: "pre-wrap" }}>
+          {error}
         </div>
       )}
     </div>

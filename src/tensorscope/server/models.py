@@ -473,3 +473,24 @@ class WorkflowArtifactDTO(BaseModel):
 class PipelineExportResponseDTO(BaseModel):
     spec: PipelineSpecDTO
     workflow_artifacts: list[WorkflowArtifactDTO] = []
+
+
+class PipelineImportRequestDTO(BaseModel):
+    """Import a serialised pipeline and replay its transforms.
+
+    ``content`` carries the raw text of a previously exported pipeline
+    (JSON or YAML). ``format`` selects the parser; "auto" infers from the
+    leading non-whitespace character.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1)
+    format: str = Field(default="auto")  # "json" | "yaml" | "auto"
+    skip_existing: bool = True
+
+
+class PipelineImportResponseDTO(BaseModel):
+    spec: PipelineSpecDTO
+    executed: list[str] = []
+    skipped: list[str] = []
+    errors: dict[str, str] = {}

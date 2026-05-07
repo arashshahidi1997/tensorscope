@@ -58,3 +58,16 @@ export interface PipelineExportResponse {
   spec: PipelineSpec;
   workflow_artifacts: WorkflowArtifact[];
 }
+
+export interface PipelineImportRequest {
+  content: string;
+  format?: "yaml" | "json" | "auto";
+  skip_existing?: boolean;
+}
+
+export interface PipelineImportResponse {
+  spec: PipelineSpec;
+  executed: string[];
+  skipped: string[];
+  errors: Record<string, string>;
+}
