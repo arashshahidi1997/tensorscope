@@ -63,6 +63,7 @@ export function OrthoSlicerView({
       onSelectTime={(t) => onCommitSelection({ ...selection, time: t })}
       onSelectFreq={onSelectFreq}
       onTimeWindowChange={onTimeWindowChange}
+      timeWindow={timeWindow}
     />
   ) : (
     <div className="placeholder">Loading spectrogram...</div>

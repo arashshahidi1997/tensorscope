@@ -279,6 +279,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         brainstateOverlayEnabled={brainstateOverlay && brainstateAvailable}
         onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
         onTimeWindowChange={setTimeWindow}
+        timeWindow={timeWindow}
       />
     ) : (
       <div className="placeholder">Loading…</div>
@@ -337,6 +338,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
           onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
           onSelectFreq={handleSelectFreq}
           onTimeWindowChange={setTimeWindow}
+          timeWindow={timeWindow}
         />
       );
     }

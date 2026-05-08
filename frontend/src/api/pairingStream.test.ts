@@ -56,6 +56,34 @@ describe("handlePairingMessage", () => {
     expect(spy).toHaveBeenCalledWith({ queryKey: ["slice"] });
   });
 
+  it("re-centers timeWindow when selection_changed pushes a far-away cursor", () => {
+    // Regression for issue-arash-20260508-142724-956601: agent set_selection
+    // (time=120.0) must re-center the visible window so viewport-bound views
+    // (timeseries, spectrogram) follow. The store-side re-centering is
+    // tested here; the chart-side wiring (timeWindow prop → chart x-scale)
+    // is covered by useHeatmapGestures.test.ts and the component prop type.
+    //
+    // GAP: The full TimeseriesSliceView / SpectrogramView render path uses
+    // uPlot + canvas which don't run in jsdom; the
+    // store→prop→chart.setScale wiring in TimeseriesSliceView is verified
+    // by manual smoke against the live --pair server. Pixecog orchestrator
+    // exercises this on every release of the pairing API.
+    useSelectionStore.setState({ timeCursor: 0, timeWindow: [0, 10], viewportDuration: 1 });
+    const qc = freshClient();
+    handlePairingMessage(
+      JSON.stringify({
+        type: "selection_changed",
+        payload: { time: 120.0, freq: 0, ap: 0, ml: 0, channel: null },
+      }),
+      qc,
+    );
+    const s = useSelectionStore.getState();
+    expect(s.timeCursor).toBe(120);
+    // timeWindow re-centered around 120 with viewportDuration=1 → [119.5, 120.5]
+    expect(s.timeWindow[0]).toBeCloseTo(119.5);
+    expect(s.timeWindow[1]).toBeCloseTo(120.5);
+  });
+
   it("ignores malformed JSON", () => {
     const qc = freshClient();
     const spy = vi.spyOn(qc, "invalidateQueries");

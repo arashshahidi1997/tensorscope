@@ -235,6 +235,7 @@ export function TimeseriesSliceView({
   brainstateOverlayEnabled = false,
   onSelectTime,
   onTimeWindowChange,
+  timeWindow,
 }: SliceViewProps & {
   brainstateIntervals?: BrainstateIntervalDTO[];
   brainstateOverlayEnabled?: boolean;
@@ -706,6 +707,26 @@ export function TimeseriesSliceView({
   useEffect(() => {
     chartRef.current?.redraw();
   }, [brainstateIntervals, brainstateOverlayEnabled]);
+
+  // External viewport sync — when the store's `timeWindow` is updated by an
+  // outside actor (SSE / agent set_selection / navigator brush), sync the
+  // chart's x-scale. Without this, the chart's internal `xRangeRef` cache
+  // shadows the store and the view stays pinned despite the new slice.
+  // Wrapped in `withSuppressedWindowPublish` so the resulting setScale hook
+  // doesn't loop back through `onTimeWindowChange`.
+  // See docs/log/issue/issue-arash-20260508-142724-956601.md.
+  useEffect(() => {
+    if (!timeWindow) return;
+    const chart = chartRef.current;
+    if (!chart) return;
+    const cur = xRangeRef.current;
+    if (cur && cur[0] === timeWindow[0] && cur[1] === timeWindow[1]) return;
+    xRangeRef.current = [timeWindow[0], timeWindow[1]];
+    withSuppressedWindowPublish(() => {
+      chart.setScale("x", { min: timeWindow[0], max: timeWindow[1] });
+    });
+    chart.redraw();
+  }, [timeWindow?.[0], timeWindow?.[1]]);
 
   if (times.length === 0) return null;
 

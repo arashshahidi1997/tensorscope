@@ -25,6 +25,7 @@ export function SpectrogramView({
   onSelectTime,
   onSelectFreq,
   onTimeWindowChange,
+  timeWindow,
 }: SliceViewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -60,6 +61,12 @@ export function SpectrogramView({
     onSelectX: (t) => onSelectTimeRef.current?.(t),
     onSelectY: (f) => onSelectFreqRef.current?.(f),
     onXRangeChange: (range) => onTimeWindowChangeRef.current?.(range),
+    // Externally-driven viewport — store's authoritative `timeWindow` (e.g.
+    // SSE-driven agent set_selection, navigator brush). Pins the X axis to
+    // the store-supplied window instead of letting the data-bounds reset
+    // snap us back when a fresh slice arrives.
+    // See docs/log/issue/issue-arash-20260508-142724-956601.md.
+    externalXRange: timeWindow,
   });
 
   // ── Canvas rendering — re-renders on viewport or data change ────────────

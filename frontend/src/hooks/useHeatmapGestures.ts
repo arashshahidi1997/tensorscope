@@ -12,6 +12,14 @@ export type HeatmapGestureOptions = {
   onSelectY?: (y: number) => void;
   /** Called when X range changes (e.g. for syncing navigator) */
   onXRangeChange?: (range: [number, number]) => void;
+  /**
+   * Externally-driven X range — when provided and changed, overrides the
+   * data-bounds reset and pins viewport.x{Lo,Hi} to the supplied values.
+   * Used by viewport-bound views (spectrogram) to follow store / SSE-driven
+   * window changes without losing user-driven zoom on data-bounds re-render.
+   * Does NOT call onXRangeChange (one-way: external → viewport).
+   */
+  externalXRange?: [number, number];
 };
 
 export type HeatmapViewport = {
@@ -33,10 +41,12 @@ export type HeatmapGestureResult = {
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useHeatmapGestures(opts: HeatmapGestureOptions): HeatmapGestureResult {
-  const { canvasRef, xRange, yRange, onSelectX, onSelectY, onXRangeChange } = opts;
+  const { canvasRef, xRange, yRange, onSelectX, onSelectY, onXRangeChange, externalXRange } = opts;
 
   const [xMin, xMax] = xRange;
   const [yMin, yMax] = yRange;
+  const extXLo = externalXRange?.[0];
+  const extXHi = externalXRange?.[1];
 
   // Tool state
   const [activeTool, setActiveTool] = useState<"zoom" | "pan">("zoom");
@@ -51,10 +61,15 @@ export function useHeatmapGestures(opts: HeatmapGestureOptions): HeatmapGestureR
     xLo: xMin, xHi: xMax, yLo: yMin, yHi: yMax,
   });
 
-  // Reset viewport when data bounds change
+  // Reset viewport when data bounds change. If an externalXRange is provided,
+  // honour it for the X axis so the chart pins to the store-driven window
+  // (e.g. SSE-driven set_selection / navigator brush) instead of snapping to
+  // the new slice's data bounds.
   useEffect(() => {
-    setViewport({ xLo: xMin, xHi: xMax, yLo: yMin, yHi: yMax });
-  }, [xMin, xMax, yMin, yMax]);
+    const xLo = extXLo != null && Number.isFinite(extXLo) ? extXLo : xMin;
+    const xHi = extXHi != null && Number.isFinite(extXHi) ? extXHi : xMax;
+    setViewport({ xLo, xHi, yLo: yMin, yHi: yMax });
+  }, [xMin, xMax, yMin, yMax, extXLo, extXHi]);
 
   // Ref for gesture handlers (avoids stale closures)
   const viewportRef = useRef(viewport);

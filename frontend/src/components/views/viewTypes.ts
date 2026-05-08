@@ -25,4 +25,15 @@ export type SliceViewProps = {
    * multiscale contract: navigator ↔ timeseries ↔ spectrogram.
    */
   onTimeWindowChange?: (window: [number, number]) => void;
+  /**
+   * The currently authoritative time window from the store.
+   * Time-axis-bearing views (timeseries, spectrogram) use this to sync their
+   * internal x-scale when an *external* push (SSE / agent / navigator brush)
+   * changes the visible window. Without this, internal viewport caches
+   * (e.g. uPlot's xRangeRef, useHeatmapGestures' viewport) shadow the store
+   * and the chart visually pins despite the new slice range.
+   *
+   * See docs/log/issue/issue-arash-20260508-142724-956601.md.
+   */
+  timeWindow?: [number, number];
 };
