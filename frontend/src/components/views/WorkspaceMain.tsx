@@ -9,7 +9,7 @@
  * (e.g. clicking a time point or a spatial cell commits the new selection to the
  * server and invalidates dependent queries).
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   clampWindow,
   makeDefaultSliceRequest,
@@ -105,7 +105,28 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   // Store-local freq update — no server round-trip; spectrogram and PSD already
   // render the full freq range and project the cursor client-side.
   const handleSelectFreq = useCallback((freq: number) => setFreq({ freq }), [setFreq]);
-  const selectionDraft = toSelectionDTO(selectionState);
+  // Memoise selectionDraft on the underlying primitives so its identity is
+  // stable across renders that don't actually change the selection. Without
+  // this, every store mutation (including hover-only events on the canvas
+  // that touch `spatial.hoveredId`) produces a fresh DTO and invalidates
+  // every downstream memo.
+  const selectionDraft = useMemo(
+    () => toSelectionDTO(selectionState),
+    [
+      selectionState.timeCursor,
+      selectionState.freq.freq,
+      selectionState.spatial.ap,
+      selectionState.spatial.ml,
+      selectionState.spatial.channel,
+    ],
+  );
+
+  // `onCommitSelection` is a fresh arrow on every App render (App.tsx:68
+  // wraps a mutation without useCallback). We don't want it as a memo dep
+  // here — read it through a ref so children that capture it get the
+  // current implementation without invalidating downstream memoisation.
+  const commitSelectionRef = useRef(onCommitSelection);
+  commitSelectionRef.current = onCommitSelection;
 
   const stateQuery = useStateQuery();
 
@@ -225,46 +246,73 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const SpectrogramComponent = viewRegistry.spectrogram;
 
   // ── Lift navigator to bottom panel via render prop ──────────────────────
+  // The parent (App.tsx) stores the result in `useState<ReactNode>`. A
+  // dep-less `useEffect(() => renderNavigator(<JSX>))` builds fresh JSX on
+  // every render, every call fails the parent's `Object.is` bail-out, the
+  // parent re-renders, the child re-fires the effect — and we cascade to
+  // React's safety cap on every SSE-driven mutation.
+  // Fix: memoise the JSX on its actual data dependencies, then push it to
+  // the parent only when the memoised value's identity changes.
+  // See docs/log/issue/issue-arash-20260508-170721-770464.md.
   const navigatorRef = useRef(renderNavigator);
   navigatorRef.current = renderNavigator;
 
-  useEffect(() => {
-    if (!navigatorRef.current) return;
-    if (navigatorData) {
-      navigatorRef.current(
-        <>
-          <NavigatorView
-            slice={navigatorData}
-            selection={selectionDraft}
-            onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
-            onTimeWindowChange={setTimeWindow}
-            brainstateIntervals={brainstateIntervals}
-            brainstateOverlayEnabled={brainstateOverlay && brainstateAvailable}
-          />
-          <TimeScaleBar
+  const brainstateT0 = brainstateTimeRange[0];
+  const brainstateT1 = brainstateTimeRange[1];
+  const timeWindowLo = timeWindow[0];
+  const timeWindowHi = timeWindow[1];
+
+  const navigatorElement = useMemo<ReactNode>(() => {
+    if (!navigatorData) return null;
+    return (
+      <>
+        <NavigatorView
+          slice={navigatorData}
+          selection={selectionDraft}
+          onSelectTime={(t) => commitSelectionRef.current({ ...selectionDraft, time: t })}
+          onTimeWindowChange={setTimeWindow}
+          brainstateIntervals={brainstateIntervals}
+          brainstateOverlayEnabled={brainstateOverlay && brainstateAvailable}
+        />
+        <TimeScaleBar
+          timeCursor={selectionDraft.time}
+          viewportDuration={viewportDuration}
+          onViewportDurationChange={setViewportDuration}
+          onJumpToTime={(t) => commitSelectionRef.current({ ...selectionDraft, time: t })}
+        />
+        {showHypnogram && brainstateAvailable && brainstateIntervals.length > 0 && (
+          <HypnogramView
+            intervals={brainstateIntervals}
+            timeRange={[
+              typeof brainstateT0 === "number" ? brainstateT0 : 0,
+              typeof brainstateT1 === "number" ? brainstateT1 : 10,
+            ]}
+            timeWindow={[timeWindowLo, timeWindowHi]}
             timeCursor={selectionDraft.time}
-            viewportDuration={viewportDuration}
-            onViewportDurationChange={setViewportDuration}
-            onJumpToTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
+            onSelectTime={(t) => commitSelectionRef.current({ ...selectionDraft, time: t })}
           />
-          {showHypnogram && brainstateAvailable && brainstateIntervals.length > 0 && (
-            <HypnogramView
-              intervals={brainstateIntervals}
-              timeRange={[
-                typeof brainstateTimeRange[0] === "number" ? brainstateTimeRange[0] : 0,
-                typeof brainstateTimeRange[1] === "number" ? brainstateTimeRange[1] : 10,
-              ]}
-              timeWindow={timeWindow}
-              timeCursor={selectionDraft.time}
-              onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
-            />
-          )}
-        </>,
-      );
-    } else {
-      navigatorRef.current(null);
-    }
-  });
+        )}
+      </>
+    );
+  }, [
+    navigatorData,
+    selectionDraft,
+    setTimeWindow,
+    brainstateIntervals,
+    brainstateOverlay,
+    brainstateAvailable,
+    viewportDuration,
+    setViewportDuration,
+    showHypnogram,
+    brainstateT0,
+    brainstateT1,
+    timeWindowLo,
+    timeWindowHi,
+  ]);
+
+  useEffect(() => {
+    navigatorRef.current?.(navigatorElement);
+  }, [navigatorElement]);
 
   // ── Build view elements map ────────────────────────────────────────────
   const viewElements: Record<string, ReactNode> = {};
