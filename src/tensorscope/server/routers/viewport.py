@@ -29,5 +29,8 @@ def update_viewport(
     _, state = session
     t_lo, t_hi = body.resolve()
     updated = state.update_viewport(t_lo, t_hi)
-    state.publish("viewport_changed", updated.model_dump())
+    # mode="json" so in-process subscribers (Python agents on the bus) and
+    # SSE wire consumers see the same shape — `time_range` becomes a list,
+    # not a tuple. Without this, tuple-vs-list footguns differ by transport.
+    state.publish("viewport_changed", updated.model_dump(mode="json"))
     return updated

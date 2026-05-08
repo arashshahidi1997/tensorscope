@@ -42,7 +42,8 @@ def update_selection(
         viewport = state.update_viewport(t_lo, t_hi)
         # Publish AFTER selection_changed so the frontend processes cursor
         # movement before re-centering the visible window — matches the order
-        # specified in the v1.x design note.
-        state.publish("viewport_changed", viewport.model_dump())
+        # specified in the v1.x design note. mode="json" keeps in-process
+        # subscribers and the SSE wire on the same payload shape.
+        state.publish("viewport_changed", viewport.model_dump(mode="json"))
 
     return updated
