@@ -40,8 +40,8 @@ from tensorscope.server.models import (
 
 _INLINE_COORD_LIMIT = 32
 _VIEW_REGISTRY: dict[frozenset[str], list[str]] = {
-    frozenset({"time", "AP", "ML"}): ["timeseries", "spatial_map", "propagation_frame", "navigator", "psd_live"],
-    frozenset({"time", "channel"}): ["timeseries", "navigator", "psd_live"],
+    frozenset({"time", "AP", "ML"}): ["timeseries", "spatial_map", "propagation_frame", "navigator", "psd_live", "spectrogram_live"],
+    frozenset({"time", "channel"}): ["timeseries", "navigator", "psd_live", "spectrogram_live"],
     frozenset({"time", "freq", "AP", "ML"}): ["spectrogram", "psd_spatial"],
     frozenset({"time", "freq", "channel"}): ["spectrogram", "psd_average"],
 }
@@ -451,6 +451,114 @@ def apply_slice_request(
         dims = ("freq",) + tuple(non_time_dims)
         sliced = xr.DataArray(
             psd_vals, dims=dims, coords=coords, attrs=dict(sliced.attrs),
+        )
+
+    # 2c. Spectrogram live: compute multitaper spectrogram, replacing time
+    #     dim with (time-segments, freq). Mirrors psd_live's reshape pattern.
+    #     Defaults are tuned for sleep-band LFP (Prerau-style baseline pops
+    #     spindles) but every knob is overridable via SpectrogramLiveParamsDTO.
+    if request.view_type == "spectrogram_live" and "time" in sliced.dims:
+        from cogpy.spectral.multitaper import mtm_spectrogram
+
+        from tensorscope.server.models import SpectrogramLiveParamsDTO
+
+        spec_params = request.spectrogram_live_params or SpectrogramLiveParamsDTO()
+        time_vals = np.asarray(sliced.coords["time"].values, dtype=float)
+        if len(time_vals) < 2:
+            raise ValueError("spectrogram_live requires a time window with ≥2 samples")
+        fs = 1.0 / float(np.median(np.diff(time_vals)))
+        n_samples = len(time_vals)
+        window_t0 = float(time_vals[0])
+
+        # Narrow-window guard. ghostipy.mtm requires NW = bandwidth*nperseg/fs
+        # to yield enough DPSS tapers above min_lambda=0.95; empirically NW≥2
+        # (~3 tapers) is robust. Below that ghostipy raises a cryptic "None of
+        # the tapers satisfied the minimum energy concentration criteria"
+        # which is confusing during interactive pan / zoom — translate it
+        # into a clear "window too narrow" with an actionable hint.
+        nperseg_min = max(64, int(np.ceil(2.0 * fs / spec_params.bandwidth_hz)))
+        if n_samples < nperseg_min:
+            raise ValueError(
+                f"spectrogram_live: window too narrow ({n_samples} samples at "
+                f"fs={fs:.1f} Hz) for bandwidth={spec_params.bandwidth_hz} Hz "
+                f"(need ≥{nperseg_min} samples; widen the window or raise "
+                f"bandwidth_hz)"
+            )
+        # Auto-shrink nperseg to fit the visible window when the request is
+        # larger than the data — keeps the spectrogram responsive during pan.
+        nperseg_request = int(round(spec_params.nperseg_s * fs))
+        nperseg = max(nperseg_min, min(nperseg_request, n_samples))
+        noverlap = int(round(nperseg * spec_params.noverlap_pct / 100.0))
+        noverlap = max(0, min(noverlap, nperseg - 1))
+
+        non_time_dims = [d for d in sliced.dims if d != "time"]
+        if non_time_dims:
+            reordered = sliced.transpose(*non_time_dims, "time")
+            arr = np.asarray(reordered.values, dtype=np.float64)
+            orig_shape = arr.shape[:-1]
+            flat = arr.reshape(-1, arr.shape[-1])  # (n_ch, T)
+        else:
+            flat = np.asarray(sliced.values, dtype=np.float64)[None, :]
+            orig_shape = ()
+
+        mtspec, freqs, t_centers = mtm_spectrogram(
+            flat,
+            bandwidth=float(spec_params.bandwidth_hz),
+            axis=-1,
+            fs=fs,
+            nperseg=nperseg,
+            noverlap=noverlap,
+            remove_mean=True,
+            n_fft_threads=1,
+        )
+        # mtspec shape: (n_ch, n_freq, n_t_segments)
+        mtspec = np.asarray(mtspec)
+        freqs = np.asarray(freqs)
+        t_centers = np.asarray(t_centers)
+
+        # Clip freq window. searchsorted(side="right") for the upper bound
+        # so an exact-match fmax_hz is included.
+        lo = int(np.searchsorted(freqs, spec_params.fmin_hz, side="left"))
+        hi = int(np.searchsorted(freqs, spec_params.fmax_hz, side="right"))
+        hi = max(hi, lo + 1)  # guarantee at least one freq row
+        mtspec = mtspec[:, lo:hi, :]
+        freqs = freqs[lo:hi]
+
+        # Per-freq median baseline subtraction in log10 space (Prerau).
+        # Floor at 1e-20 to keep log finite when ghostipy returns zeros at
+        # the spectrum edges.
+        if spec_params.normalize_per_freq_median:
+            log_s = np.log10(np.maximum(mtspec, 1e-20))
+            mtspec = log_s - np.median(log_s, axis=-1, keepdims=True)
+
+        # Reshape (n_ch, n_freq, n_t) → (*orig_shape, n_freq, n_t) →
+        # (n_t, n_freq, *orig_shape). The frontend's extractSpectrogram
+        # groups by (time, freq) and averages over remaining spatial dims.
+        if orig_shape:
+            mtspec = mtspec.reshape(*orig_shape, len(freqs), len(t_centers))
+            # Move freq axis to position -2 → already there; move time axis to position 0.
+            mtspec = np.moveaxis(mtspec, -1, 0)  # (n_t, *orig_shape, n_freq)
+            mtspec = np.moveaxis(mtspec, -1, 1)  # (n_t, n_freq, *orig_shape)
+        else:
+            mtspec = mtspec[0].T  # (n_t, n_freq)
+
+        # cogpy's t_centers are seconds-from-window-start; align to global time.
+        global_times = t_centers + window_t0
+        coords = {"time": global_times, "freq": freqs}
+        for d in non_time_dims:
+            if d in sliced.coords:
+                coords[d] = sliced.coords[d].values
+
+        dims = ("time", "freq") + tuple(non_time_dims)
+        sliced = xr.DataArray(
+            mtspec, dims=dims, coords=coords,
+            attrs={
+                **dict(sliced.attrs),
+                "spectrogram_live_nperseg": int(nperseg),
+                "spectrogram_live_noverlap": int(noverlap),
+                "spectrogram_live_fs": float(fs),
+                "spectrogram_live_normalized": bool(spec_params.normalize_per_freq_median),
+            },
         )
 
     # 3. Channel / AP / ML selection (after processing so CMR sees all channels).

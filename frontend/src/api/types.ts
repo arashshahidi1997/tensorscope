@@ -72,6 +72,17 @@ export type PSDParamsDTO = {
   fmax?: number;
 };
 
+/** Multitaper-spectrogram parameters for the `spectrogram_live` view. */
+export type SpectrogramLiveParamsDTO = {
+  bandwidth_hz?: number;
+  nperseg_s?: number;
+  noverlap_pct?: number;
+  fmin_hz?: number;
+  fmax_hz?: number;
+  /** Per-freq median baseline subtraction (Prerau-style). Default true. */
+  normalize_per_freq_median?: boolean;
+};
+
 export type TensorSliceRequestDTO = {
   view_type: string;
   selection: SelectionDTO;
@@ -86,6 +97,8 @@ export type TensorSliceRequestDTO = {
   downsample?: DownsampleMethod;
   /** PSD computation parameters (for psd_live view_type). */
   psd_params?: PSDParamsDTO;
+  /** Multitaper-spectrogram parameters (for spectrogram_live view_type). */
+  spectrogram_live_params?: SpectrogramLiveParamsDTO;
 };
 
 export type TensorSliceDTO = {

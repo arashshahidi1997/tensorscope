@@ -17,6 +17,7 @@ import {
   useSetProcessing,
   makeNavigatorRequest,
   makePSDLiveRequest,
+  makeSpectrogramLiveRequest,
   useBrainstateIntervalsQuery,
   useBrainstateMetaQuery,
   useEventWindowQuery,
@@ -177,6 +178,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const hasPSDLive = effectiveActiveViews.some((v) =>
     v === "psd_heatmap" || v === "psd_curve" || v === "psd_spatial",
   );
+  const hasSpectrogramLive = effectiveActiveViews.includes("spectrogram_live");
 
   // Detect if the active tensor supports ortho-slicing (4D: time, freq, AP, ML)
   const tensorDims = tensorQuery.data?.dims ?? activeTensorSummary?.dims ?? [];
@@ -209,6 +211,14 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     hasPSDLive
       ? makePSDLiveRequest(selectionDraft, psdWindowS, timeCoord, { NW: psdNW, fmax: psdFmax })
       : null,
+  );
+  // Spectrogram live — multitaper spectrogram on the visible window. Server
+  // defaults are sleep-band tuned (Prerau-style baseline subtraction); the
+  // frontend doesn't currently expose a knob panel for these, but the
+  // request shape forwards any params on the wire.
+  const spectrogramLiveQuery = useSliceQuery(
+    selectedTensor,
+    hasSpectrogramLive ? makeSpectrogramLiveRequest(selectionDraft, safeWindow, timeCoord) : null,
   );
   const navigatorSliceQuery = useSliceQuery(
     selectedTensor,
@@ -390,6 +400,19 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         />
       );
     }
+  }
+
+  if (hasSpectrogramLive && spectrogramLiveQuery.data) {
+    viewElements["spectrogram_live"] = (
+      <SpectrogramComponent
+        slice={spectrogramLiveQuery.data}
+        selection={selectionDraft}
+        onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
+        onSelectFreq={handleSelectFreq}
+        onTimeWindowChange={setTimeWindow}
+        timeWindow={timeWindow}
+      />
+    );
   }
 
   if (hasPSD && psdSliceQuery.data) {

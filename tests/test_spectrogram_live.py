@@ -1,0 +1,243 @@
+"""Tests for the spectrogram_live view type."""
+from __future__ import annotations
+
+import numpy as np
+import pytest
+import xarray as xr
+
+from tensorscope.server.models import (
+    SelectionDTO,
+    SpectrogramLiveParamsDTO,
+    TensorSliceRequestDTO,
+)
+from tensorscope.server.state import create_server_state
+
+
+def _make_signal(n_time: int = 4000, n_ap: int = 4, n_ml: int = 8, fs: float = 1000.0) -> xr.DataArray:
+    """Synthetic (time, AP, ML) LFP-shaped signal with known frequency content.
+
+    A 12 Hz sine + a 7 Hz transient burst between 1.0 s and 2.0 s, plus broadband noise.
+    Useful for exercising fmin/fmax clipping and the per-freq normalisation path.
+    """
+    t = np.arange(n_time) / fs
+    rng = np.random.default_rng(7)
+    base = np.sin(2 * np.pi * 12 * t)
+    burst_mask = (t >= 1.0) & (t < 2.0)
+    burst = np.zeros_like(t)
+    burst[burst_mask] = np.sin(2 * np.pi * 7 * t[burst_mask])
+    sig = (base + 0.5 * burst)[:, None, None]
+    data = rng.normal(0, 0.05, (n_time, n_ap, n_ml)) + sig
+    return xr.DataArray(
+        data,
+        dims=("time", "AP", "ML"),
+        coords={"time": t, "AP": np.arange(n_ap), "ML": np.arange(n_ml)},
+        attrs={"fs": fs},
+    )
+
+
+def _make_signal_channel(n_time: int = 4000, n_ch: int = 6, fs: float = 1000.0) -> xr.DataArray:
+    """Synthetic (time, channel) signal — exercises the alternate dim signature."""
+    t = np.arange(n_time) / fs
+    rng = np.random.default_rng(11)
+    sig = np.sin(2 * np.pi * 10 * t)[:, None]
+    data = rng.normal(0, 0.05, (n_time, n_ch)) + sig
+    return xr.DataArray(
+        data,
+        dims=("time", "channel"),
+        coords={"time": t, "channel": np.arange(n_ch)},
+        attrs={"fs": fs},
+    )
+
+
+# ── shape correctness ────────────────────────────────────────────────────
+
+
+def test_spectrogram_live_basic_grid_shape() -> None:
+    """spectrogram_live on (time, AP, ML) returns (time_seg, freq, AP, ML)."""
+    signal = _make_signal()
+    state = create_server_state(signal, tensor_name="lfp")
+    request = TensorSliceRequestDTO(
+        view_type="spectrogram_live",
+        selection=SelectionDTO(time=1.0, freq=10.0, ap=0, ml=0),
+        time_range=(0.0, 4.0),
+    )
+    result = state.tensor_slice("lfp", request)
+    assert result.dims == ["time", "freq", "AP", "ML"]
+    n_t, n_f, n_ap, n_ml = result.shape
+    assert n_t > 0 and n_f > 0
+    assert n_ap == 4 and n_ml == 8
+
+
+def test_spectrogram_live_basic_channel_shape() -> None:
+    """spectrogram_live on (time, channel) returns (time_seg, freq, channel)."""
+    signal = _make_signal_channel()
+    state = create_server_state(signal, tensor_name="lfp_ch")
+    request = TensorSliceRequestDTO(
+        view_type="spectrogram_live",
+        selection=SelectionDTO(time=1.0, freq=10.0, ap=0, ml=0),
+        time_range=(0.0, 4.0),
+    )
+    result = state.tensor_slice("lfp_ch", request)
+    assert result.dims == ["time", "freq", "channel"]
+    assert result.shape[2] == 6
+
+
+def test_spectrogram_live_time_centers_aligned_to_window() -> None:
+    """Segment-centre timestamps live inside the requested window."""
+    signal = _make_signal()
+    state = create_server_state(signal, tensor_name="lfp")
+    request = TensorSliceRequestDTO(
+        view_type="spectrogram_live",
+        selection=SelectionDTO(time=1.5, freq=10.0, ap=0, ml=0),
+        time_range=(1.0, 3.0),
+    )
+    result = state.tensor_slice("lfp", request)
+    time_coord = next(c for c in result.meta["coords"] if c["name"] == "time")
+    # cogpy returns segment-centres relative to window start; we add window_t0
+    # so the global timestamps land somewhere inside [1.0, 3.0].
+    assert time_coord["min"] is not None and time_coord["min"] >= 1.0
+    assert time_coord["max"] is not None and time_coord["max"] <= 3.0
+
+
+# ── frequency clipping ────────────────────────────────────────────────────
+
+
+def test_spectrogram_live_fmin_fmax_clip() -> None:
+    """fmin_hz / fmax_hz drop freq rows outside the band."""
+    signal = _make_signal()
+    state = create_server_state(signal, tensor_name="lfp")
+    request = TensorSliceRequestDTO(
+        view_type="spectrogram_live",
+        selection=SelectionDTO(time=1.0, freq=10.0, ap=0, ml=0),
+        time_range=(0.0, 4.0),
+        spectrogram_live_params=SpectrogramLiveParamsDTO(fmin_hz=5.0, fmax_hz=20.0),
+    )
+    result = state.tensor_slice("lfp", request)
+    freq_coord = next(c for c in result.meta["coords"] if c["name"] == "freq")
+    assert freq_coord["min"] is not None and freq_coord["min"] >= 5.0
+    assert freq_coord["max"] is not None and freq_coord["max"] <= 20.0
+
+
+def test_spectrogram_live_fmax_le_fmin_rejected() -> None:
+    """fmax_hz <= fmin_hz fails Pydantic validation."""
+    with pytest.raises(ValueError, match="fmax_hz must be greater than fmin_hz"):
+        SpectrogramLiveParamsDTO(fmin_hz=20.0, fmax_hz=10.0)
+
+
+# ── normalisation ─────────────────────────────────────────────────────────
+
+
+def test_spectrogram_live_normalize_per_freq_median_zero_centers() -> None:
+    """With normalize_per_freq_median=True, each freq row's median over time
+    is approximately zero (Prerau-style baseline subtraction in log10 space)."""
+    signal = _make_signal()
+    state = create_server_state(signal, tensor_name="lfp")
+    request = TensorSliceRequestDTO(
+        view_type="spectrogram_live",
+        selection=SelectionDTO(time=1.0, freq=10.0, ap=0, ml=0),
+        time_range=(0.0, 4.0),
+        spectrogram_live_params=SpectrogramLiveParamsDTO(
+            normalize_per_freq_median=True,
+        ),
+    )
+    result = state.tensor_slice("lfp", request)
+    # Decode the Arrow payload. Easier path: re-fetch via the executor and
+    # inspect the in-memory DataArray that fed encode_arrow_payload.
+    # Use the slice response shape directly: meta carries the dim ordering.
+    # We re-run apply_slice_request to get the DataArray for assertion.
+    from tensorscope.server.state import apply_slice_request
+    da = apply_slice_request(signal, request)
+    # Median over the time-segment axis, per freq, per (AP, ML) — should be ~0.
+    median_per_freq = da.median(dim="time")
+    assert np.allclose(median_per_freq.values, 0.0, atol=1e-9)
+
+
+def test_spectrogram_live_normalize_off_keeps_log_power_scale() -> None:
+    """With normalize_per_freq_median=False, values are raw power (not zero-medianed)."""
+    signal = _make_signal()
+    from tensorscope.server.state import apply_slice_request
+    request = TensorSliceRequestDTO(
+        view_type="spectrogram_live",
+        selection=SelectionDTO(time=1.0, freq=10.0, ap=0, ml=0),
+        time_range=(0.0, 4.0),
+        spectrogram_live_params=SpectrogramLiveParamsDTO(
+            normalize_per_freq_median=False,
+        ),
+    )
+    da = apply_slice_request(signal, request)
+    # Off the normalisation path, freq rows are NOT zero-centred — at least
+    # one row's median should be appreciably non-zero on real-power output.
+    median_per_freq = da.median(dim="time")
+    assert float(np.abs(median_per_freq).max()) > 1e-6
+
+
+# ── window / validator ───────────────────────────────────────────────────
+
+
+def test_spectrogram_live_requires_time_range() -> None:
+    """Validator rejects spectrogram_live requests without a time_range."""
+    with pytest.raises(ValueError, match="time_range is required for spectrogram_live"):
+        TensorSliceRequestDTO(
+            view_type="spectrogram_live",
+            selection=SelectionDTO(time=0.0, freq=0.0, ap=0, ml=0),
+        )
+
+
+def test_spectrogram_live_too_narrow_window_raises() -> None:
+    """Sub-64-sample windows can't host a usable multitaper segment → 400."""
+    signal = _make_signal(n_time=4000, fs=1000.0)
+    state = create_server_state(signal, tensor_name="lfp")
+    # 50 samples at 1 kHz = 0.05 s; below the 64-sample floor.
+    request = TensorSliceRequestDTO(
+        view_type="spectrogram_live",
+        selection=SelectionDTO(time=0.025, freq=10.0, ap=0, ml=0),
+        time_range=(0.0, 0.05),
+    )
+    with pytest.raises(ValueError, match="window too narrow"):
+        state.tensor_slice("lfp", request)
+
+
+def test_spectrogram_live_auto_shrinks_nperseg_in_meta() -> None:
+    """If the requested nperseg exceeds the visible window, the server shrinks
+    it to fit (above the bandwidth-driven minimum) and reports the effective
+    value via tensor attrs — useful for any future 'computed at nperseg=Xs'
+    chrome.  Use bandwidth_hz=8 here so the NW≥2 minimum (250 samples)
+    stays below our 0.3 s window (300 samples)."""
+    signal = _make_signal(n_time=4000, fs=1000.0)
+    from tensorscope.server.state import apply_slice_request
+    request = TensorSliceRequestDTO(
+        view_type="spectrogram_live",
+        selection=SelectionDTO(time=0.15, freq=10.0, ap=0, ml=0),
+        time_range=(0.0, 0.3),
+        spectrogram_live_params=SpectrogramLiveParamsDTO(
+            nperseg_s=1.0,    # asks for 1000 samples
+            bandwidth_hz=8.0,  # min = ceil(2 * 1000 / 8) = 250 samples
+        ),
+    )
+    da = apply_slice_request(signal, request)
+    # xarray's label-slice is inclusive of both endpoints, so a [0.0, 0.3]
+    # window at 1 kHz selects 301 samples — nperseg shrinks to fill all of
+    # them rather than the round-1000 the user asked for.
+    assert da.attrs["spectrogram_live_nperseg"] == 301
+    # Effective fs round-trips through the meta so frontends can render
+    # "computed at" chrome without re-deriving from the time coord.
+    assert da.attrs["spectrogram_live_fs"] == pytest.approx(1000.0)
+
+
+# ── view registry ────────────────────────────────────────────────────────
+
+
+def test_spectrogram_live_available_in_views_for_grid_signal() -> None:
+    """Available views advertise spectrogram_live for raw (time, AP, ML) tensors."""
+    signal = _make_signal()
+    state = create_server_state(signal, tensor_name="lfp")
+    meta = state.tensor_meta("lfp")
+    assert "spectrogram_live" in meta.available_views
+
+
+def test_spectrogram_live_available_in_views_for_channel_signal() -> None:
+    """Available views advertise spectrogram_live for raw (time, channel) tensors."""
+    signal = _make_signal_channel()
+    state = create_server_state(signal, tensor_name="lfp_ch")
+    meta = state.tensor_meta("lfp_ch")
+    assert "spectrogram_live" in meta.available_views

@@ -5,6 +5,7 @@ import {
   makeNavigatorRequest,
   makeOrthoSpatialRequest,
   makePSDLiveRequest,
+  makeSpectrogramLiveRequest,
 } from "./queries";
 import type { CoordSummary, SelectionDTO } from "./types";
 
@@ -116,5 +117,45 @@ describe("makePSDLiveRequest", () => {
   it("forwards psd_params to the request", () => {
     const req = makePSDLiveRequest(SEL, 1, TIME_COORD, { NW: 6, fmax: 80 });
     expect(req.psd_params).toEqual({ NW: 6, fmax: 80 });
+  });
+});
+
+describe("makeSpectrogramLiveRequest", () => {
+  it("uses the visible timeWindow directly (no cursor-centring)", () => {
+    const req = makeSpectrogramLiveRequest(SEL, [5, 25], TIME_COORD);
+    expect(req.view_type).toBe("spectrogram_live");
+    expect(req.time_range).toEqual([5, 25]);
+    expect(req.selection).toEqual(SEL);
+  });
+
+  it("clamps the window against the tensor bounds", () => {
+    const req = makeSpectrogramLiveRequest(SEL, [-5, 200], TIME_COORD);
+    expect(req.time_range).toEqual([0, 50]);
+  });
+
+  it("forwards spectrogram_live_params to the request", () => {
+    const req = makeSpectrogramLiveRequest(SEL, [0, 10], TIME_COORD, {
+      bandwidth_hz: 4,
+      fmin_hz: 5,
+      fmax_hz: 30,
+      normalize_per_freq_median: false,
+    });
+    expect(req.spectrogram_live_params).toEqual({
+      bandwidth_hz: 4,
+      fmin_hz: 5,
+      fmax_hz: 30,
+      normalize_per_freq_median: false,
+    });
+  });
+
+  it("does not set max_points (server caps segment count via nperseg/noverlap)", () => {
+    const req = makeSpectrogramLiveRequest(SEL, [0, 10], TIME_COORD);
+    expect(req.max_points).toBeUndefined();
+    expect(req.downsample).toBeUndefined();
+  });
+
+  it("omits spectrogram_live_params when none supplied (server defaults apply)", () => {
+    const req = makeSpectrogramLiveRequest(SEL, [0, 10], TIME_COORD);
+    expect(req.spectrogram_live_params).toBeUndefined();
   });
 });

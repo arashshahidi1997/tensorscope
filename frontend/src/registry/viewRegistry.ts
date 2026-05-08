@@ -24,6 +24,7 @@ export const VIEW_DESCRIPTORS: ViewDescriptor[] = [
   { id: "table",             label: "Table",        requiredDims: [],                    priority: 8 },
   { id: "psd_heatmap",      label: "PSD Heatmap",  requiredDims: ["time"],              priority: 10 },
   { id: "psd_curve",        label: "PSD Curve",    requiredDims: ["time"],              priority: 11 },
+  { id: "spectrogram_live", label: "Spectrogram",  requiredDims: ["time"],              priority: 3 },
   { id: "hypnogram",        label: "Hypnogram",    requiredDims: [],                    priority: 12 },
 ];
 
@@ -63,6 +64,7 @@ export const viewRegistry: Record<string, (props: SliceViewProps) => ReactElemen
   spatial_map: SpatialMapSliceView,
   navigator: TimeseriesSliceView, // navigator uses same uPlot renderer; NavigatorView is used separately
   spectrogram: SpectrogramView,
+  spectrogram_live: SpectrogramView,
   psd_average: PSDSliceView,
   psd_spatial: PlaceholderSliceView,   // PSD panel views rendered directly in WorkspaceMain
   psd_heatmap: PlaceholderSliceView,  // PSD panel views rendered directly in WorkspaceMain

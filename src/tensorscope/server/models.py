@@ -166,6 +166,49 @@ class LayoutUpdateDTO(BaseModel):
     preset: str = Field(min_length=1)
 
 
+class SpectrogramLiveParamsDTO(BaseModel):
+    """Multitaper spectrogram parameters for the ``spectrogram_live`` view.
+
+    Mirrors the kwargs of ``cogpy.spectral.multitaper.mtm_spectrogram``
+    (which wraps ghostipy.mtm_spectrogram) plus a Prerau-style per-freq
+    median-baseline normalization that makes spindles and bursts pop on
+    spectrogram heatmaps.
+
+    All times are in seconds, all frequencies in Hz. The server resolves
+    ``nperseg_s`` and ``noverlap_pct`` to sample counts using the tensor's
+    inferred ``fs`` at request time.
+
+    Narrow-window guard: if the visible window is shorter than
+    ``nperseg_s``, the server auto-shrinks ``nperseg`` to fit (with a
+    floor of 64 samples) and reports the effective settings in the
+    slice meta. This trades a momentary resolution drop for graceful
+    behaviour during fine-grained pan / zoom; see
+    ``docs/log/issue/issue-arash-20260508-142724-956601.md`` for the
+    interactive-pan use case driving this choice.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    bandwidth_hz: float = Field(default=2.0, gt=0.0, description="Multitaper bandwidth (Hz).")
+    nperseg_s: float = Field(default=1.0, gt=0.0, description="Window length (s); converted to samples via fs.")
+    noverlap_pct: float = Field(default=95.0, ge=0.0, lt=100.0, description="Inter-window overlap as a percentage of nperseg.")
+    fmin_hz: float = Field(default=0.5, ge=0.0, description="Lower freq bound (Hz); rows below are clipped.")
+    fmax_hz: float = Field(default=30.0, gt=0.0, description="Upper freq bound (Hz); rows above are clipped.")
+    normalize_per_freq_median: bool = Field(
+        default=True,
+        description=(
+            "If True, subtract the median over time-segments per freq row "
+            "(in log10 power) — Prerau-style baseline subtraction."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check_freq_range(self) -> "SpectrogramLiveParamsDTO":
+        if self.fmax_hz <= self.fmin_hz:
+            raise ValueError("fmax_hz must be greater than fmin_hz")
+        return self
+
+
 class PsdParamsDTO(BaseModel):
     """Multitaper PSD parameters.
 
@@ -208,6 +251,7 @@ class TensorSliceRequestDTO(BaseModel):
     max_points: int | None = Field(default=None, ge=1)
     downsample: DownsampleMethod = DownsampleMethod.MINMAX
     psd_params: PsdParamsDTO | None = None
+    spectrogram_live_params: SpectrogramLiveParamsDTO | None = None
 
     @model_validator(mode="after")
     def validate_request(self) -> "TensorSliceRequestDTO":
@@ -218,6 +262,11 @@ class TensorSliceRequestDTO(BaseModel):
             raise ValueError("time_range is required for time-based slice requests")
         if time_required and self.max_points is None:
             raise ValueError("max_points is required for time-based slice requests")
+
+        # spectrogram_live needs a window but doesn't downsample over time
+        # (mtm_spectrogram already produces a bounded segment count).
+        if self.view_type == "spectrogram_live" and self.time_range is None:
+            raise ValueError("time_range is required for spectrogram_live requests")
 
         if self.view_type == "propagation_frame" and self.frame_time is None:
             raise ValueError("frame_time is required for propagation_frame requests")
