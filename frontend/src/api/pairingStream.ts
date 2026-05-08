@@ -12,10 +12,15 @@ import type { QueryClient } from "@tanstack/react-query";
 import { useSelectionStore } from "../store/selectionStore";
 import type { SelectionDTO } from "./types";
 
+type ViewportPayload = {
+  time_range: [number, number] | null;
+};
+
 type StreamMessage =
   | { type: "tensor_added"; payload: Record<string, unknown> }
   | { type: "events_added"; payload: Record<string, unknown> }
-  | { type: "selection_changed"; payload: SelectionDTO };
+  | { type: "selection_changed"; payload: SelectionDTO }
+  | { type: "viewport_changed"; payload: ViewportPayload };
 
 export interface PairingStreamOptions {
   /** Override constructor — useful for tests. Defaults to global EventSource. */
@@ -60,5 +65,18 @@ export function handlePairingMessage(raw: string, queryClient: QueryClient): voi
       useSelectionStore.getState().initFromDTO(msg.payload);
       queryClient.invalidateQueries({ queryKey: ["slice"] });
       break;
+    case "viewport_changed": {
+      // Reuse selectionStore.timeWindow for now (the v2 viewportStore split
+      // is deferred — see issue-arash-20260508-142724-956601.md). Phase 1
+      // already wired setTimeWindow → chart.setScale, so this push reaches
+      // the timeseries + spectrogram x-axes for free.
+      const range = msg.payload?.time_range;
+      if (Array.isArray(range) && range.length === 2 &&
+          Number.isFinite(range[0]) && Number.isFinite(range[1])) {
+        useSelectionStore.getState().setTimeWindow([range[0], range[1]]);
+        queryClient.invalidateQueries({ queryKey: ["slice"] });
+      }
+      break;
+    }
   }
 }

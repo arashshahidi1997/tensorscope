@@ -61,6 +61,11 @@ class PairContext:
         resp.raise_for_status()
         return resp.json()
 
+    def read_viewport(self) -> dict[str, Any]:
+        resp = self._client.get("/api/v1/viewport")
+        resp.raise_for_status()
+        return resp.json()
+
     # ── mutations ────────────────────────────────────────────────────────
     def add_tensor(
         self,
@@ -116,14 +121,57 @@ class PairContext:
         ap: int | None = None,
         ml: int | None = None,
         channel: int | None = None,
+        follow_with_window_s: float | None = None,
     ) -> dict[str, Any]:
+        """Mutate the cursor selection.
+
+        Parameters
+        ----------
+        follow_with_window_s
+            When set, the server also updates the viewport to a window of this
+            width centered on the new ``time``. The browser settle order is
+            ``selection_changed`` first, then ``viewport_changed`` — matching
+            the SSE contract documented in
+            ``docs/log/issue/issue-arash-20260508-142724-956601.md``.
+        """
         current = self.read_selection()
         for key, value in (
             ("time", time), ("freq", freq), ("ap", ap), ("ml", ml), ("channel", channel),
         ):
             if value is not None:
                 current[key] = value
-        resp = self._client.put("/api/v1/selection", json=current)
+        params: dict[str, Any] | None = None
+        if follow_with_window_s is not None:
+            params = {"follow_with_window_s": float(follow_with_window_s)}
+        resp = self._client.put("/api/v1/selection", json=current, params=params)
+        resp.raise_for_status()
+        return resp.json()
+
+    def set_viewport(
+        self,
+        *,
+        t_lo: float | None = None,
+        t_hi: float | None = None,
+        t_center: float | None = None,
+        t_window: float | None = None,
+    ) -> dict[str, Any]:
+        """Pan / frame the visible time window.
+
+        Supply either ``(t_lo, t_hi)`` directly or ``(t_center, t_window)``
+        for the centered convenience form (``t_lo = t_center - t_window/2``,
+        ``t_hi = t_center + t_window/2``). Publishes ``viewport_changed``
+        on the SSE bus on success.
+        """
+        body: dict[str, Any] = {}
+        if t_lo is not None:
+            body["t_lo"] = float(t_lo)
+        if t_hi is not None:
+            body["t_hi"] = float(t_hi)
+        if t_center is not None:
+            body["t_center"] = float(t_center)
+        if t_window is not None:
+            body["t_window"] = float(t_window)
+        resp = self._client.put("/api/v1/viewport", json=body)
         resp.raise_for_status()
         return resp.json()
 

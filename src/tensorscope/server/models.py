@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from tensorscope.core.state import SelectionState
+from tensorscope.core.state import SelectionState, Viewport
 
 
 class DownsampleMethod(str, Enum):
@@ -30,6 +30,63 @@ class SelectionDTO(BaseModel):
     @classmethod
     def from_selection(cls, selection: SelectionState) -> "SelectionDTO":
         return cls(**selection.model_dump())
+
+
+class ViewportDTO(BaseModel):
+    """Serialized viewport (visible-window) state.
+
+    Decoupled from ``SelectionDTO`` so agents can pan the visible range
+    without moving the cursor, and vice versa. See the design discussion
+    in ``docs/log/issue/issue-arash-20260508-142724-956601.md``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    time_range: tuple[float, float] | None = None
+
+    @classmethod
+    def from_viewport(cls, viewport: Viewport) -> "ViewportDTO":
+        return cls(**viewport.model_dump())
+
+
+class ViewportUpdateDTO(BaseModel):
+    """Request body for PUT /viewport.
+
+    Either supply ``t_lo`` + ``t_hi`` directly, or ``t_center`` + ``t_window``
+    for the centered-window convenience form. The two forms are mutually
+    exclusive — one or the other.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    t_lo: float | None = None
+    t_hi: float | None = None
+    t_center: float | None = Field(default=None, ge=0.0)
+    t_window: float | None = Field(default=None, gt=0.0)
+
+    def resolve(self) -> tuple[float, float]:
+        """Return ``(t_lo, t_hi)``, computed from whichever form was supplied."""
+        explicit = self.t_lo is not None and self.t_hi is not None
+        centered = self.t_center is not None and self.t_window is not None
+        if explicit and centered:
+            raise ValueError(
+                "specify either (t_lo, t_hi) or (t_center, t_window), not both"
+            )
+        if explicit:
+            assert self.t_lo is not None and self.t_hi is not None
+            t_lo, t_hi = float(self.t_lo), float(self.t_hi)
+        elif centered:
+            assert self.t_center is not None and self.t_window is not None
+            half = float(self.t_window) / 2.0
+            t_lo = max(0.0, float(self.t_center) - half)
+            t_hi = float(self.t_center) + half
+        else:
+            raise ValueError(
+                "set_viewport requires either (t_lo, t_hi) or (t_center, t_window)"
+            )
+        if t_hi <= t_lo:
+            raise ValueError("t_hi must be greater than t_lo")
+        return t_lo, t_hi
 
 
 class CoordSummaryDTO(BaseModel):
@@ -421,6 +478,7 @@ class StateDTO(BaseModel):
     session_id: str
     active_tensor: str
     selection: SelectionDTO
+    viewport: ViewportDTO = ViewportDTO()
     layout: LayoutDTO
     tensors: list[TensorSummaryDTO]
     events: list[EventStreamMetaDTO]

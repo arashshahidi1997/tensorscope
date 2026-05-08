@@ -16,7 +16,7 @@ import xarray as xr
 
 from tensorscope.core.events import EventRegistry, EventStream
 from tensorscope.core.layout import LayoutManager
-from tensorscope.core.state import SelectionState, TensorNode, TensorScopeState
+from tensorscope.core.state import SelectionState, TensorNode, TensorScopeState, Viewport
 from tensorscope.core.transforms import TransformCache, TransformExecutor, TransformRegistry, WorkspaceDAG
 from tensorscope.core.transforms.builtins import register_builtins
 from tensorscope.core.transforms.dag import DAGTensorNode
@@ -34,6 +34,7 @@ from tensorscope.server.models import (
     TensorSliceDTO,
     TensorSliceRequestDTO,
     TensorSummaryDTO,
+    ViewportDTO,
 )
 
 
@@ -103,6 +104,7 @@ class ServerState:
             session_id=session_id,
             active_tensor=self.app_state.active_tensor,
             selection=SelectionDTO.from_selection(self.app_state.selection),
+            viewport=ViewportDTO.from_viewport(self.app_state.viewport),
             layout=self.layout_dto(),
             tensors=[tensor_summary(node) for node in self.iter_nodes()],
             events=[event_stream_meta(stream) for stream in self.iter_events()],
@@ -123,6 +125,10 @@ class ServerState:
     def update_selection(self, selection: SelectionDTO) -> SelectionDTO:
         self.app_state.selection = SelectionState(**selection.model_dump())
         return SelectionDTO.from_selection(self.app_state.selection)
+
+    def update_viewport(self, t_lo: float, t_hi: float) -> ViewportDTO:
+        self.app_state.viewport = Viewport(time_range=(float(t_lo), float(t_hi)))
+        return ViewportDTO.from_viewport(self.app_state.viewport)
 
     def subscribe(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop) -> _Subscriber:
         """Register an async subscriber that will receive published events.

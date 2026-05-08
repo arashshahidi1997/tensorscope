@@ -256,3 +256,113 @@ def test_selection_change_publishes_event() -> None:
             state.unsubscribe(sub)
 
     asyncio.run(_run())
+
+
+# ── viewport endpoint (v1.x: set_viewport + follow_with_window_s) ─────────
+
+
+def test_put_viewport_persists_and_publishes() -> None:
+    """PUT /viewport stores the range, exposes it via state, and publishes."""
+    app = _app(pair_mode=True)
+    client = TestClient(app)
+    client.get("/api/v1/state")
+    state = app.state.session_manager._records["pair"].state  # type: ignore[attr-defined]
+
+    async def _run():
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        sub = state.subscribe(queue, loop)
+        try:
+            resp = client.put(
+                "/api/v1/viewport",
+                json={"t_lo": 200.0, "t_hi": 240.0},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["time_range"] == [200.0, 240.0]
+
+            msg = await asyncio.wait_for(queue.get(), timeout=2.0)
+            assert msg["type"] == "viewport_changed"
+            assert msg["payload"]["time_range"] == [200.0, 240.0]
+
+            # Read-back via GET, and also via state DTO.
+            assert client.get("/api/v1/viewport").json()["time_range"] == [200.0, 240.0]
+            assert client.get("/api/v1/state").json()["viewport"]["time_range"] == [200.0, 240.0]
+
+            # Centered convenience form.
+            resp2 = client.put(
+                "/api/v1/viewport",
+                json={"t_center": 215.4, "t_window": 4.0},
+            )
+            assert resp2.status_code == 200
+            assert resp2.json()["time_range"] == [pytest.approx(213.4), pytest.approx(217.4)]
+
+            msg2 = await asyncio.wait_for(queue.get(), timeout=2.0)
+            assert msg2["type"] == "viewport_changed"
+        finally:
+            state.unsubscribe(sub)
+
+    asyncio.run(_run())
+
+
+def test_selection_with_follow_publishes_both_events_in_order() -> None:
+    """PUT /selection?follow_with_window_s=N publishes selection_changed first,
+    then viewport_changed — that ordering is part of the v1.x SSE contract.
+    """
+    app = _app(pair_mode=True)
+    client = TestClient(app)
+    client.get("/api/v1/state")
+    state = app.state.session_manager._records["pair"].state  # type: ignore[attr-defined]
+
+    async def _run():
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        sub = state.subscribe(queue, loop)
+        try:
+            resp = client.put(
+                "/api/v1/selection",
+                params={"follow_with_window_s": 4.0},
+                json={"time": 215.4, "freq": 0.0, "ap": 0, "ml": 0, "channel": None},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["time"] == pytest.approx(215.4)
+
+            first = await asyncio.wait_for(queue.get(), timeout=2.0)
+            second = await asyncio.wait_for(queue.get(), timeout=2.0)
+            assert first["type"] == "selection_changed"
+            assert first["payload"]["time"] == pytest.approx(215.4)
+            assert second["type"] == "viewport_changed"
+            assert second["payload"]["time_range"] == [pytest.approx(213.4), pytest.approx(217.4)]
+
+            # Viewport state is now persisted on the server.
+            assert client.get("/api/v1/viewport").json()["time_range"] == [pytest.approx(213.4), pytest.approx(217.4)]
+        finally:
+            state.unsubscribe(sub)
+
+    asyncio.run(_run())
+
+
+def test_pair_context_set_viewport_and_follow() -> None:
+    """End-to-end PairContext methods: set_viewport (both forms) +
+    set_selection(..., follow_with_window_s=...).
+    """
+    app = _app(pair_mode=True)
+    client = TestClient(app)
+    ctx = PairContext(client=client)
+
+    # Explicit form
+    out = ctx.set_viewport(t_lo=100.0, t_hi=110.0)
+    assert out["time_range"] == [100.0, 110.0]
+    assert ctx.read_viewport()["time_range"] == [100.0, 110.0]
+
+    # Centered form
+    out = ctx.set_viewport(t_center=215.4, t_window=4.0)
+    assert out["time_range"] == [pytest.approx(213.4), pytest.approx(217.4)]
+
+    # follow_with_window_s on set_selection
+    out = ctx.set_selection(time=120.0, follow_with_window_s=10.0)
+    assert out["time"] == pytest.approx(120.0)
+    assert ctx.read_viewport()["time_range"] == [pytest.approx(115.0), pytest.approx(125.0)]
+
+    # Bad input — neither form supplied
+    with pytest.raises(Exception):
+        ctx.set_viewport()  # raises 400 → httpx HTTPStatusError

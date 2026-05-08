@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from tensorscope.core.events import EventRegistry, EventStream
 from tensorscope.server.models import ApiErrorDTO
 from tensorscope.server.routers import brainstates as brainstates_router_mod
-from tensorscope.server.routers import dag, events, layout, pipeline, processing, selection, state, stream, tensors, transforms
+from tensorscope.server.routers import dag, events, layout, pipeline, processing, selection, state, stream, tensors, transforms, viewport
 from tensorscope.server.session import SESSION_COOKIE_NAME, SessionManager
 from tensorscope.server.state import ServerState, create_server_state
 
@@ -72,6 +72,7 @@ def create_app(
     app.include_router(state.router, prefix="/api/v1")
     app.include_router(tensors.router, prefix="/api/v1")
     app.include_router(selection.router, prefix="/api/v1")
+    app.include_router(viewport.router, prefix="/api/v1")
     app.include_router(layout.router, prefix="/api/v1")
     app.include_router(events.router, prefix="/api/v1")
     app.include_router(processing.router, prefix="/api/v1")

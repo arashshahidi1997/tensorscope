@@ -13,7 +13,7 @@ from typing import Any
 import xarray as xr
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["TensorNode", "TensorRegistry", "SelectionState", "TensorScopeState"]
+__all__ = ["TensorNode", "TensorRegistry", "SelectionState", "Viewport", "TensorScopeState"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +121,24 @@ class SelectionState(BaseModel):
                 setattr(self, key, value)
 
 
+class Viewport(BaseModel):
+    """
+    Visible window state — what range is shown, decoupled from where the
+    cursor / playhead is.
+
+    See ``docs/log/issue/issue-arash-20260508-142724-956601.md`` for the
+    selection-vs-viewport distinction. Only ``time_range`` is modelled in
+    v1; spatial / freq viewport slots are deferred until views need them.
+    """
+
+    model_config = ConfigDict(validate_assignment=True)
+
+    time_range: tuple[float, float] | None = Field(
+        default=None,
+        description="Visible time window (t_lo, t_hi) in seconds, or None when unset.",
+    )
+
+
 class TensorScopeState:
     """
     Unified TensorScope state.
@@ -134,6 +152,7 @@ class TensorScopeState:
     def __init__(self) -> None:
         self.tensors = TensorRegistry()
         self.selection = SelectionState()
+        self.viewport = Viewport()
         self.active_tensor: str = ""
 
     def set_active_tensor(self, name: str) -> None:
