@@ -1629,6 +1629,40 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
   font-size: 11px;
 }
 
+/* In-flight slice indicator — shown at the view's slot while a server-side
+   compute is pending (multitaper spectrogram, PSD, etc.). Replaces the
+   silent "empty slot" that made the slot read as broken. */
+.placeholder--computing,
+.placeholder--error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1;
+  height: 100%;
+  font-size: 12px;
+  padding: 12px;
+  text-align: center;
+}
+.placeholder--computing {
+  color: #8b949e;
+}
+.placeholder--error {
+  color: #f85149;
+}
+.placeholder .spinner,
+.placeholder--computing .spinner,
+.placeholder--error .spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(115, 210, 222, 0.25);
+  border-top-color: #73d2de;
+  border-radius: 50%;
+  animation: activity-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
 /* ── Activity log (Pipeline tab) ──────────────────── */
 .activity-log {
   display: flex;

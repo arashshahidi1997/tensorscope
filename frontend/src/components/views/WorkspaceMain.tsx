@@ -404,8 +404,13 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     }
   }
 
-  if (hasSpectrogramLive && spectrogramLiveQuery.data) {
-    viewElements["spectrogram_live"] = (
+  if (hasSpectrogramLive) {
+    // Multitaper compute can be slow on long windows / dense grids
+    // (cogpy.spectral.multitaper.mtm_spectrogram is np.apply_along_axis
+    // over per-channel ghostipy calls — sequential on the numpy path).
+    // Render an explicit "Computing…" placeholder while the slice is in
+    // flight so the slot doesn't read as broken / empty.
+    viewElements["spectrogram_live"] = spectrogramLiveQuery.data ? (
       <SpectrogramComponent
         slice={spectrogramLiveQuery.data}
         selection={selectionDraft}
@@ -414,6 +419,14 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         onTimeWindowChange={setTimeWindow}
         timeWindow={timeWindow}
       />
+    ) : spectrogramLiveQuery.isError ? (
+      <div className="placeholder placeholder--error">
+        spectrogram_live failed: {String(spectrogramLiveQuery.error ?? "unknown")}
+      </div>
+    ) : (
+      <div className="placeholder placeholder--computing">
+        <span className="spinner" aria-hidden="true" /> Computing multitaper spectrogram…
+      </div>
     );
   }
 
@@ -427,37 +440,54 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     );
   }
 
-  if (hasPSDLive && psdLiveQuery.data) {
-    const decoded = decodeArrowSlice(psdLiveQuery.data);
-    const heatmapData = extractPSDHeatmap(decoded);
-    const avgData = extractPSDAverage(decoded);
+  if (hasPSDLive) {
+    if (psdLiveQuery.data) {
+      const decoded = decodeArrowSlice(psdLiveQuery.data);
+      const heatmapData = extractPSDHeatmap(decoded);
+      const avgData = extractPSDAverage(decoded);
 
-    viewElements["psd_heatmap"] = (
-      <PSDHeatmapView
-        data={heatmapData}
-        selectedFreq={selectionDraft.freq}
-        onSelectFreq={handleSelectFreq}
-        freqLogScale={freqLogScale}
-      />
-    );
-    viewElements["psd_curve"] = (
-      <PSDCurveView
-        data={avgData}
-        selectedFreq={selectionDraft.freq}
-        onSelectFreq={handleSelectFreq}
-        freqLogScale={freqLogScale}
-      />
-    );
-    viewElements["psd_spatial"] = (
-      <PSDSpatialView
-        decoded={decoded}
-        selectedFreq={selectionDraft.freq}
-        onSelectFreq={handleSelectFreq}
-        onSelectCell={(ap, ml) =>
-          onCommitSelection({ ...selectionDraft, ap, ml, channel: null })
-        }
-      />
-    );
+      viewElements["psd_heatmap"] = (
+        <PSDHeatmapView
+          data={heatmapData}
+          selectedFreq={selectionDraft.freq}
+          onSelectFreq={handleSelectFreq}
+          freqLogScale={freqLogScale}
+        />
+      );
+      viewElements["psd_curve"] = (
+        <PSDCurveView
+          data={avgData}
+          selectedFreq={selectionDraft.freq}
+          onSelectFreq={handleSelectFreq}
+          freqLogScale={freqLogScale}
+        />
+      );
+      viewElements["psd_spatial"] = (
+        <PSDSpatialView
+          decoded={decoded}
+          selectedFreq={selectionDraft.freq}
+          onSelectFreq={handleSelectFreq}
+          onSelectCell={(ap, ml) =>
+            onCommitSelection({ ...selectionDraft, ap, ml, channel: null })
+          }
+        />
+      );
+    } else {
+      // Loading / error placeholders for the three PSD-live subviews so
+      // each slot signals work-in-flight rather than rendering empty.
+      const placeholder = psdLiveQuery.isError ? (
+        <div className="placeholder placeholder--error">
+          psd_live failed: {String(psdLiveQuery.error ?? "unknown")}
+        </div>
+      ) : (
+        <div className="placeholder placeholder--computing">
+          <span className="spinner" aria-hidden="true" /> Computing PSD…
+        </div>
+      );
+      viewElements["psd_heatmap"] = placeholder;
+      viewElements["psd_curve"] = placeholder;
+      viewElements["psd_spatial"] = placeholder;
+    }
   }
 
   if (firstEventStream && hasSpatial) {

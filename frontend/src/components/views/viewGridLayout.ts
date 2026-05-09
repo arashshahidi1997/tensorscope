@@ -37,7 +37,13 @@ export const DEFAULT_SLOT_LAYOUT: ViewSlotLayout = {
       id: "spectrogram",
       label: "Spectrogram",
       slots: [
+        // Either the precomputed `spectrogram` (4-D tensors w/ a freq dim)
+        // OR the live multitaper `spectrogram_live` (3-D LFP, computed
+        // server-side via ghostipy + np.apply_along_axis). Both occupy
+        // the same row-left slot — they're mutually exclusive at the
+        // tensor level so only one is populated per render.
         { viewId: "spectrogram", region: "left", widthFraction: 0.75 },
+        { viewId: "spectrogram_live", region: "left", widthFraction: 0.75 },
         { viewId: "propagation_frame", region: "right", widthFraction: 0.25 },
       ],
       minHeight: 220,
