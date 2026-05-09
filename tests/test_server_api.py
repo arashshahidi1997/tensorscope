@@ -129,7 +129,10 @@ def test_tensor_metadata_and_missing_tensor() -> None:
 
     assert listed.status_code == 200
     assert single.status_code == 200
-    assert single.json()["available_views"] == ["timeseries", "spatial_map", "propagation_frame", "navigator", "psd_live"]
+    assert single.json()["available_views"] == [
+        "timeseries", "spatial_map", "propagation_frame", "navigator",
+        "psd_live", "spectrogram_live",
+    ]
     assert missing.status_code == 404
 
 

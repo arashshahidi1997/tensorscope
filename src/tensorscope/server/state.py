@@ -457,8 +457,18 @@ def apply_slice_request(
     #     dim with (time-segments, freq). Mirrors psd_live's reshape pattern.
     #     Defaults are tuned for sleep-band LFP (Prerau-style baseline pops
     #     spindles) but every knob is overridable via SpectrogramLiveParamsDTO.
+    #
+    #     Note on backend choice: we call ghostipy.mtm_spectrogram directly
+    #     under np.apply_along_axis, instead of cogpy.spectral.multitaper.
+    #     mtm_spectrogram which wraps the same call. cogpy's wrapper checks
+    #     `if dask is None` to choose between numpy and dask paths — since
+    #     dask is installed in our env, it ALWAYS routes through
+    #     `da.apply_along_axis` + dask's threaded scheduler, even for plain
+    #     numpy input. cProfile showed ~99% of a 22 s spec_live request
+    #     stuck in dask scheduler lock-wait. Direct ghostipy + numpy
+    #     apply_along_axis collapses the same workload to ~150 ms.
     if request.view_type == "spectrogram_live" and "time" in sliced.dims:
-        from cogpy.spectral.multitaper import mtm_spectrogram
+        import ghostipy as gsp
 
         from tensorscope.server.models import SpectrogramLiveParamsDTO
 
@@ -501,16 +511,41 @@ def apply_slice_request(
             flat = np.asarray(sliced.values, dtype=np.float64)[None, :]
             orig_shape = ()
 
-        mtspec, freqs, t_centers = mtm_spectrogram(
-            flat,
+        # Probe one fiber to fix the freq / time-segment shapes, then
+        # parallelise the rest across channels via a thread pool.
+        # ghostipy releases the GIL during FFTW + ndarray ops, so a
+        # threaded fan-out gives ~3x speedup on this workload (256
+        # channels) without process-fork overhead. Sequential
+        # np.apply_along_axis is the fallback if the user has only
+        # 1 CPU available. Per-call FFTW threads are pinned to 1 to
+        # avoid oversubscription with the outer pool.
+        import os
+        from concurrent.futures import ThreadPoolExecutor
+
+        mtm_kwargs = dict(
             bandwidth=float(spec_params.bandwidth_hz),
-            axis=-1,
             fs=fs,
             nperseg=nperseg,
             noverlap=noverlap,
             remove_mean=True,
             n_fft_threads=1,
         )
+
+        def _mtspec(x: np.ndarray) -> np.ndarray:
+            S, _f, _t = gsp.mtm_spectrogram(x, **mtm_kwargs)
+            return S
+
+        S0, freqs, t_centers = gsp.mtm_spectrogram(flat[0], **mtm_kwargs)
+        n_workers = max(1, min(8, (os.cpu_count() or 1) - 1))
+        if n_workers <= 1 or flat.shape[0] <= 4:
+            mtspec = np.apply_along_axis(_mtspec, -1, flat)
+        else:
+            # Pre-allocate the output and write per-channel results into it
+            # to avoid the np.stack copy at the end.
+            mtspec = np.empty((flat.shape[0], *S0.shape), dtype=S0.dtype)
+            with ThreadPoolExecutor(max_workers=n_workers) as ex:
+                for i, S in enumerate(ex.map(_mtspec, flat)):
+                    mtspec[i] = S
         # mtspec shape: (n_ch, n_freq, n_t_segments)
         mtspec = np.asarray(mtspec)
         freqs = np.asarray(freqs)
@@ -852,9 +887,45 @@ def downsample_time_axis(data: xr.DataArray, max_points: int, method: Downsample
 
 
 def encode_arrow_payload(data: xr.DataArray) -> str:
-    """Serialize a slice into base64-encoded Arrow IPC bytes."""
-    frame = data.to_series().rename("value").reset_index()
-    table = pa.Table.from_pandas(frame, preserve_index=False)
+    """Serialize a slice into base64-encoded Arrow IPC bytes.
+
+    Long-format columnar encoding: one row per cell, columns =
+    (*data.dims, "value"). Frontend decoders (api/arrow.ts) read
+    columns by name, so column order doesn't matter.
+
+    Construction goes directly through numpy → pyarrow rather than
+    `data.to_series().reset_index()` → `pa.Table.from_pandas()`. The
+    pandas detour was ~4x slower on dense N-D outputs (e.g. a 4-D
+    spectrogram_live slice) because `to_series()` on a MultiIndex
+    materialises the whole index then `from_pandas` re-flattens it.
+    """
+    shape = data.shape
+    arrays: list[pa.Array] = []
+    fields: list[pa.Field] = []
+
+    if data.ndim == 0:
+        # Degenerate scalar — encode as a single-row table.
+        arrays.append(pa.array(np.atleast_1d(data.values).ravel()))
+        fields.append(pa.field("value", arrays[-1].type))
+    else:
+        # Per-axis index grids (ij ordering matches numpy ravel order).
+        idx = np.meshgrid(
+            *[np.arange(s, dtype=np.int64) for s in shape],
+            indexing="ij",
+        )
+        for dim, ax_idx in zip(data.dims, idx):
+            coord_vals = (
+                np.asarray(data.coords[dim].values)
+                if dim in data.coords
+                else np.arange(data.sizes[dim])
+            )
+            col = coord_vals[ax_idx.ravel()]
+            arrays.append(pa.array(col))
+            fields.append(pa.field(str(dim), arrays[-1].type))
+        arrays.append(pa.array(np.asarray(data.values).ravel()))
+        fields.append(pa.field("value", arrays[-1].type))
+
+    table = pa.Table.from_arrays(arrays, schema=pa.schema(fields))
     sink = BytesIO()
     with pa_ipc.new_stream(sink, table.schema) as writer:
         writer.write_table(table)
