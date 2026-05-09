@@ -215,10 +215,12 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   // Spectrogram live — multitaper spectrogram on the visible window. Server
   // defaults are sleep-band tuned (Prerau-style baseline subtraction); the
   // frontend doesn't currently expose a knob panel for these, but the
-  // request shape forwards any params on the wire.
+  // request shape forwards any params on the wire. We pass `safeWindow`
+  // (already clamped against the tensor's time coord) so the heatmap's
+  // x-axis tracks the timeseries / navigator visible range.
   const spectrogramLiveQuery = useSliceQuery(
     selectedTensor,
-    hasSpectrogramLive ? makeSpectrogramLiveRequest(selectionDraft, safeWindow, timeCoord) : null,
+    hasSpectrogramLive ? makeSpectrogramLiveRequest(selectionDraft, safeWindow) : null,
   );
   const navigatorSliceQuery = useSliceQuery(
     selectedTensor,

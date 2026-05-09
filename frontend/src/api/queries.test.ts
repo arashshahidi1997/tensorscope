@@ -121,20 +121,28 @@ describe("makePSDLiveRequest", () => {
 });
 
 describe("makeSpectrogramLiveRequest", () => {
-  it("uses the visible timeWindow directly (no cursor-centring)", () => {
-    const req = makeSpectrogramLiveRequest(SEL, [5, 25], TIME_COORD);
+  it("uses the passed-in timeWindow directly (no cursor-centring)", () => {
+    // Critical contract: the spectrogram heatmap's x-axis must track the
+    // visible viewport, not collapse to a 1s window around the cursor.
+    // Centred-on-cursor (psd_live's shape) gives 1 time bin and renders
+    // blank. Regression guard for the live test that surfaced this:
+    // set_viewport(t_lo=200, t_hi=240) → time_range MUST be [200, 240].
+    const req = makeSpectrogramLiveRequest({ ...SEL, time: 215 }, [200, 240]);
     expect(req.view_type).toBe("spectrogram_live");
-    expect(req.time_range).toEqual([5, 25]);
-    expect(req.selection).toEqual(SEL);
+    expect(req.time_range).toEqual([200, 240]);
+    expect(req.selection.time).toBe(215);
   });
 
-  it("clamps the window against the tensor bounds", () => {
-    const req = makeSpectrogramLiveRequest(SEL, [-5, 200], TIME_COORD);
-    expect(req.time_range).toEqual([0, 50]);
+  it("passes the timeWindow through verbatim — caller is responsible for clamping", () => {
+    // Mirrors makeDefaultSliceRequest('timeseries', …) — the helper does not
+    // clamp internally because WorkspaceMain already produces `safeWindow`
+    // via clampWindow() at the call site. Keeps the helper trivially pure.
+    const req = makeSpectrogramLiveRequest(SEL, [-5, 200]);
+    expect(req.time_range).toEqual([-5, 200]);
   });
 
   it("forwards spectrogram_live_params to the request", () => {
-    const req = makeSpectrogramLiveRequest(SEL, [0, 10], TIME_COORD, {
+    const req = makeSpectrogramLiveRequest(SEL, [0, 10], {
       bandwidth_hz: 4,
       fmin_hz: 5,
       fmax_hz: 30,
@@ -149,13 +157,13 @@ describe("makeSpectrogramLiveRequest", () => {
   });
 
   it("does not set max_points (server caps segment count via nperseg/noverlap)", () => {
-    const req = makeSpectrogramLiveRequest(SEL, [0, 10], TIME_COORD);
+    const req = makeSpectrogramLiveRequest(SEL, [0, 10]);
     expect(req.max_points).toBeUndefined();
     expect(req.downsample).toBeUndefined();
   });
 
   it("omits spectrogram_live_params when none supplied (server defaults apply)", () => {
-    const req = makeSpectrogramLiveRequest(SEL, [0, 10], TIME_COORD);
+    const req = makeSpectrogramLiveRequest(SEL, [0, 10]);
     expect(req.spectrogram_live_params).toBeUndefined();
   });
 });

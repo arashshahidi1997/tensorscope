@@ -266,21 +266,28 @@ export function makePSDLiveRequest(
 /**
  * Spectrogram live request — multitaper spectrogram on the visible window.
  *
- * Unlike `makePSDLiveRequest` (which centres on the cursor), this builder
- * uses the full visible `timeWindow` so the spectrogram heatmap matches
- * the timeseries x-axis. Server caps the segment count via `nperseg_s` /
- * `noverlap_pct`, so no `max_points` is needed here.
+ * Mirrors `makeDefaultSliceRequest("timeseries", …)`'s contract exactly:
+ * the caller passes an already-clamped `timeWindow` (typically the store's
+ * `timeWindow` after `clampWindow` against the tensor's `time` coord, i.e.
+ * `safeWindow` in WorkspaceMain). The full visible range is what the
+ * spectrogram heatmap needs to show frequency-vs-time evolution; centering
+ * on the cursor (psd_live's pattern) collapses the time axis to ~1 segment
+ * and produces a blank-looking render.
+ *
+ * No `max_points` is set — the server bounds segment count via the
+ * mtm_spectrogram nperseg/noverlap pair.
+ *
+ * See docs/log/issue/issue-arash-20260508-142724-956601.md.
  */
 export function makeSpectrogramLiveRequest(
   selection: SelectionDTO,
   timeWindow: [number, number],
-  timeCoord: CoordSummary | undefined,
   params?: TensorSliceRequestDTO["spectrogram_live_params"],
 ): TensorSliceRequestDTO {
   return {
     view_type: "spectrogram_live",
     selection,
-    time_range: clampWindow(timeWindow, timeCoord),
+    time_range: timeWindow,
     spectrogram_live_params: params,
   };
 }
