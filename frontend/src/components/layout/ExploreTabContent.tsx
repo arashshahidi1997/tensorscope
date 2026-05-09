@@ -5,6 +5,7 @@
  *   - ProcessingPanel (transform params) — top, expanded by default
  *   - SelectionPanel (time, spatial, freq controls) — bottom, collapsed by default
  */
+import { useMemo } from "react";
 import { useBrainstateMetaQuery, useProcessingQuery, useSetProcessing, useTensorQuery } from "../../api/queries";
 import type { SelectionDTO } from "../../api/types";
 import { useAppStore } from "../../store/appStore";
@@ -20,7 +21,21 @@ type ExploreTabContentProps = {
 
 export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps) {
   const selectionState = useSelectionStore();
-  const selectionDraft = toSelectionDTO(selectionState);
+  // Memoise on primitives — without this the parent ships a fresh DTO on
+  // every store mutation (hover events, SSE keep-alives, etc.), which
+  // forces the SelectionPanel to keep re-syncing its draft from the prop
+  // and visually wipes any in-progress slider drag. Mirrors the same
+  // pattern in WorkspaceMain.
+  const selectionDraft = useMemo<SelectionDTO>(
+    () => toSelectionDTO(selectionState),
+    [
+      selectionState.timeCursor,
+      selectionState.freq.freq,
+      selectionState.spatial.ap,
+      selectionState.spatial.ml,
+      selectionState.spatial.channel,
+    ],
+  );
 
   const processingQuery = useProcessingQuery();
   const setProcessingMutation = useSetProcessing();
@@ -49,17 +64,20 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
   // iEEG run). AP/ML use the tensor's grid shape; freq stays the
   // hardcoded 0..250 unless we add a freq coord to the source LFP later.
   const tensorQuery = useTensorQuery(selectedTensor);
-  const timeCoord = tensorQuery.data?.coords.find((c) => c.name === "time");
-  const tensorDims = tensorQuery.data?.dims ?? [];
-  const tensorShape = tensorQuery.data?.shape ?? [];
-  const apIdx = tensorDims.indexOf("AP");
-  const mlIdx = tensorDims.indexOf("ML");
-  const selectionBounds: SelectionPanelBounds = {
-    timeMin: typeof timeCoord?.min === "number" ? timeCoord.min : undefined,
-    timeMax: typeof timeCoord?.max === "number" ? timeCoord.max : undefined,
-    apMax: apIdx >= 0 ? Math.max(0, tensorShape[apIdx] - 1) : undefined,
-    mlMax: mlIdx >= 0 ? Math.max(0, tensorShape[mlIdx] - 1) : undefined,
-  };
+  const tensorMeta = tensorQuery.data;
+  const selectionBounds = useMemo<SelectionPanelBounds>(() => {
+    const timeCoord = tensorMeta?.coords.find((c) => c.name === "time");
+    const dims = tensorMeta?.dims ?? [];
+    const shape = tensorMeta?.shape ?? [];
+    const apIdx = dims.indexOf("AP");
+    const mlIdx = dims.indexOf("ML");
+    return {
+      timeMin: typeof timeCoord?.min === "number" ? timeCoord.min : undefined,
+      timeMax: typeof timeCoord?.max === "number" ? timeCoord.max : undefined,
+      apMax: apIdx >= 0 ? Math.max(0, shape[apIdx] - 1) : undefined,
+      mlMax: mlIdx >= 0 ? Math.max(0, shape[mlIdx] - 1) : undefined,
+    };
+  }, [tensorMeta]);
 
   return (
     <>

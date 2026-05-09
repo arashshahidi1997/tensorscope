@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { SelectionDTO } from "../../api/types";
 
 /**
@@ -55,18 +55,29 @@ export function SelectionPanel({
 }: Props) {
   const [draft, setDraft] = useState<SelectionDTO>(selection);
 
-  // Re-sync local draft when external selection identity changes — e.g.
-  // after Apply (mutation onSuccess→initFromDTO), SSE selection_changed,
-  // or an EventTable jump. Object identity is the right gate: if the
-  // store/parent produced a fresh DTO, the upstream selection truly
-  // changed; if not, the user is mid-drag and we keep the local draft.
-  const prevSelectionRef = useRef<SelectionDTO | null>(null);
+  // Re-sync local draft when the external selection's *values* change —
+  // e.g. after Apply (mutation onSuccess→initFromDTO), SSE
+  // selection_changed, or an EventTable jump. Critically, NOT on every
+  // parent render: ExploreTabContent recomputes selectionDraft via
+  // toSelectionDTO(selectionState) and many unrelated store mutations
+  // (hover events, SSE keep-alives, brainstate query refetches) cause
+  // it to ship a fresh DTO with identical values. An identity-based
+  // gate would clobber the user's in-progress drag every parent render;
+  // value-based comparison only fires on real external changes.
   useEffect(() => {
-    if (prevSelectionRef.current !== selection) {
-      prevSelectionRef.current = selection;
-      setDraft(selection);
-    }
-  }, [selection]);
+    setDraft((prev) => {
+      if (
+        prev.time === selection.time &&
+        prev.freq === selection.freq &&
+        prev.ap === selection.ap &&
+        prev.ml === selection.ml &&
+        prev.channel === selection.channel
+      ) {
+        return prev;
+      }
+      return selection;
+    });
+  }, [selection.time, selection.freq, selection.ap, selection.ml, selection.channel]);
 
   const timeMin = bounds?.timeMin ?? 0;
   const timeMax = bounds?.timeMax ?? Math.max(10, draft.time + 1);
