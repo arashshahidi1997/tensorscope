@@ -446,12 +446,35 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       const heatmapData = extractPSDHeatmap(decoded);
       const avgData = extractPSDAverage(decoded);
 
+      // Map selection.ap/ml indices → coord values so PSDHeatmapView can
+      // mark the column corresponding to the spatial cursor (channel
+      // labels in the heatmap payload are `AP{val}_ML{val}` from the
+      // tensor's coord arrays). Without this the heatmap was a static
+      // overview that ignored AP/ML changes.
+      const apCoordVals = (tensorQuery.data?.coords.find((c) => c.name === "AP")?.values ?? null) as number[] | null;
+      const mlCoordVals = (tensorQuery.data?.coords.find((c) => c.name === "ML")?.values ?? null) as number[] | null;
+      const selAPVal = apCoordVals?.[selectionDraft.ap];
+      const selMLVal = mlCoordVals?.[selectionDraft.ml];
+      const indexFromCoord = (coords: number[] | null, target: number): number | null => {
+        if (!coords) return null;
+        for (let i = 0; i < coords.length; i++) if (coords[i] === target) return i;
+        return null;
+      };
+
       viewElements["psd_heatmap"] = (
         <PSDHeatmapView
           data={heatmapData}
           selectedFreq={selectionDraft.freq}
           onSelectFreq={handleSelectFreq}
           freqLogScale={freqLogScale}
+          selectedAPVal={typeof selAPVal === "number" ? selAPVal : undefined}
+          selectedMLVal={typeof selMLVal === "number" ? selMLVal : undefined}
+          onSelectChannel={(apVal, mlVal) => {
+            const apIdx = indexFromCoord(apCoordVals, apVal);
+            const mlIdx = indexFromCoord(mlCoordVals, mlVal);
+            if (apIdx == null || mlIdx == null) return;
+            onCommitSelection({ ...selectionDraft, ap: apIdx, ml: mlIdx, channel: null });
+          }}
         />
       );
       viewElements["psd_curve"] = (

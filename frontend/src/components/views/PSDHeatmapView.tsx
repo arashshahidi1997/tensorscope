@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import type { PSDHeatmapData } from "../../api/arrow";
 import { useHeatmapGestures } from "../../hooks/useHeatmapGestures";
 import { useAppStore } from "../../store/appStore";
@@ -9,7 +9,28 @@ type PSDHeatmapProps = {
   selectedFreq: number;
   onSelectFreq: (freq: number) => void;
   freqLogScale?: boolean;
+  /**
+   * Selected AP/ML *coord values* (not indices) — used to draw a vertical
+   * cursor at the corresponding channel column. Pass undefined to suppress
+   * the cursor (e.g. for non-spatial source tensors).
+   */
+  selectedAPVal?: number;
+  selectedMLVal?: number;
+  /**
+   * Click-to-select on a column commits the (ap_val, ml_val) of that
+   * channel back upstream. Channel labels parsed from data.channelLabels
+   * (`AP{ap}_ML{ml}`) — values are the original tensor coords.
+   */
+  onSelectChannel?: (apVal: number, mlVal: number) => void;
 };
+
+const CHANNEL_LABEL_RE = /^AP(-?\d+(?:\.\d+)?)_ML(-?\d+(?:\.\d+)?)$/;
+
+function parseChannelLabel(label: string): { ap: number; ml: number } | null {
+  const m = CHANNEL_LABEL_RE.exec(label);
+  if (!m) return null;
+  return { ap: Number.parseFloat(m[1]), ml: Number.parseFloat(m[2]) };
+}
 
 /** Inferno-like colormap: black -> purple -> orange -> yellow */
 function infernoColor(t: number): [number, number, number] {
@@ -20,7 +41,15 @@ function infernoColor(t: number): [number, number, number] {
   return [r, g, b];
 }
 
-export function PSDHeatmapView({ data, selectedFreq, onSelectFreq, freqLogScale = false }: PSDHeatmapProps) {
+export function PSDHeatmapView({
+  data,
+  selectedFreq,
+  onSelectFreq,
+  freqLogScale = false,
+  selectedAPVal,
+  selectedMLVal,
+  onSelectChannel,
+}: PSDHeatmapProps) {
   const toggleFreqLogScale = useAppStore((s) => s.toggleFreqLogScale);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -28,18 +57,46 @@ export function PSDHeatmapView({ data, selectedFreq, onSelectFreq, freqLogScale 
   const dataRef = useRef(data);
   dataRef.current = data;
   const onSelectFreqRef = useRef(onSelectFreq);
+  const onSelectChannelRef = useRef(onSelectChannel);
   useEffect(() => { onSelectFreqRef.current = onSelectFreq; });
+  useEffect(() => { onSelectChannelRef.current = onSelectChannel; });
 
   // Data bounds
   const nChannels = data.channelLabels.length;
   const fMin = data.freqs.length > 0 ? data.freqs[0] : 0;
   const fMax = data.freqs.length > 0 ? data.freqs[data.freqs.length - 1] : 1;
 
+  // Pre-parse channel labels into (ap, ml) coord values for cursor lookup
+  // and click-to-select. Cached on data identity since this is called on
+  // every render in the gesture handler if not memoised.
+  const parsedCoords = useMemo(
+    () => data.channelLabels.map(parseChannelLabel),
+    [data.channelLabels],
+  );
+
+  // Index of the column corresponding to the current AP/ML selection. -1
+  // when no spatial selection or no match.
+  const selectedColumn = useMemo(() => {
+    if (selectedAPVal == null || selectedMLVal == null) return -1;
+    return parsedCoords.findIndex(
+      (p) => p != null && p.ap === selectedAPVal && p.ml === selectedMLVal,
+    );
+  }, [parsedCoords, selectedAPVal, selectedMLVal]);
+
   // Gesture hook — X = channels (discrete), Y = freq
   const { viewport, activeTool, wheelZoom, setActiveTool, setWheelZoom, resetViewport } = useHeatmapGestures({
     canvasRef,
     xRange: [0, Math.max(0, nChannels - 1)],
     yRange: [fMin, fMax],
+    onSelectX: (xRaw) => {
+      // Snap to the nearest column index, then forward the (ap, ml) coords
+      // upstream so the rest of the workspace's selection updates.
+      const ci = Math.max(0, Math.min(nChannels - 1, Math.round(xRaw)));
+      const coord = parsedCoords[ci];
+      if (coord && Number.isFinite(coord.ap) && Number.isFinite(coord.ml)) {
+        onSelectChannelRef.current?.(coord.ap, coord.ml);
+      }
+    },
     onSelectY: (f) => {
       // The hook operates in linear data-space; for log scale we need to
       // convert back from linear viewport coords. But since the hook gives us
@@ -131,7 +188,7 @@ export function PSDHeatmapView({ data, selectedFreq, onSelectFreq, freqLogScale 
       }
     }
 
-    // Frequency cursor line
+    // Frequency cursor line (horizontal)
     if (Number.isFinite(selectedFreq) && nF >= 2 && selectedFreq >= vpFLo && selectedFreq <= vpFHi) {
       const y = freqToYFrac(selectedFreq) * h;
       ctx.strokeStyle = "rgba(115, 210, 222, 0.8)";
@@ -141,7 +198,19 @@ export function PSDHeatmapView({ data, selectedFreq, onSelectFreq, freqLogScale 
       ctx.lineTo(w, y);
       ctx.stroke();
     }
-  }, [selectedFreq, freqLogScale, viewport]);
+
+    // Selected-channel cursor line (vertical) — locates the AP/ML cursor
+    // on the heatmap so AP/ML changes have a visible effect here too.
+    if (selectedColumn >= 0 && selectedColumn >= vpXLo && selectedColumn <= vpXHi) {
+      const x = ((selectedColumn - vpXLo) / vpCRange) * w + (w / vpCRange) * 0.5;
+      ctx.strokeStyle = "rgba(255, 220, 100, 0.95)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, h);
+      ctx.stroke();
+    }
+  }, [selectedFreq, freqLogScale, viewport, selectedColumn]);
 
   // Resize handling
   useLayoutEffect(() => {
@@ -169,10 +238,10 @@ export function PSDHeatmapView({ data, selectedFreq, onSelectFreq, freqLogScale 
     return () => ro.disconnect();
   }, [draw]);
 
-  // Redraw on data, freq, or viewport change
+  // Redraw on data, freq cursor, channel cursor, or viewport change
   useEffect(() => {
     draw();
-  }, [data, selectedFreq, draw]);
+  }, [data, selectedFreq, selectedColumn, draw]);
 
   // Rules of Hooks: all hooks above, conditional return below
   if (data.freqs.length === 0) return null;

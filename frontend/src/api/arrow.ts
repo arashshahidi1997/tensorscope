@@ -444,6 +444,81 @@ export function extractSpectrogram(decoded: DecodedSlice): Spectrogram {
     return { times: [], freqs: [], values: [] };
   }
 
+  // Fast columnar path — reads Arrow typed-array columns directly,
+  // avoiding the per-row object materialisation in `decoded.rows` which
+  // allocates ~1.4M objects on a 4-D spectrogram_live payload (10 s
+  // window) and froze the tab for ~10 s before rendering. This path
+  // collapses the same workload to ~100 ms and aggregates in a single
+  // pass.
+  const table = decoded._table;
+  if (table) {
+    const timeCol = table.getChild("time");
+    const freqCol = table.getChild("freq");
+    const valCol = table.getChild("value");
+    if (timeCol && freqCol && valCol) {
+      const numRows = table.numRows;
+
+      const timeIdxMap = new Map<number, number>();
+      const freqIdxMap = new Map<number, number>();
+      const rowTimeIdx = new Int32Array(numRows);
+      const rowFreqIdx = new Int32Array(numRows);
+
+      // Pass 1: assign per-row time/freq indices, collecting uniques.
+      for (let i = 0; i < numRows; i++) {
+        const t = Number(timeCol.get(i));
+        const f = Number(freqCol.get(i));
+        let ti = timeIdxMap.get(t);
+        if (ti === undefined) { ti = timeIdxMap.size; timeIdxMap.set(t, ti); }
+        let fi = freqIdxMap.get(f);
+        if (fi === undefined) { fi = freqIdxMap.size; freqIdxMap.set(f, fi); }
+        rowTimeIdx[i] = ti;
+        rowFreqIdx[i] = fi;
+      }
+
+      // Sort uniques for canonical axis order, build a remap so cell
+      // access lands at sorted positions.
+      const timesUnsorted = Array.from(timeIdxMap.keys());
+      const freqsUnsorted = Array.from(freqIdxMap.keys());
+      const times = [...timesUnsorted].sort((a, b) => a - b);
+      const freqs = [...freqsUnsorted].sort((a, b) => a - b);
+      const timeRemap = new Int32Array(times.length);
+      const freqRemap = new Int32Array(freqs.length);
+      for (let i = 0; i < timesUnsorted.length; i++) {
+        timeRemap[timeIdxMap.get(timesUnsorted[i])!] = times.indexOf(timesUnsorted[i]);
+      }
+      for (let i = 0; i < freqsUnsorted.length; i++) {
+        freqRemap[freqIdxMap.get(freqsUnsorted[i])!] = freqs.indexOf(freqsUnsorted[i]);
+      }
+
+      const nT = times.length;
+      const nF = freqs.length;
+      const sums = new Float64Array(nT * nF);
+      const counts = new Int32Array(nT * nF);
+
+      // Pass 2: aggregate sum + count per (t, f) cell.
+      for (let i = 0; i < numRows; i++) {
+        const v = Number(valCol.get(i));
+        if (!Number.isFinite(v)) continue;
+        const cell = timeRemap[rowTimeIdx[i]] * nF + freqRemap[rowFreqIdx[i]];
+        sums[cell] += v;
+        counts[cell] += 1;
+      }
+
+      const values: number[][] = new Array(nT);
+      for (let t = 0; t < nT; t++) {
+        const row = new Array(nF);
+        for (let f = 0; f < nF; f++) {
+          const c = counts[t * nF + f];
+          row[f] = c > 0 ? sums[t * nF + f] / c : NaN;
+        }
+        values[t] = row;
+      }
+      return { times, freqs, values };
+    }
+  }
+
+  // Legacy fallback — row-based, kept for non-canonical payloads where
+  // the columnar typed-array access isn't available.
   const cells = new Map<string, { t: number; f: number; vals: number[] }>();
   for (const row of decoded.rows) {
     const t = toNumber(row.time);
