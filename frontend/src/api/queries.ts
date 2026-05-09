@@ -232,9 +232,15 @@ export function makeNavigatorRequest(
 ): TensorSliceRequestDTO {
   const t0 = typeof timeCoord?.min === "number" ? timeCoord.min : 0;
   const t1 = typeof timeCoord?.max === "number" ? timeCoord.max : selection.time + 10;
+  // Navigator shows the FULL session and never reads selection.time on the
+  // server side. Pin selection to a constant so the React Query key stays
+  // invariant under cursor moves — otherwise every "next event" click
+  // re-down-samples 8M samples × 256 ch (5+ s on a long iEEG session).
+  // The fetch happens ONCE per (tensor, time-bounds) pair and is reused
+  // for the rest of the session.
   return {
     view_type: "navigator",
-    selection,
+    selection: { time: 0, freq: 0, ap: 0, ml: 0, channel: null },
     time_range: [t0, t1],
     max_points: 800,
     downsample: "minmax",

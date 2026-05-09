@@ -55,13 +55,18 @@ function App() {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
-  // Selection mutation — the single server round-trip for navigation commits
+  // Selection mutation — the single server round-trip for navigation commits.
+  // We do NOT invalidate ["slice"] here: every slice request carries
+  // `selection` in its body, so changing the cursor naturally changes
+  // each query's key and TanStack auto-fetches the new key. Adding an
+  // explicit invalidate forces a *duplicate* fetch of the just-arrived
+  // data — and refetches navigator (full-session) every click, which on
+  // a long iEEG session is the dominant 5+ s lag the user reported.
   const selectionMutation = useMutation({
     mutationFn: (payload: SelectionDTO) => api.updateSelection(payload),
     onSuccess: (selection) => {
       initFromDTO(selection);
       queryClient.invalidateQueries({ queryKey: ["state"] });
-      queryClient.invalidateQueries({ queryKey: ["slice"] });
     },
   });
 

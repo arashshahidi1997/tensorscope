@@ -62,19 +62,25 @@ export function handlePairingMessage(raw: string, queryClient: QueryClient): voi
       queryClient.invalidateQueries({ queryKey: ["state"] });
       break;
     case "selection_changed":
+      // No explicit ["slice"] invalidate: every slice request carries
+      // `selection` in its body, so the store update below changes each
+      // query's key and TanStack auto-fetches the new key. An explicit
+      // invalidate causes a duplicate fetch and re-runs the full-session
+      // navigator slice (5+ s on long iEEG) — see the matching note in
+      // App.tsx selectionMutation.onSuccess.
       useSelectionStore.getState().initFromDTO(msg.payload);
-      queryClient.invalidateQueries({ queryKey: ["slice"] });
       break;
     case "viewport_changed": {
       // Reuse selectionStore.timeWindow for now (the v2 viewportStore split
       // is deferred — see issue-arash-20260508-142724-956601.md). Phase 1
       // already wired setTimeWindow → chart.setScale, so this push reaches
-      // the timeseries + spectrogram x-axes for free.
+      // the timeseries + spectrogram x-axes for free. Same reasoning as
+      // selection_changed: setTimeWindow changes safeWindow → slice keys
+      // auto-update; no explicit invalidate needed.
       const range = msg.payload?.time_range;
       if (Array.isArray(range) && range.length === 2 &&
           Number.isFinite(range[0]) && Number.isFinite(range[1])) {
         useSelectionStore.getState().setTimeWindow([range[0], range[1]]);
-        queryClient.invalidateQueries({ queryKey: ["slice"] });
       }
       break;
     }

@@ -95,6 +95,17 @@ describe("makeNavigatorRequest", () => {
     expect(req.time_range![0]).toBe(0);
     expect(req.time_range![1]).toBe(SEL.time + 10);
   });
+
+  it("pins selection to a constant — same key for any cursor position", () => {
+    // Critical perf invariant: navigator never reads selection.time on the
+    // server side, so its query key must be invariant under cursor moves.
+    // Otherwise every "next event" click re-down-samples 8M samples × 256 ch
+    // (~5 s on a long iEEG session) for nothing.
+    const reqA = makeNavigatorRequest({ time: 10, freq: 0, ap: 0, ml: 0, channel: null }, TIME_COORD);
+    const reqB = makeNavigatorRequest({ time: 1500, freq: 60, ap: 7, ml: 12, channel: 42 }, TIME_COORD);
+    expect(reqA.selection).toEqual(reqB.selection);
+    expect(reqA.selection).toEqual({ time: 0, freq: 0, ap: 0, ml: 0, channel: null });
+  });
 });
 
 describe("makePSDLiveRequest", () => {

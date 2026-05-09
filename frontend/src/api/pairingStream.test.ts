@@ -39,7 +39,13 @@ describe("handlePairingMessage", () => {
     expect(spy).toHaveBeenCalledWith({ queryKey: ["state"] });
   });
 
-  it("syncs selection store and invalidates slice on selection_changed", () => {
+  it("syncs selection store on selection_changed without invalidating slice", () => {
+    // The store update changes safeWindow / selection in every slice
+    // request body, which already changes the React Query key — no
+    // explicit invalidate needed. An invalidate would force a duplicate
+    // fetch including the full-session navigator slice (5+ s on long
+    // iEEG). See App.tsx selectionMutation.onSuccess for the matching
+    // reasoning.
     const qc = freshClient();
     const spy = vi.spyOn(qc, "invalidateQueries");
     handlePairingMessage(
@@ -53,7 +59,7 @@ describe("handlePairingMessage", () => {
     expect(useSelectionStore.getState().freq.freq).toBe(12.0);
     expect(useSelectionStore.getState().spatial.ap).toBe(1);
     expect(useSelectionStore.getState().spatial.ml).toBe(2);
-    expect(spy).toHaveBeenCalledWith({ queryKey: ["slice"] });
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it("re-centers timeWindow when selection_changed pushes a far-away cursor", () => {
