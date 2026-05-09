@@ -2,13 +2,26 @@ import type { TensorMetaDTO } from "../../api/types";
 
 type Props = {
   tensor: TensorMetaDTO;
+  /**
+   * Frontend-expanded view ids (the same list the WorkspaceMain rendering
+   * paths key off — `psd_heatmap`/`psd_curve`/`psd_spatial` instead of the
+   * server-internal `psd_live`). Driving the chips from the server's
+   * `tensor.available_views` directly produced a vocabulary mismatch:
+   * clicking the `psd_live` chip pushed a literal "psd_live" into
+   * activeViews, but no rendering check ever read that string, so toggles
+   * silently broke neighbouring views (e.g. spectrogram_live disappearing
+   * after a chip-flip sequence). See
+   * docs/log/issue/issue-arash-20260508-142724-956601.md for the broader
+   * vocabulary-alignment thread.
+   */
+  availableViews: string[];
   activeViews: string[];
   onToggleView: (view: string) => void;
 };
 
-export function TensorOverview({ tensor, activeViews, onToggleView }: Props) {
+export function TensorOverview({ tensor, availableViews, activeViews, onToggleView }: Props) {
   const effectiveActive =
-    activeViews.length === 0 ? tensor.available_views : activeViews;
+    activeViews.length === 0 ? availableViews : activeViews;
 
   return (
     <div className="panel">
@@ -18,7 +31,7 @@ export function TensorOverview({ tensor, activeViews, onToggleView }: Props) {
         <span className="muted">{tensor.dtype}</span>
       </div>
       <div className="pill-row">
-        {tensor.available_views.map((v) => (
+        {availableViews.map((v) => (
           <button
             key={v}
             type="button"

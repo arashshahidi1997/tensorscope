@@ -510,6 +510,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       {tensorQuery.data ? (
         <TensorOverview
           tensor={tensorQuery.data}
+          availableViews={availableViews}
           activeViews={activeViews}
           onToggleView={(v) => toggleView(v, availableViews)}
         />
