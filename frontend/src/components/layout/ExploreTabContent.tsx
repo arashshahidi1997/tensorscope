@@ -5,13 +5,13 @@
  *   - ProcessingPanel (transform params) — top, expanded by default
  *   - SelectionPanel (time, spatial, freq controls) — bottom, collapsed by default
  */
-import { useBrainstateMetaQuery, useProcessingQuery, useSetProcessing } from "../../api/queries";
+import { useBrainstateMetaQuery, useProcessingQuery, useSetProcessing, useTensorQuery } from "../../api/queries";
 import type { SelectionDTO } from "../../api/types";
 import { useAppStore } from "../../store/appStore";
 import { useSelectionStore, toSelectionDTO } from "../../store/selectionStore";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { ProcessingPanel } from "../controls/ProcessingPanel";
-import { SelectionPanel } from "../controls/SelectionPanel";
+import { SelectionPanel, type SelectionPanelBounds } from "../controls/SelectionPanel";
 
 type ExploreTabContentProps = {
   /** Called when the user commits a selection change via the Apply button. */
@@ -20,7 +20,6 @@ type ExploreTabContentProps = {
 
 export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps) {
   const selectionState = useSelectionStore();
-  const { patchFromDTO } = selectionState;
   const selectionDraft = toSelectionDTO(selectionState);
 
   const processingQuery = useProcessingQuery();
@@ -43,6 +42,24 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
     setPsdWindowS,
     toggleFreqLogScale,
   } = useAppStore();
+
+  // Pull bounds for the SelectionPanel sliders from the active tensor's
+  // coord summary so the time slider covers the full session (was hardcoded
+  // 0..10, which clobbered any time>10 if the user touched it on a long
+  // iEEG run). AP/ML use the tensor's grid shape; freq stays the
+  // hardcoded 0..250 unless we add a freq coord to the source LFP later.
+  const tensorQuery = useTensorQuery(selectedTensor);
+  const timeCoord = tensorQuery.data?.coords.find((c) => c.name === "time");
+  const tensorDims = tensorQuery.data?.dims ?? [];
+  const tensorShape = tensorQuery.data?.shape ?? [];
+  const apIdx = tensorDims.indexOf("AP");
+  const mlIdx = tensorDims.indexOf("ML");
+  const selectionBounds: SelectionPanelBounds = {
+    timeMin: typeof timeCoord?.min === "number" ? timeCoord.min : undefined,
+    timeMax: typeof timeCoord?.max === "number" ? timeCoord.max : undefined,
+    apMax: apIdx >= 0 ? Math.max(0, tensorShape[apIdx] - 1) : undefined,
+    mlMax: mlIdx >= 0 ? Math.max(0, tensorShape[mlIdx] - 1) : undefined,
+  };
 
   return (
     <>
@@ -144,8 +161,8 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
       <CollapsibleSection title="Selection" defaultOpen={false}>
         <SelectionPanel
           selection={selectionDraft}
-          onSelectionChange={patchFromDTO}
-          onCommit={() => onCommitSelection(selectionDraft)}
+          bounds={selectionBounds}
+          onCommit={(draft) => onCommitSelection(draft)}
         />
       </CollapsibleSection>
     </>
