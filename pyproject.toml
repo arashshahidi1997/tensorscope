@@ -87,4 +87,10 @@ build-py = "python -m build"
 frontend-install = { cmd = "npm install", cwd = "frontend" }
 frontend-dev = { cmd = "npm run dev", cwd = "frontend" }
 frontend-test = { cmd = "npm run test", cwd = "frontend" }
-frontend-build = { cmd = "npm run build", cwd = "frontend" }
+# Build the frontend, then sync the output into src/tensorscope/static/ so
+# the FastAPI server (which serves from `_find_frontend_dist` — checks
+# `static/` first, then `frontend/dist/`) immediately picks up the new
+# bundle. Without the sync step, a fresh `frontend-build` only updates
+# `frontend/dist/`, but if `src/tensorscope/static/` exists from a prior
+# build it shadows the new dist and the user keeps seeing stale code.
+frontend-build = { cmd = "npm run build && rm -rf ../src/tensorscope/static && cp -r dist ../src/tensorscope/static", cwd = "frontend" }
