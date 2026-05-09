@@ -29,6 +29,7 @@ export function NavRail({ onCommitSelection }: NavRailProps) {
   const queryClient = useQueryClient();
   const { layoutDraft, setLayoutDraft } = useAppStore();
   const selectionState = useSelectionStore();
+  const { patchFromDTO } = selectionState;
   const selectionDraft = toSelectionDTO(selectionState);
 
   const processingQuery = useProcessingQuery();
@@ -48,7 +49,8 @@ export function NavRail({ onCommitSelection }: NavRailProps) {
     <>
       <SelectionPanel
         selection={selectionDraft}
-        onCommit={(draft) => onCommitSelection(draft)}
+        onSelectionChange={patchFromDTO}
+        onCommit={(s) => onCommitSelection(s)}
       />
       <LayoutPanel
         layout={layoutDraft}

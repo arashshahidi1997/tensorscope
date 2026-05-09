@@ -180,7 +180,8 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
         <SelectionPanel
           selection={selectionDraft}
           bounds={selectionBounds}
-          onCommit={(draft) => onCommitSelection(draft)}
+          onSelectionChange={selectionState.patchFromDTO}
+          onCommit={(s) => onCommitSelection(s)}
         />
       </CollapsibleSection>
     </>

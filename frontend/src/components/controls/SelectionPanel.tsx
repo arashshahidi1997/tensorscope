@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { SelectionDTO } from "../../api/types";
 
 /**
- * Bounds for the per-axis sliders. Falls back to the previous hardcoded
- * defaults (`time: 0..10`, `freq: 0..250`, `ap/ml: 0..16`) when omitted —
- * but those are wrong for any real session, so the parent should pass
- * actual tensor coord bounds whenever they're available.
+ * Bounds for the per-axis sliders. Falls back to permissive defaults when
+ * omitted, but the parent should pass actual tensor coord bounds whenever
+ * available so the time slider covers the full session (the previous
+ * hardcoded `time: 0..10` clobbered any t>10 selection on long iEEG runs).
  */
 export type SelectionPanelBounds = {
   timeMin?: number;
@@ -18,69 +18,36 @@ export type SelectionPanelBounds = {
 
 type Props = {
   selection: SelectionDTO;
-  onCommit: (draft: SelectionDTO) => void;
+  /** Drag/scrub callback — fires on every slider input. Wire to a store
+   *  setter (e.g. `patchFromDTO`) so views update live. */
+  onSelectionChange: (patch: Partial<SelectionDTO>) => void;
+  /** Apply button — commits the *current* selection to the server. */
+  onCommit: (selection: SelectionDTO) => void;
   bounds?: SelectionPanelBounds;
-  /**
-   * Optional: forward slider drags to a parent listener (e.g. for live
-   * scrubbing). The panel does NOT call this on its own initiative — by
-   * default slider drags only update the panel's local draft, so the
-   * Apply button is the explicit commit point.
-   */
-  onSelectionChange?: (patch: Partial<SelectionDTO>) => void;
 };
 
 /**
- * SelectionPanel — slider-driven cursor editor with a deferred commit.
+ * SelectionPanel — slider + numeric editor for cursor coordinates.
  *
- * UX contract: dragging sliders mutates a *local draft* only. The Apply
- * button is the single point at which the draft is committed (PUT to
- * /api/v1/selection upstream, which propagates to the store + all linked
- * views via the SSE/mutation flow).
+ * UX contract: drags fire `onSelectionChange` immediately so all linked
+ * views update live. Apply fires `onCommit(selection)` which is the
+ * server-side PUT. Use this whenever the user wants to scrub through
+ * data; the server commit only matters when a paired agent or other
+ * client also needs to see the change.
  *
- * Why local draft (changed 2026-05-09): the previous version pushed every
- * intermediate slider value into the global store via `patchFromDTO`,
- * which made Apply a no-op (the store was already mutated as you
- * dragged). It also meant accidentally touching the time slider — whose
- * range was hardcoded `0..10` — instantly clobbered any valid
- * `time > 10 s` selection on long iEEG sessions. Now the panel re-syncs
- * its draft only when the external `selection` prop's identity changes
- * (e.g. after a successful Apply, an SSE selection_changed, or an event
- * navigation jump).
+ * No local draft: the slider's `value` reads directly from `selection`.
+ * Earlier versions kept a local draft to defer commits but that froze
+ * views during drags, which is the opposite of what users expect on a
+ * raw-data exploration tool.
  */
 export function SelectionPanel({
   selection,
+  onSelectionChange,
   onCommit,
   bounds,
-  onSelectionChange,
 }: Props) {
-  const [draft, setDraft] = useState<SelectionDTO>(selection);
-
-  // Re-sync local draft when the external selection's *values* change —
-  // e.g. after Apply (mutation onSuccess→initFromDTO), SSE
-  // selection_changed, or an EventTable jump. Critically, NOT on every
-  // parent render: ExploreTabContent recomputes selectionDraft via
-  // toSelectionDTO(selectionState) and many unrelated store mutations
-  // (hover events, SSE keep-alives, brainstate query refetches) cause
-  // it to ship a fresh DTO with identical values. An identity-based
-  // gate would clobber the user's in-progress drag every parent render;
-  // value-based comparison only fires on real external changes.
-  useEffect(() => {
-    setDraft((prev) => {
-      if (
-        prev.time === selection.time &&
-        prev.freq === selection.freq &&
-        prev.ap === selection.ap &&
-        prev.ml === selection.ml &&
-        prev.channel === selection.channel
-      ) {
-        return prev;
-      }
-      return selection;
-    });
-  }, [selection.time, selection.freq, selection.ap, selection.ml, selection.channel]);
-
   const timeMin = bounds?.timeMin ?? 0;
-  const timeMax = bounds?.timeMax ?? Math.max(10, draft.time + 1);
+  const timeMax = bounds?.timeMax ?? Math.max(10, selection.time + 1);
   const freqMin = bounds?.freqMin ?? 0;
   const freqMax = bounds?.freqMax ?? 250;
   const apMax = bounds?.apMax ?? 16;
@@ -88,69 +55,55 @@ export function SelectionPanel({
 
   const controls = useMemo(
     () => [
-      { key: "time" as const, label: "t", min: timeMin, max: timeMax, step: 0.01, value: draft.time },
-      { key: "freq" as const, label: "f", min: freqMin, max: freqMax, step: 1, value: draft.freq },
-      { key: "ap" as const, label: "AP", min: 0, max: apMax, step: 1, value: draft.ap },
-      { key: "ml" as const, label: "ML", min: 0, max: mlMax, step: 1, value: draft.ml },
+      { key: "time" as const, label: "t (s)", min: timeMin, max: timeMax, step: 0.01, value: selection.time },
+      { key: "freq" as const, label: "f (Hz)", min: freqMin, max: freqMax, step: 1, value: selection.freq },
+      { key: "ap"   as const, label: "AP",   min: 0, max: apMax, step: 1, value: selection.ap },
+      { key: "ml"   as const, label: "ML",   min: 0, max: mlMax, step: 1, value: selection.ml },
     ],
-    [draft, timeMin, timeMax, freqMin, freqMax, apMax, mlMax],
+    [selection, timeMin, timeMax, freqMin, freqMax, apMax, mlMax],
   );
 
-  const dirty = (
-    draft.time !== selection.time ||
-    draft.freq !== selection.freq ||
-    draft.ap !== selection.ap ||
-    draft.ml !== selection.ml ||
-    draft.channel !== selection.channel
-  );
+  const setAxis = (key: "time" | "freq" | "ap" | "ml", raw: string, isFloat: boolean) => {
+    const next = isFloat ? Number.parseFloat(raw) : Number.parseInt(raw, 10);
+    if (!Number.isFinite(next)) return;
+    onSelectionChange({ [key]: next });
+  };
 
   return (
     <div className="panel">
       <div className="panel-title">Selection</div>
-      {controls.map((ctrl) => (
-        <label className="slider-row" key={ctrl.key}>
-          <span>{ctrl.label}</span>
-          <input
-            type="range"
-            min={ctrl.min}
-            max={ctrl.max}
-            step={ctrl.step}
-            value={ctrl.value}
-            onChange={(e) => {
-              const next = ctrl.step < 1
-                ? Number.parseFloat(e.target.value)
-                : Number.parseInt(e.target.value, 10);
-              setDraft((d) => ({ ...d, [ctrl.key]: next }));
-              onSelectionChange?.({ [ctrl.key]: next });
-            }}
-          />
-          <input
-            type="number"
-            min={ctrl.min}
-            max={ctrl.max}
-            step={ctrl.step}
-            value={ctrl.value}
-            onChange={(e) => {
-              const raw = ctrl.step < 1
-                ? Number.parseFloat(e.target.value)
-                : Number.parseInt(e.target.value, 10);
-              if (!Number.isFinite(raw)) return;
-              setDraft((d) => ({ ...d, [ctrl.key]: raw }));
-              onSelectionChange?.({ [ctrl.key]: raw });
-            }}
-            className="val-input"
-            style={{ width: 76, fontSize: 12 }}
-          />
-        </label>
-      ))}
+      {controls.map((ctrl) => {
+        const isFloat = ctrl.step < 1;
+        return (
+          <label className="slider-row" key={ctrl.key}>
+            <span>{ctrl.label}</span>
+            <input
+              type="range"
+              min={ctrl.min}
+              max={ctrl.max}
+              step={ctrl.step}
+              value={ctrl.value}
+              onChange={(e) => setAxis(ctrl.key, e.target.value, isFloat)}
+            />
+            <input
+              type="number"
+              min={ctrl.min}
+              max={ctrl.max}
+              step={ctrl.step}
+              value={ctrl.value}
+              onChange={(e) => setAxis(ctrl.key, e.target.value, isFloat)}
+              style={{ width: 76, fontSize: 12 }}
+            />
+          </label>
+        );
+      })}
       <button
         className="action-button"
-        onClick={() => onCommit(draft)}
+        onClick={() => onCommit(selection)}
         type="button"
-        disabled={!dirty}
-        title={dirty ? "Commit draft to server (PUT /selection)" : "Nothing to apply"}
+        title="Commit selection to server (PUT /selection)"
       >
-        {dirty ? "Apply" : "Applied"}
+        Apply
       </button>
     </div>
   );
