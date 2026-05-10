@@ -486,7 +486,14 @@ def apply_slice_request(
         # the tapers satisfied the minimum energy concentration criteria"
         # which is confusing during interactive pan / zoom — translate it
         # into a clear "window too narrow" with an actionable hint.
-        nperseg_min = max(64, int(np.ceil(2.0 * fs / spec_params.bandwidth_hz)))
+        # Round-to-nearest (not ceil) because `fs` is derived from time-coord
+        # diffs and routinely lands at e.g. 1249.999_999_998 from float
+        # rounding, which would push nperseg_min up by 1 and reject the
+        # exact-fit boundary case (1 s window at fs=1250 Hz, default
+        # bandwidth=2 → target=1250.000…1, ceil=1251, n_samples=1250 →
+        # spurious rejection).
+        nperseg_min_target = 2.0 * fs / spec_params.bandwidth_hz
+        nperseg_min = max(64, int(round(nperseg_min_target)))
         if n_samples < nperseg_min:
             raise ValueError(
                 f"spectrogram_live: window too narrow ({n_samples} samples at "
