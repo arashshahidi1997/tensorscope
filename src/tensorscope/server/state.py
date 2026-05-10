@@ -483,26 +483,29 @@ def apply_slice_request(
         # Narrow-window guard. ghostipy.mtm requires NW = bandwidth*nperseg/fs
         # to yield enough DPSS tapers above min_lambda=0.95; empirically NW≥2
         # (~3 tapers) is robust. Below that ghostipy raises a cryptic "None of
-        # the tapers satisfied the minimum energy concentration criteria"
-        # which is confusing during interactive pan / zoom — translate it
-        # into a clear "window too narrow" with an actionable hint.
-        # Round-to-nearest (not ceil) because `fs` is derived from time-coord
-        # diffs and routinely lands at e.g. 1249.999_999_998 from float
-        # rounding, which would push nperseg_min up by 1 and reject the
-        # exact-fit boundary case (1 s window at fs=1250 Hz, default
-        # bandwidth=2 → target=1250.000…1, ceil=1251, n_samples=1250 →
-        # spurious rejection).
-        nperseg_min_target = 2.0 * fs / spec_params.bandwidth_hz
-        nperseg_min = max(64, int(round(nperseg_min_target)))
-        if n_samples < nperseg_min:
+        # the tapers satisfied the minimum energy concentration criteria".
+        #
+        # Three cases worth handling differently:
+        # 1. Window so small that we can't run any FFT at all → reject hard.
+        # 2. Window genuinely supports the requested bandwidth → use it.
+        # 3. Window too small for the *requested* bandwidth but fine for a
+        #    higher one → auto-bump bandwidth to the minimum that fits,
+        #    keeping the view alive during interactive zoom. Trade-off:
+        #    coarser frequency resolution. Effective bandwidth is reported
+        #    in the slice attrs so the frontend can surface it later.
+        if n_samples < 64:
             raise ValueError(
                 f"spectrogram_live: window too narrow ({n_samples} samples at "
-                f"fs={fs:.1f} Hz) for bandwidth={spec_params.bandwidth_hz} Hz "
-                f"(need ≥{nperseg_min} samples; widen the window or raise "
-                f"bandwidth_hz)"
+                f"fs={fs:.1f} Hz). Need at least 64 samples for any FFT — "
+                "widen the visible window."
             )
+        bandwidth_min = 2.0 * fs / float(n_samples)
+        bandwidth_eff = max(float(spec_params.bandwidth_hz), bandwidth_min)
         # Auto-shrink nperseg to fit the visible window when the request is
         # larger than the data — keeps the spectrogram responsive during pan.
+        # Round-to-nearest (not ceil) absorbs sub-sample float jitter in `fs`
+        # (computed from time-coord diffs, lands at e.g. 1249.999_999_998).
+        nperseg_min = max(64, int(round(2.0 * fs / bandwidth_eff)))
         nperseg_request = int(round(spec_params.nperseg_s * fs))
         nperseg = max(nperseg_min, min(nperseg_request, n_samples))
         noverlap = int(round(nperseg * spec_params.noverlap_pct / 100.0))
@@ -530,7 +533,7 @@ def apply_slice_request(
         from concurrent.futures import ThreadPoolExecutor
 
         mtm_kwargs = dict(
-            bandwidth=float(spec_params.bandwidth_hz),
+            bandwidth=bandwidth_eff,  # may have been auto-bumped above
             fs=fs,
             nperseg=nperseg,
             noverlap=noverlap,
@@ -599,6 +602,9 @@ def apply_slice_request(
                 "spectrogram_live_nperseg": int(nperseg),
                 "spectrogram_live_noverlap": int(noverlap),
                 "spectrogram_live_fs": float(fs),
+                "spectrogram_live_bandwidth_hz": float(bandwidth_eff),
+                "spectrogram_live_bandwidth_requested_hz": float(spec_params.bandwidth_hz),
+                "spectrogram_live_bandwidth_auto_bumped": bool(bandwidth_eff > spec_params.bandwidth_hz),
                 "spectrogram_live_normalized": bool(spec_params.normalize_per_freq_median),
             },
         )
