@@ -44,6 +44,12 @@ type AppStore = {
   bandPreset: BandPreset;
   /** Active band [lo, hi] when preset === "custom"; ignored otherwise. */
   bandCustom: [number, number];
+  /**
+   * First channel index visible in the timeseries view.
+   * `nVisible` is currently fixed at 32 (perf). See
+   * `docs/design/channel-viewport.md` G2.
+   */
+  tsFirstChannel: number;
   workspaceObjects: WorkspaceObject[];
   setWorkspaceObjects: (objs: WorkspaceObject[]) => void;
   setObjectVisible: (id: string, visible: boolean) => void;
@@ -64,6 +70,13 @@ type AppStore = {
   toggleFreqLogScale: () => void;
   setBandPreset: (preset: BandPreset) => void;
   setBandCustom: (lo: number, hi: number) => void;
+  /**
+   * Scroll the channel viewport. Always clamps to [0, max(0, total - nVisible)].
+   * Total/nVisible are passed in by the view since the store doesn't know
+   * the slice's channel count.
+   */
+  scrollChannels: (delta: number, total: number, nVisible: number) => void;
+  setTsFirstChannel: (idx: number) => void;
 };
 
 export type BandPreset = "off" | "spindle" | "ripple" | "slow" | "custom";
@@ -143,4 +156,12 @@ export const useAppStore = create<AppStore>((set) => ({
   bandCustom: [11, 16],
   setBandPreset: (preset) => set({ bandPreset: preset }),
   setBandCustom: (lo, hi) => set({ bandCustom: [lo, hi] }),
+  tsFirstChannel: 0,
+  setTsFirstChannel: (idx) => set({ tsFirstChannel: Math.max(0, Math.floor(idx)) }),
+  scrollChannels: (delta, total, nVisible) =>
+    set((s) => {
+      const maxStart = Math.max(0, total - nVisible);
+      const next = Math.max(0, Math.min(maxStart, s.tsFirstChannel + delta));
+      return next === s.tsFirstChannel ? s : { tsFirstChannel: next };
+    }),
 }));

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { extractTimeseriesColumnarFast, type ColumnarTimeseries } from "../../api/arrow";
 import { useAppStore, type BandPreset } from "../../store/appStore";
+import { useChannelViewportShortcuts } from "./useChannelViewportShortcuts";
 import type { BrainstateIntervalDTO } from "../../api/types";
 import type { SliceViewProps } from "./viewTypes";
 import { ChartToolbar } from "./ChartToolbar";
@@ -290,14 +291,27 @@ export function TimeseriesSliceView({
 
   const tools = useChartTools(chartRef);
 
-  const { times, series, totalChannels } = useMemo(() => {
+  // Channel viewport (G2). nVisible is fixed at 32 in v0; perf-tune to
+  // raise the cap is v0.1 work. See `docs/design/channel-viewport.md`.
+  const N_VISIBLE = 32;
+  const tsFirstChannel = useAppStore((s) => s.tsFirstChannel);
+  // We don't yet know totalChannels at this point in the hook order — the
+  // shortcut handler uses the slice's series length when it fires.
+  // `totalChannels` is computed below in the memo; rather than thread it
+  // through ref state, the shortcut just trusts the store + computes
+  // the clamp inside `scrollChannels` based on what we know at call time.
+
+  const { times, series, totalChannels, firstChannel } = useMemo(() => {
     // When a band is active we replace the raw signal values with the
     // filtered series values aligned to the raw's per-channel mean offset.
     // The chart structure stays identical so no rebuild is needed when the
     // user toggles the band on/off. NS2-equivalent "filtered view" — full
     // raw + filtered overlay is v0.1 work.
     const raw = v2Data ?? extractTimeseriesColumnarFast(slice);
-    const cap = raw.series.slice(0, 32);
+    const total = raw.series.length;
+    const maxStart = Math.max(0, total - N_VISIBLE);
+    const start = Math.min(maxStart, Math.max(0, tsFirstChannel));
+    const cap = raw.series.slice(start, start + N_VISIBLE);
     if (bandActive && v2BandpassData) {
       // Filter is keyed to the same time-window query, so the channel
       // ordering matches. Substitute values, keep keys/labels.
@@ -317,18 +331,25 @@ export function TimeseriesSliceView({
         for (let i = 0; i < out.length; i++) out[i] = fvals[i] + offset;
         return { ...s, values: out };
       });
-      return { times: new Float64Array(raw.times), series: replaced, totalChannels: raw.series.length };
+      return {
+        times: new Float64Array(raw.times),
+        series: replaced,
+        totalChannels: total,
+        firstChannel: start,
+      };
     }
     return {
       times: new Float64Array(raw.times),
-      // Audit F4 + F16: render a hard cap of 32 traces. extractTimeseriesColumnarFast
-      // returns series in row-major Arrow order (AP×ML ravel for grid tensors), so
-      // the 32 we keep are the spatially-leading channels — surface that to the user.
       series: cap,
-      totalChannels: raw.series.length,
+      totalChannels: total,
+      firstChannel: start,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [v2Data, slice.payload, v2BandpassData, bandActive?.[0], bandActive?.[1]]);
+  }, [v2Data, slice.payload, v2BandpassData, bandActive?.[0], bandActive?.[1], tsFirstChannel]);
+
+  // Register channel-viewport keyboard shortcuts ( [ / ] ) on the page.
+  // Active whenever a timeseries view is mounted (one per workspace).
+  useChannelViewportShortcuts({ totalChannels, nVisible: Math.min(N_VISIBLE, series.length) });
   const channelCapActive = totalChannels > series.length;
 
   const structuralKey = useMemo(
@@ -828,7 +849,13 @@ export function TimeseriesSliceView({
         yMode={tools.yMode}
         onSetYMode={tools.setYMode}
       />
-      <BandPickerInline bandPreset={bandPreset ?? "off"} bandActive={bandActive ?? null} />
+      <BandPickerInline bandPreset={bandPreset ?? "off"} bandActive={bandActive ?? null}>
+        <ChannelViewportInline
+          firstChannel={firstChannel}
+          nVisible={Math.min(N_VISIBLE, series.length)}
+          totalChannels={totalChannels}
+        />
+      </BandPickerInline>
       {fidelityNotices.length > 0 && (
         <div className="ts-fidelity-notice" role="status">
           {fidelityNotices.map((n, i) => (
@@ -865,9 +892,11 @@ export function TimeseriesSliceView({
 function BandPickerInline({
   bandPreset,
   bandActive,
+  children,
 }: {
   bandPreset: BandPreset;
   bandActive: [number, number] | null;
+  children?: ReactNode;
 }) {
   const setBandPreset = useAppStore((s) => s.setBandPreset);
   const setBandCustom = useAppStore((s) => s.setBandCustom);
@@ -915,6 +944,51 @@ function BandPickerInline({
           ({bandActive[0]}–{bandActive[1]} Hz)
         </span>
       )}
+      {children}
     </div>
+  );
+}
+
+/**
+ * Channel viewport scroll controls. Renders inline in the band picker
+ * strip; G2 of the review-workflow spec. See
+ * `docs/design/channel-viewport.md`.
+ */
+function ChannelViewportInline({
+  firstChannel,
+  nVisible,
+  totalChannels,
+}: {
+  firstChannel: number;
+  nVisible: number;
+  totalChannels: number;
+}) {
+  const scrollChannels = useAppStore((s) => s.scrollChannels);
+  if (totalChannels <= nVisible) return null;
+  const step = Math.max(1, Math.floor(nVisible / 4));
+  const last = Math.min(totalChannels - 1, firstChannel + nVisible - 1);
+  return (
+    <span className="ts-ch-viewport" role="group" aria-label="Channel viewport">
+      <span className="ts-ch-label">Ch:</span>
+      <button
+        type="button"
+        className="ts-ch-arrow"
+        title={`Up ${step} channels  ([; Shift+[ for full page)`}
+        onClick={(e) =>
+          scrollChannels(e.shiftKey ? -nVisible : -step, totalChannels, nVisible)
+        }
+      >&#x25B2;</button>
+      <button
+        type="button"
+        className="ts-ch-arrow"
+        title={`Down ${step} channels  (]; Shift+] for full page)`}
+        onClick={(e) =>
+          scrollChannels(e.shiftKey ? nVisible : step, totalChannels, nVisible)
+        }
+      >&#x25BC;</button>
+      <span className="ts-ch-range muted">
+        {firstChannel}–{last} of {totalChannels}
+      </span>
+    </span>
   );
 }

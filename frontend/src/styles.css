@@ -844,6 +844,33 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
   font-family: var(--font-mono, ui-monospace, monospace);
 }
 
+/* Channel viewport (G2) — sits in the same strip as the band picker.
+ * `docs/design/channel-viewport.md`. */
+.ts-ch-viewport {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding-left: 12px;
+  border-left: 1px solid rgba(48,54,61,0.5);
+}
+.ts-ch-label { font-weight: 600; }
+.ts-ch-arrow {
+  background: var(--surface, #161b22);
+  color: var(--text, #e6edf3);
+  border: 1px solid rgba(48,54,61,0.8);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.ts-ch-arrow:hover { background: color-mix(in srgb, var(--accent, #58a6ff) 12%, transparent); }
+.ts-ch-range {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+}
+
 .settings-overlay {
   position: fixed;
   inset: 0;
