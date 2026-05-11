@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import { extractTimeseriesColumnarFast } from "../../api/arrow";
+import { extractTimeseriesColumnarFast, type ColumnarTimeseries } from "../../api/arrow";
+import { useAppStore, type BandPreset } from "../../store/appStore";
 import type { BrainstateIntervalDTO } from "../../api/types";
 import type { SliceViewProps } from "./viewTypes";
 import { ChartToolbar } from "./ChartToolbar";
 import { useChartTools } from "./useChartTools";
 import type { GestureTool, YMode } from "./useChartTools";
 import { makeBrainstateDrawHook } from "./brainstateOverlay";
+import { TimeseriesNavStrip } from "./TimeseriesNavStrip";
 
 const COLORS = ["#d3ff68", "#73d2de", "#ff9770", "#c492ff", "#f4d35e", "#8bd450", "#ff6b9d", "#a8e6cf"];
 
@@ -229,6 +231,10 @@ function measureContainer(el: HTMLDivElement): MeasuredSize | null {
 
 export function TimeseriesSliceView({
   slice,
+  v2Data,
+  v2BandpassData,
+  bandPreset,
+  bandActive,
   selection,
   events = [],
   brainstateIntervals = [],
@@ -236,9 +242,25 @@ export function TimeseriesSliceView({
   onSelectTime,
   onTimeWindowChange,
   timeWindow,
+  dataRange,
 }: SliceViewProps & {
   brainstateIntervals?: BrainstateIntervalDTO[];
   brainstateOverlayEnabled?: boolean;
+  /** Full data extent in seconds; if omitted the nav strip is hidden. */
+  dataRange?: [number, number];
+  /**
+   * Contract-v2 pre-extracted columnar data — when present, replaces the
+   * `slice` decode entirely. See `docs/design/contract-v2.md` §5.
+   */
+  v2Data?: ColumnarTimeseries | null;
+  /**
+   * Filtered-band overlay (G1). When `bandActive` is non-null, the
+   * filtered series renders on top of raw at the same y-offset. See
+   * `docs/design/filtered-band-overlay.md`.
+   */
+  v2BandpassData?: ColumnarTimeseries | null;
+  bandPreset?: BandPreset;
+  bandActive?: [number, number] | null;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<uPlot | null>(null);
@@ -268,13 +290,46 @@ export function TimeseriesSliceView({
 
   const tools = useChartTools(chartRef);
 
-  const { times, series } = useMemo(() => {
-    const raw = extractTimeseriesColumnarFast(slice);
+  const { times, series, totalChannels } = useMemo(() => {
+    // When a band is active we replace the raw signal values with the
+    // filtered series values aligned to the raw's per-channel mean offset.
+    // The chart structure stays identical so no rebuild is needed when the
+    // user toggles the band on/off. NS2-equivalent "filtered view" — full
+    // raw + filtered overlay is v0.1 work.
+    const raw = v2Data ?? extractTimeseriesColumnarFast(slice);
+    const cap = raw.series.slice(0, 32);
+    if (bandActive && v2BandpassData) {
+      // Filter is keyed to the same time-window query, so the channel
+      // ordering matches. Substitute values, keep keys/labels.
+      const filteredByKey = new Map(v2BandpassData.series.map((s) => [s.key, s.values]));
+      const replaced = cap.map((s) => {
+        const fvals = filteredByKey.get(s.key);
+        if (!fvals) return s;
+        // Re-add raw's mean so the filtered trace lands at the same
+        // vertical slot as the unfiltered one (otherwise filtered traces
+        // collapse to zero and stack on top of each other).
+        let sum = 0, n = 0;
+        for (const v of s.values) {
+          if (Number.isFinite(v)) { sum += v; n += 1; }
+        }
+        const offset = n > 0 ? sum / n : 0;
+        const out = fvals.slice();
+        for (let i = 0; i < out.length; i++) out[i] = fvals[i] + offset;
+        return { ...s, values: out };
+      });
+      return { times: new Float64Array(raw.times), series: replaced, totalChannels: raw.series.length };
+    }
     return {
       times: new Float64Array(raw.times),
-      series: raw.series.slice(0, 32),
+      // Audit F4 + F16: render a hard cap of 32 traces. extractTimeseriesColumnarFast
+      // returns series in row-major Arrow order (AP×ML ravel for grid tensors), so
+      // the 32 we keep are the spatially-leading channels — surface that to the user.
+      series: cap,
+      totalChannels: raw.series.length,
     };
-  }, [slice.payload]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [v2Data, slice.payload, v2BandpassData, bandActive?.[0], bandActive?.[1]]);
+  const channelCapActive = totalChannels > series.length;
 
   const structuralKey = useMemo(
     () => series.map((s) => `${s.key}:${s.label}`).join("|"),
@@ -672,7 +727,8 @@ export function TimeseriesSliceView({
     });
     reconcileChartSize();
     chart.redraw();
-  }, [slice.payload]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [v2Data, slice.payload]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -730,6 +786,22 @@ export function TimeseriesSliceView({
 
   if (times.length === 0) return null;
 
+  // Audit F3 / F4 / F21: surface the on-server display transform, the silent
+  // channel cap, and any processing-pipeline failure so the user knows the
+  // on-screen data isn't what they think it is.
+  const displayTransforms = slice.meta?.display_transforms ?? [];
+  const procStatus = slice.meta?.processing;
+  const fidelityNotices: string[] = [];
+  if (channelCapActive) {
+    fidelityNotices.push(`showing ${series.length} of ${totalChannels} channels (row-major order)`);
+  }
+  if (displayTransforms.length > 0) {
+    fidelityNotices.push(`server display: ${displayTransforms.join(", ")} — Y axis is not in native units`);
+  }
+  if (procStatus?.requested && !procStatus.applied) {
+    fidelityNotices.push(`processing failed — rendering raw data: ${procStatus.error ?? "unknown error"}`);
+  }
+
   return (
     <div style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column" }}>
       <ChartToolbar
@@ -756,12 +828,93 @@ export function TimeseriesSliceView({
         yMode={tools.yMode}
         onSetYMode={tools.setYMode}
       />
+      <BandPickerInline bandPreset={bandPreset ?? "off"} bandActive={bandActive ?? null} />
+      {fidelityNotices.length > 0 && (
+        <div className="ts-fidelity-notice" role="status">
+          {fidelityNotices.map((n, i) => (
+            <span key={i} className="ts-fidelity-chip" title={n}>{n}</span>
+          ))}
+        </div>
+      )}
       <div
         ref={containerRef}
         className="uplot-wrap"
         style={{ flex: 1, minHeight: 0 }}
         title={`${series.length} ch \u00B7 ${times.length} samples`}
       />
+      {dataRange && timeWindow && selection && (
+        <TimeseriesNavStrip
+          dataRange={dataRange}
+          window={timeWindow}
+          cursor={selection.time}
+          onCursorChange={(t) => onSelectTime?.(t)}
+          onWindowChange={(w) => onTimeWindowChange?.(w)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Inline band-filter picker for the timeseries view. Reads/writes to
+ * `useAppStore.{bandPreset, bandCustom}`; the parent (WorkspaceMain)
+ * watches those fields and fires the bandpass query, then feeds the
+ * filtered data back as `v2BandpassData`. See
+ * `docs/design/filtered-band-overlay.md`.
+ */
+function BandPickerInline({
+  bandPreset,
+  bandActive,
+}: {
+  bandPreset: BandPreset;
+  bandActive: [number, number] | null;
+}) {
+  const setBandPreset = useAppStore((s) => s.setBandPreset);
+  const setBandCustom = useAppStore((s) => s.setBandCustom);
+  const bandCustom = useAppStore((s) => s.bandCustom);
+  return (
+    <div className="ts-band-picker" role="group" aria-label="Bandpass filter">
+      <span className="ts-band-label">Band:</span>
+      <select
+        className="ts-band-select"
+        value={bandPreset}
+        onChange={(e) => setBandPreset(e.target.value as BandPreset)}
+      >
+        <option value="off">Off</option>
+        <option value="spindle">Spindle (11–16 Hz)</option>
+        <option value="ripple">Ripple (100–250 Hz)</option>
+        <option value="slow">Slow Osc (0.5–4 Hz)</option>
+        <option value="custom">Custom…</option>
+      </select>
+      {bandPreset === "custom" && (
+        <>
+          <input
+            type="number"
+            min={0.1}
+            step={0.5}
+            value={bandCustom[0]}
+            onChange={(e) => setBandCustom(parseFloat(e.target.value) || 0.5, bandCustom[1])}
+            className="ts-band-num"
+            aria-label="Low cutoff (Hz)"
+          />
+          <span className="ts-band-dash">–</span>
+          <input
+            type="number"
+            min={0.1}
+            step={0.5}
+            value={bandCustom[1]}
+            onChange={(e) => setBandCustom(bandCustom[0], parseFloat(e.target.value) || 1)}
+            className="ts-band-num"
+            aria-label="High cutoff (Hz)"
+          />
+          <span className="ts-band-unit">Hz</span>
+        </>
+      )}
+      {bandActive && bandPreset !== "custom" && (
+        <span className="ts-band-current muted">
+          ({bandActive[0]}–{bandActive[1]} Hz)
+        </span>
+      )}
     </div>
   );
 }

@@ -49,6 +49,28 @@ class ViewportDTO(BaseModel):
         return cls(**viewport.model_dump())
 
 
+class MaskStateDTO(BaseModel):
+    """Per-tensor channel mask: flat ids of channels excluded from views.
+
+    For grid (AP, ML) tensors, ``masked_ids[i] = ap_idx * n_ml + ml_idx``.
+    For (channel,) tensors, ``masked_ids[i]`` is the channel index.
+    Empty list means "no channels masked, everything visible".
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    tensor: str = Field(min_length=1)
+    masked_ids: list[int] = Field(default_factory=list)
+
+
+class MaskUpdateDTO(BaseModel):
+    """Request body for PUT /masks/{tensor}."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    masked_ids: list[int] = Field(default_factory=list)
+
+
 class ViewportUpdateDTO(BaseModel):
     """Request body for PUT /viewport.
 
@@ -201,6 +223,17 @@ class SpectrogramLiveParamsDTO(BaseModel):
             "(in log10 power) — Prerau-style baseline subtraction."
         ),
     )
+    max_time_segments: int | None = Field(
+        default=200,
+        ge=8,
+        description=(
+            "Cap on the number of time segments returned. When the window × "
+            "hop combination would exceed this, the server widens the hop "
+            "(reduces effective noverlap) so the segment count stays at most "
+            "this value. None disables the cap. Default 200 keeps payloads "
+            "tractable for long-window panning of multi-channel spec_live."
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_freq_range(self) -> "SpectrogramLiveParamsDTO":
@@ -235,6 +268,29 @@ class PsdParamsDTO(BaseModel):
     )
 
 
+class BandpassParamsDTO(BaseModel):
+    """Per-request bandpass filter for the timeseries-style views.
+
+    Applied to the SLICED data via `scipy.signal.sosfiltfilt` (4th-order
+    Butterworth zero-phase) inside `_prepare_slice`. Mirrors the existing
+    `bandpass` DAG transform but is request-scoped — the reviewer can
+    flip between Spindle / Ripple / Slow-Osc bands without rebuilding
+    the DAG. See `docs/design/filtered-band-overlay.md`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    lo_hz: float = Field(gt=0.0, description="Low cutoff (Hz)")
+    hi_hz: float = Field(gt=0.0, description="High cutoff (Hz); must exceed lo_hz")
+    order: int = Field(default=4, ge=1, le=10, description="Butterworth order")
+
+    @model_validator(mode="after")
+    def _check_order(self) -> "BandpassParamsDTO":
+        if self.hi_hz <= self.lo_hz:
+            raise ValueError("hi_hz must be greater than lo_hz")
+        return self
+
+
 class TensorSliceRequestDTO(BaseModel):
     """Slice request body."""
 
@@ -248,10 +304,12 @@ class TensorSliceRequestDTO(BaseModel):
     ap_range: tuple[int, int] | None = None
     ml_range: tuple[int, int] | None = None
     frame_time: float | None = Field(default=None, ge=0.0)
+    n_frames: int | None = Field(default=None, ge=1, le=240)
     max_points: int | None = Field(default=None, ge=1)
     downsample: DownsampleMethod = DownsampleMethod.MINMAX
     psd_params: PsdParamsDTO | None = None
     spectrogram_live_params: SpectrogramLiveParamsDTO | None = None
+    bandpass: BandpassParamsDTO | None = None
 
     @model_validator(mode="after")
     def validate_request(self) -> "TensorSliceRequestDTO":
@@ -270,6 +328,9 @@ class TensorSliceRequestDTO(BaseModel):
 
         if self.view_type == "propagation_frame" and self.frame_time is None:
             raise ValueError("frame_time is required for propagation_frame requests")
+
+        if self.view_type == "propagation_movie" and self.time_range is None:
+            raise ValueError("time_range is required for propagation_movie requests")
 
         for value in (self.time_range, self.freq_range, self.ap_range, self.ml_range):
             if value is not None and value[1] < value[0]:

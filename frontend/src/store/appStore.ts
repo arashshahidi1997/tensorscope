@@ -36,6 +36,14 @@ type AppStore = {
   psdNW: number;
   psdWindowS: number;
   freqLogScale: boolean;
+  /**
+   * Per-view bandpass overlay (timeseries view). Controls the
+   * filtered-band feature from `docs/design/filtered-band-overlay.md`.
+   * `preset === "off"` disables the overlay entirely.
+   */
+  bandPreset: BandPreset;
+  /** Active band [lo, hi] when preset === "custom"; ignored otherwise. */
+  bandCustom: [number, number];
   workspaceObjects: WorkspaceObject[];
   setWorkspaceObjects: (objs: WorkspaceObject[]) => void;
   setObjectVisible: (id: string, visible: boolean) => void;
@@ -54,7 +62,28 @@ type AppStore = {
   setPsdNW: (value: number) => void;
   setPsdWindowS: (value: number) => void;
   toggleFreqLogScale: () => void;
+  setBandPreset: (preset: BandPreset) => void;
+  setBandCustom: (lo: number, hi: number) => void;
 };
+
+export type BandPreset = "off" | "spindle" | "ripple" | "slow" | "custom";
+
+/** Band [lo_hz, hi_hz] for each preset. `off` returns null = no filter. */
+export const BAND_PRESETS: Record<Exclude<BandPreset, "off" | "custom">, [number, number]> = {
+  spindle: [11, 16],
+  ripple: [100, 250],
+  slow: [0.5, 4],
+};
+
+/** Resolve a preset + custom value to a concrete band, or null when off. */
+export function resolveBand(
+  preset: BandPreset,
+  custom: [number, number],
+): [number, number] | null {
+  if (preset === "off") return null;
+  if (preset === "custom") return custom;
+  return BAND_PRESETS[preset];
+}
 
 export const useAppStore = create<AppStore>((set) => ({
   selectedTensor: null,
@@ -110,4 +139,8 @@ export const useAppStore = create<AppStore>((set) => ({
   setPsdNW: (value) => set({ psdNW: value }),
   setPsdWindowS: (value) => set({ psdWindowS: value }),
   toggleFreqLogScale: () => set((s) => ({ freqLogScale: !s.freqLogScale })),
+  bandPreset: "off",
+  bandCustom: [11, 16],
+  setBandPreset: (preset) => set({ bandPreset: preset }),
+  setBandCustom: (lo, hi) => set({ bandCustom: [lo, hi] }),
 }));

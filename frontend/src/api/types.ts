@@ -81,6 +81,24 @@ export type SpectrogramLiveParamsDTO = {
   fmax_hz?: number;
   /** Per-freq median baseline subtraction (Prerau-style). Default true. */
   normalize_per_freq_median?: boolean;
+  /**
+   * Cap on the number of time segments returned. Server widens the hop
+   * (reduces effective noverlap) to honor the cap. Pass `null` to disable.
+   * Default 200.
+   */
+  max_time_segments?: number | null;
+};
+
+/**
+ * Per-request bandpass filter — applied to the SLICED data via a 4th-order
+ * Butterworth zero-phase filter inside the server's `_prepare_slice`. Used
+ * by the timeseries view's band-overlay UI; see
+ * `docs/design/filtered-band-overlay.md`.
+ */
+export type BandpassParamsDTO = {
+  lo_hz: number;
+  hi_hz: number;
+  order?: number;
 };
 
 export type TensorSliceRequestDTO = {
@@ -93,12 +111,21 @@ export type TensorSliceRequestDTO = {
   ml_range?: [number, number];
   /** Required for view_type "propagation_frame". Selects the nearest time frame. */
   frame_time?: number;
+  /** Number of frames to return for view_type "propagation_movie". Defaults to ~window_s × 30, capped at 240. */
+  n_frames?: number;
   max_points?: number;
   downsample?: DownsampleMethod;
   /** PSD computation parameters (for psd_live view_type). */
   psd_params?: PSDParamsDTO;
   /** Multitaper-spectrogram parameters (for spectrogram_live view_type). */
   spectrogram_live_params?: SpectrogramLiveParamsDTO;
+  /** Optional per-request bandpass — fills the band-overlay feature. */
+  bandpass?: BandpassParamsDTO;
+};
+
+export type MaskStateDTO = {
+  tensor: string;
+  masked_ids: number[];
 };
 
 export type TensorSliceDTO = {
@@ -113,6 +140,14 @@ export type TensorSliceDTO = {
     axis_labels?: string[];
     units?: string | null;
     selected_time?: string | number | null;
+    /** Audit F3: server-applied display-only transforms (e.g. zscore_offset). */
+    display_transforms?: string[];
+    /** Audit F21: per-slice processing status. */
+    processing?: {
+      requested: boolean;
+      applied: boolean;
+      error: string | null;
+    };
     downsampling?: {
       method: DownsampleMethod;
       max_points: number | null;

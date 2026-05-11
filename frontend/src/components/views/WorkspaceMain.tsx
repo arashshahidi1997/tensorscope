@@ -24,10 +24,21 @@ import {
   useSliceQuery,
   useStateQuery,
   useTensorQuery,
+  useV2PSDHeatmapQuery,
+  useV2SpectrogramQuery,
+  useV2TimeseriesQuery,
+  isV2Enabled,
 } from "../../api/queries";
-import { decodeArrowSlice, extractPSDHeatmap, extractPSDAverage } from "../../api/arrow";
+import {
+  decodeArrowSlice,
+  extractPSDHeatmap,
+  extractPSDAverage,
+  type ColumnarTimeseries,
+  type PSDHeatmapData,
+  type Spectrogram,
+} from "../../api/arrow";
 import type { SelectionDTO } from "../../api/types";
-import { useAppStore } from "../../store/appStore";
+import { resolveBand, useAppStore } from "../../store/appStore";
 import { useSelectionStore, toSelectionDTO } from "../../store/selectionStore";
 import { getAvailableViews, getOrthoPair, viewRegistry } from "../../registry/viewRegistry";
 import { HypnogramView } from "./HypnogramView";
@@ -39,6 +50,7 @@ import { PSDSpatialView } from "./PSDSpatialView";
 import { PropagationController } from "./PropagationController";
 import { SpatialMapSliceView } from "./SpatialMapSliceView";
 import { SpatialEventView } from "./SpatialEventView";
+import { SpectrogramView } from "./SpectrogramView";
 import { TimeseriesSliceView } from "./TimeseriesSliceView";
 import { OrthoSlicerView } from "./OrthoSlicerView";
 import { TensorChooser } from "./TensorChooser";
@@ -94,6 +106,8 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     psdNW,
     psdWindowS,
     freqLogScale,
+    bandPreset,
+    bandCustom,
     workspaceObjects,
     setWorkspaceObjects,
     setObjectVisible,
@@ -212,6 +226,20 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       ? makePSDLiveRequest(selectionDraft, psdWindowS, timeCoord, { NW: psdNW, fmax: psdFmax })
       : null,
   );
+
+  // Contract-v2 PSDHeatmap path. Behind localStorage["tensorscope:v2"]==="1".
+  // Reads via the worker pool — main-thread blocking goes from ~150 ms (v1
+  // long-format decode) to ~1 ms (postMessage round-trip). The flag is read
+  // every render so a tab toggling it picks up on the next React Query
+  // refetch — but `useV2PSDHeatmapQuery` keys off `request === null` to
+  // gate the actual fetch, so a flag flip during navigation is harmless.
+  const v2Enabled = isV2Enabled();
+  const psdLiveV2Query = useV2PSDHeatmapQuery(
+    selectedTensor,
+    hasPSDLive && v2Enabled
+      ? makePSDLiveRequest(selectionDraft, psdWindowS, timeCoord, { NW: psdNW, fmax: psdFmax })
+      : null,
+  );
   // Spectrogram live — multitaper spectrogram on the visible window. Server
   // defaults are sleep-band tuned (Prerau-style baseline subtraction); the
   // frontend doesn't currently expose a knob panel for these, but the
@@ -225,6 +253,49 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const navigatorSliceQuery = useSliceQuery(
     selectedTensor,
     hasNavigator && timeCoord ? makeNavigatorRequest(selectionDraft, timeCoord) : null,
+  );
+
+  // Contract-v2 parallel queries for timeseries / spectrogram_live / navigator.
+  // Same gating pattern as `psdLiveV2Query`: only fire when the v2 flag is on
+  // and the corresponding v1 query would have fired. Each worker call returns
+  // a pre-extracted shape the view consumes directly via `v2Data`.
+  const timeseriesV2Query = useV2TimeseriesQuery(
+    selectedTensor,
+    hasTimeseries && v2Enabled
+      ? makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow)
+      : null,
+    "Timeseries",
+  );
+  const spectrogramLiveV2Query = useV2SpectrogramQuery(
+    selectedTensor,
+    hasSpectrogramLive && v2Enabled
+      ? makeSpectrogramLiveRequest(selectionDraft, safeWindow)
+      : null,
+    "SpectrogramLive",
+  );
+  const navigatorV2Query = useV2TimeseriesQuery(
+    selectedTensor,
+    hasNavigator && timeCoord && v2Enabled
+      ? makeNavigatorRequest(selectionDraft, timeCoord)
+      : null,
+    "Navigator",
+  );
+
+  // Filtered-band overlay (G1, `docs/design/filtered-band-overlay.md`).
+  // Fires only when a band preset is active AND v2 is on. Reuses the
+  // timeseries shape — server applies `bandpass` after slicing.
+  const activeBand = resolveBand(bandPreset, bandCustom);
+  const bandpassRequest =
+    hasTimeseries && v2Enabled && activeBand
+      ? {
+          ...makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow),
+          bandpass: { lo_hz: activeBand[0], hi_hz: activeBand[1] },
+        }
+      : null;
+  const timeseriesBandpassQuery = useV2TimeseriesQuery(
+    selectedTensor,
+    bandpassRequest,
+    "TimeseriesBandpass",
   );
 
   // Brainstate queries — fetch metadata once, intervals per visible window
@@ -247,6 +318,38 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   if (navigatorSliceQuery.data) lastNavigator.current = navigatorSliceQuery.data;
   const timeseriesData = timeseriesSliceQuery.data ?? lastTimeseries.current;
   const navigatorData = navigatorSliceQuery.data ?? lastNavigator.current;
+
+  // Same optimistic-render pattern for the v2 PSDHeatmap path. Combined
+  // with `placeholderData: keepPreviousData` on the v2 query, this means
+  // the canvas keeps painting the previous slice through any brief
+  // window where the new fetch is in flight or has errored. Per
+  // `docs/design/contract-v2.md` §0.2 (Neuroglancer "render whatever's
+  // in GPU memory immediately" + HiGlass "old tiles remain visible").
+  const lastPsdHeatmapV2 = useRef<PSDHeatmapData | null>(null);
+  if (psdLiveV2Query.data) lastPsdHeatmapV2.current = psdLiveV2Query.data;
+  const v2HeatmapData = psdLiveV2Query.data ?? lastPsdHeatmapV2.current;
+
+  // Same sticky-ref optimistic render for v2 timeseries / spectrogram /
+  // navigator. Each view falls back to `last…V2.current` when its v2 query
+  // is in flight, so the canvas never blanks during a drag.
+  const lastTimeseriesV2 = useRef<ColumnarTimeseries | null>(null);
+  const lastSpectrogramV2 = useRef<Spectrogram | null>(null);
+  const lastNavigatorV2 = useRef<ColumnarTimeseries | null>(null);
+  const lastBandpassV2 = useRef<ColumnarTimeseries | null>(null);
+  if (timeseriesV2Query.data) lastTimeseriesV2.current = timeseriesV2Query.data;
+  if (spectrogramLiveV2Query.data) lastSpectrogramV2.current = spectrogramLiveV2Query.data;
+  if (navigatorV2Query.data) lastNavigatorV2.current = navigatorV2Query.data;
+  if (timeseriesBandpassQuery.data) lastBandpassV2.current = timeseriesBandpassQuery.data;
+  // When the user toggles bandpass off, clear the sticky ref so the
+  // filtered overlay disappears immediately instead of lingering as a
+  // stale series.
+  if (!activeBand) lastBandpassV2.current = null;
+  const v2TimeseriesData = timeseriesV2Query.data ?? lastTimeseriesV2.current;
+  const v2SpectrogramData = spectrogramLiveV2Query.data ?? lastSpectrogramV2.current;
+  const v2NavigatorData = navigatorV2Query.data ?? lastNavigatorV2.current;
+  const v2BandpassData = activeBand
+    ? (timeseriesBandpassQuery.data ?? lastBandpassV2.current)
+    : null;
 
   // Event window for timeseries markers — same query key as the inspector's call,
   // so React Query deduplicates the request.
@@ -280,6 +383,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       <>
         <NavigatorView
           slice={navigatorData}
+          v2Data={v2Enabled ? v2NavigatorData : null}
           selection={selectionDraft}
           onSelectTime={(t) => commitSelectionRef.current({ ...selectionDraft, time: t })}
           onTimeWindowChange={setTimeWindow}
@@ -320,6 +424,8 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     brainstateT1,
     timeWindowLo,
     timeWindowHi,
+    v2Enabled,
+    v2NavigatorData,
   ]);
 
   useEffect(() => {
@@ -330,9 +436,17 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const viewElements: Record<string, ReactNode> = {};
 
   if (hasTimeseries) {
+    const dataRange: [number, number] | undefined =
+      typeof timeCoord?.min === "number" && typeof timeCoord?.max === "number"
+        ? [timeCoord.min, timeCoord.max]
+        : undefined;
     viewElements["timeseries"] = timeseriesData ? (
       <TimeseriesSliceView
         slice={timeseriesData}
+        v2Data={v2Enabled ? v2TimeseriesData : null}
+        v2BandpassData={v2BandpassData}
+        bandPreset={bandPreset}
+        bandActive={activeBand}
         selection={selectionDraft}
         events={eventWindowQuery.data ?? []}
         brainstateIntervals={brainstateIntervals}
@@ -340,6 +454,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
         onTimeWindowChange={setTimeWindow}
         timeWindow={timeWindow}
+        dataRange={dataRange}
       />
     ) : (
       <div className="placeholder">Loading…</div>
@@ -411,8 +526,9 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     // Render an explicit "Computing…" placeholder while the slice is in
     // flight so the slot doesn't read as broken / empty.
     viewElements["spectrogram_live"] = spectrogramLiveQuery.data ? (
-      <SpectrogramComponent
+      <SpectrogramView
         slice={spectrogramLiveQuery.data}
+        v2Data={v2Enabled ? v2SpectrogramData : null}
         selection={selectionDraft}
         onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
         onSelectFreq={handleSelectFreq}
@@ -441,9 +557,18 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   }
 
   if (hasPSDLive) {
+    // Heatmap data routing: when the v2 dev flag is on AND the worker has
+    // already returned a slice (live or sticky), feed the v2 result to
+    // PSDHeatmapView. Otherwise fall back to the v1 long-format extractor
+    // off `psdLiveQuery.data`. PSDCurve / PSDSpatial stay on v1 in this
+    // session — those views migrate per the parity-gate process in
+    // `docs/design/contract-v2.md` §5.
+    const heatmapFromV2 = v2Enabled ? v2HeatmapData : null;
+
     if (psdLiveQuery.data) {
       const decoded = decodeArrowSlice(psdLiveQuery.data);
-      const heatmapData = extractPSDHeatmap(decoded);
+      const v1Heatmap = extractPSDHeatmap(decoded);
+      const heatmapData = heatmapFromV2 ?? v1Heatmap;
       const avgData = extractPSDAverage(decoded);
 
       // Map selection.ap/ml indices → coord values so PSDHeatmapView can
@@ -507,7 +632,22 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
           <span className="spinner" aria-hidden="true" /> Computing PSD…
         </div>
       );
-      viewElements["psd_heatmap"] = placeholder;
+      // Optimistic-render edge case: the v2 heatmap path may have a result
+      // before v1 returns (worker decode is faster, or v1 errored). Show
+      // it instead of a placeholder so the canvas keeps content during the
+      // window where only one path has data.
+      if (heatmapFromV2) {
+        viewElements["psd_heatmap"] = (
+          <PSDHeatmapView
+            data={heatmapFromV2}
+            selectedFreq={selectionDraft.freq}
+            onSelectFreq={handleSelectFreq}
+            freqLogScale={freqLogScale}
+          />
+        );
+      } else {
+        viewElements["psd_heatmap"] = placeholder;
+      }
       viewElements["psd_curve"] = placeholder;
       viewElements["psd_spatial"] = placeholder;
     }
@@ -544,6 +684,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         <>
           <NavigatorView
             slice={navigatorData}
+            v2Data={v2Enabled ? v2NavigatorData : null}
             selection={selectionDraft}
             onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
             onTimeWindowChange={setTimeWindow}

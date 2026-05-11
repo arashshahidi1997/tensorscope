@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -40,7 +41,7 @@ from tensorscope.server.models import (
 
 _INLINE_COORD_LIMIT = 32
 _VIEW_REGISTRY: dict[frozenset[str], list[str]] = {
-    frozenset({"time", "AP", "ML"}): ["timeseries", "spatial_map", "propagation_frame", "navigator", "psd_live", "spectrogram_live"],
+    frozenset({"time", "AP", "ML"}): ["timeseries", "spatial_map", "propagation_frame", "propagation_movie", "navigator", "psd_live", "spectrogram_live"],
     frozenset({"time", "channel"}): ["timeseries", "navigator", "psd_live", "spectrogram_live"],
     frozenset({"time", "freq", "AP", "ML"}): ["spectrogram", "psd_spatial"],
     frozenset({"time", "freq", "channel"}): ["spectrogram", "psd_average"],
@@ -71,6 +72,12 @@ class ServerState:
     _processed_cache: dict = None  # type: ignore[assignment]  # {tensor_name: xr.DataArray}
     _processed_params_hash: str | None = None
     _subscribers: list[_Subscriber] = field(default_factory=list)
+    # Per-tensor channel masks (flat channel ids: ap*n_ml+ml for grid, or channel idx).
+    # Stored as sorted lists rather than sets so deepcopy + JSON round-trip is stable.
+    channel_masks: dict[str, list[int]] = field(default_factory=dict)
+    # Status from the last processing attempt — surfaced via slice meta so the
+    # frontend can flag a silent fallback. Audit F21.
+    _processing_errors: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.processing is None:
@@ -175,7 +182,24 @@ class ServerState:
         # Invalidate cache — will be lazily rebuilt on next slice request
         self._processed_cache.clear()
         self._processed_params_hash = None
+        self._processing_errors.clear()
         return self.processing
+
+    def channel_mask_for(self, tensor_name: str) -> list[int]:
+        """Return the masked channel ids for ``tensor_name`` (empty list if none)."""
+        return list(self.channel_masks.get(tensor_name, []))
+
+    def set_channel_mask(self, tensor_name: str, masked_ids: list[int]) -> list[int]:
+        """Set the mask for one tensor.  Returns the deduplicated, sorted list."""
+        # Validate the tensor exists so an agent typo doesn't silently store
+        # a mask that nothing reads.
+        self.app_state.tensors.get(tensor_name)  # raises if missing
+        deduped = sorted({int(i) for i in masked_ids if int(i) >= 0})
+        if deduped:
+            self.channel_masks[tensor_name] = deduped
+        else:
+            self.channel_masks.pop(tensor_name, None)
+        return self.channel_mask_for(tensor_name)
 
     def electrode_layout(self, name: str) -> ElectrodeLayoutDTO:
         """Extract electrode layout from a tensor's AP/ML coordinates.
@@ -241,35 +265,79 @@ class ServerState:
         if name not in self._processed_cache:
             try:
                 processed = apply_processing(node.data, self.processing)
+                self._processing_errors.pop(name, None)
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger(__name__).warning(
                     "Processing failed on full tensor, caching raw data: %s", exc,
                 )
                 processed = node.data
+                self._processing_errors[name] = str(exc)
             self._processed_cache[name] = processed
 
         return self._processed_cache[name]
 
-    def tensor_slice(self, name: str, request: TensorSliceRequestDTO) -> TensorSliceDTO:
+    def _prepare_slice(
+        self, name: str, request: TensorSliceRequestDTO
+    ) -> tuple[xr.DataArray, xr.DataArray, dict[str, Any], dict[str, Any]]:
+        """Run the slice handler and assemble v1/v2 metadata blobs.
+
+        Returns ``(source_tensor, sliced, processing_meta, slice_provenance)``.
+        Factored out of :meth:`tensor_slice` so the v2 raw-bytes endpoint can
+        reuse the same handler chain (processing cache → apply_slice_request →
+        mask) without re-serialising through the v1 long-format encoder.
+        """
         node = self.get_node(name)
-        # Use cached processed tensor if processing is active
-        if self.processing and self.processing.has_any_active():
+        processing_requested = bool(self.processing and self.processing.has_any_active())
+        if processing_requested:
             data = self._get_processed_tensor(name)
         else:
             data = node.data
-        sliced = apply_slice_request(data, request, processing=None)
+        processing_error = self._processing_errors.get(name)
+        masked_ids = self.channel_masks.get(name, [])
+        sliced = apply_slice_request(data, request, processing=None, masked_ids=masked_ids)
+        bandpass_meta: dict[str, Any] | None = None
+        if request.bandpass is not None:
+            sliced, bandpass_meta = _apply_bandpass_to_slice(sliced, request.bandpass)
+        processing_meta = {
+            "requested": processing_requested,
+            "applied": processing_requested and processing_error is None,
+            "error": processing_error,
+        }
+        slice_provenance = {
+            "method": request.downsample.value,
+            "max_points": request.max_points,
+            "original_shape": list(node.data.shape),
+            "returned_shape": list(sliced.shape),
+            "masked_ids": list(masked_ids) if masked_ids else [],
+        }
+        if bandpass_meta is not None:
+            slice_provenance["bandpass"] = bandpass_meta
+        return node.data, sliced, processing_meta, slice_provenance
+
+    def tensor_slice(self, name: str, request: TensorSliceRequestDTO) -> TensorSliceDTO:
+        _, sliced, processing_meta, slice_provenance = self._prepare_slice(name, request)
         payload = encode_arrow_payload(sliced)
+        # Audit F3: surface any display-only transforms applied on the server
+        # so the frontend can label the Y axis honestly.
+        display_transforms = list(sliced.attrs.get("display_transforms", []) or [])
         meta = {
             "coords": [coord_summary(sliced, dim).model_dump() for dim in sliced.dims if dim in sliced.coords],
             "axis_labels": list(sliced.dims),
             "units": sliced.attrs.get("units"),
             "selected_time": sliced.attrs.get("selected_time"),
+            "display_transforms": display_transforms,
+            # Audit F21: stop pretending processing succeeded when it didn't.
+            "processing": processing_meta,
             "downsampling": {
-                "method": request.downsample.value,
-                "max_points": request.max_points,
-                "original_shape": list(node.data.shape),
-                "returned_shape": list(sliced.shape),
+                "method": slice_provenance["method"],
+                "max_points": slice_provenance["max_points"],
+                "original_shape": slice_provenance["original_shape"],
+                "returned_shape": slice_provenance["returned_shape"],
             },
+            # Phase 1 contract-v2: v1 ships "1.0" so a single client can
+            # tell which contract a payload came from. v2 ships "2.0" in
+            # the schema metadata (not in JSON meta).
+            "contract_version": "1.0",
         }
         return TensorSliceDTO(
             name=name,
@@ -279,6 +347,22 @@ class ServerState:
             encoding="arrow_ipc",
             payload=payload,
             meta=meta,
+        )
+
+    def tensor_slice_v2_bytes(
+        self, name: str, request: TensorSliceRequestDTO
+    ) -> bytes:
+        """Return the v2 binary slice payload (raw Arrow IPC bytes).
+
+        Shares the slice handler with :meth:`tensor_slice` — only the encoder
+        differs (labeled record batch vs long-format table). See
+        :func:`encode_arrow_v2` for the wire layout.
+        """
+        _, sliced, processing_meta, slice_provenance = self._prepare_slice(name, request)
+        return encode_arrow_v2(
+            sliced,
+            processing=processing_meta,
+            slice_provenance=slice_provenance,
         )
 
 
@@ -381,15 +465,112 @@ def coord_summary(data: xr.DataArray, coord_name: str) -> CoordSummaryDTO:
     )
 
 
+def _apply_bandpass_to_slice(
+    sliced: xr.DataArray, params: Any
+) -> tuple[xr.DataArray, dict[str, Any]]:
+    """Apply a Butterworth zero-phase bandpass along the time axis.
+
+    Used by `_prepare_slice` when the request carries `bandpass`. The
+    filter runs on the SLICED data, not the source tensor — so the
+    reviewer can flip between bands without invalidating the processing
+    cache or rebuilding the DAG. See
+    `docs/design/filtered-band-overlay.md`.
+
+    Raises ValueError if the window is too narrow for the requested
+    low cutoff (need ≥ 3 cycles of `lo_hz`).
+    """
+    if "time" not in sliced.dims:
+        raise ValueError("bandpass requires a `time` dimension on the sliced output")
+    time_vals = np.asarray(sliced.coords["time"].values, dtype=float)
+    if time_vals.size < 4:
+        raise ValueError("bandpass needs at least 4 samples in the window")
+    fs = float(1.0 / np.median(np.diff(time_vals)))
+    nyq = fs * 0.5
+    lo = float(params.lo_hz)
+    hi = float(params.hi_hz)
+    if hi >= nyq:
+        raise ValueError(f"hi_hz ({hi}) must be below Nyquist ({nyq:.2f})")
+
+    window_s = float(time_vals[-1] - time_vals[0])
+    min_cycles = 3.0
+    if window_s * lo < min_cycles:
+        raise ValueError(
+            f"bandpass window too narrow: {window_s:.3f} s at {lo} Hz < "
+            f"{min_cycles} cycles. Widen the window or raise lo_hz."
+        )
+
+    from scipy.signal import butter, sosfiltfilt
+
+    sos = butter(int(params.order), [lo, hi], btype="bandpass", fs=fs, output="sos")
+    axis = sliced.dims.index("time")
+    filtered = sosfiltfilt(sos, np.asarray(sliced.values, dtype=np.float64), axis=axis)
+    out = xr.DataArray(
+        filtered, dims=sliced.dims, coords=sliced.coords, attrs=dict(sliced.attrs)
+    )
+    out.attrs["display_transforms"] = list(out.attrs.get("display_transforms", []) or []) + [
+        f"bandpass({lo}-{hi} Hz)"
+    ]
+    meta = {"lo_hz": lo, "hi_hz": hi, "order": int(params.order), "fs": fs}
+    return out, meta
+
+
+def _apply_channel_mask_nan(data: xr.DataArray, masked_ids: list[int]) -> xr.DataArray:
+    """Set masked cells to NaN in a tensor with (AP, ML) or (channel,) dims.
+
+    For grid tensors the flat id is ``ap_idx * n_ml + ml_idx``. The mask is
+    broadcast across all leading dims (time, freq, …) so a single (ap, ml)
+    pair gets NaN'd everywhere it appears. Non-spatial tensors pass through.
+    """
+    if not masked_ids:
+        return data
+    if "AP" in data.dims and "ML" in data.dims:
+        n_ap = int(data.sizes["AP"])
+        n_ml = int(data.sizes["ML"])
+        mask_grid = np.zeros((n_ap, n_ml), dtype=bool)
+        for fid in masked_ids:
+            ap, ml = divmod(int(fid), n_ml)
+            if 0 <= ap < n_ap and 0 <= ml < n_ml:
+                mask_grid[ap, ml] = True
+        if not mask_grid.any():
+            return data
+        arr = np.asarray(data.values, dtype=np.float64)
+        broadcast_shape = [1] * arr.ndim
+        broadcast_shape[data.dims.index("AP")] = n_ap
+        broadcast_shape[data.dims.index("ML")] = n_ml
+        arr = np.where(mask_grid.reshape(broadcast_shape), np.nan, arr)
+        return xr.DataArray(arr, dims=data.dims, coords=data.coords, attrs=data.attrs)
+    if "channel" in data.dims:
+        n_ch = int(data.sizes["channel"])
+        ch_mask = np.zeros(n_ch, dtype=bool)
+        for cid in masked_ids:
+            if 0 <= int(cid) < n_ch:
+                ch_mask[int(cid)] = True
+        if not ch_mask.any():
+            return data
+        arr = np.asarray(data.values, dtype=np.float64)
+        broadcast_shape = [1] * arr.ndim
+        broadcast_shape[data.dims.index("channel")] = n_ch
+        arr = np.where(ch_mask.reshape(broadcast_shape), np.nan, arr)
+        return xr.DataArray(arr, dims=data.dims, coords=data.coords, attrs=data.attrs)
+    return data
+
+
 def apply_slice_request(
     data: xr.DataArray,
     request: TensorSliceRequestDTO,
     processing: ProcessingParamsDTO | None = None,
+    masked_ids: list[int] | None = None,
 ) -> xr.DataArray:
     """Apply selection/windowing/downsampling to a tensor.
 
     Processing (if provided) is applied after time/freq windowing but before
     channel/AP/ML selection so that CMR and spatial filters see the full array.
+
+    ``masked_ids`` is a flat-channel-id list of cells to exclude. For grid
+    (AP, ML) tensors the id is ``ap_idx * n_ml + ml_idx``; for (channel,)
+    tensors it's the channel index. The mask is applied AFTER processing
+    (so CMR/notch/etc. still see the full grid) but is honoured by the
+    downstream FFT and reduction paths via NaN substitution.
     """
     sliced = data
 
@@ -407,6 +588,13 @@ def apply_slice_request(
             sliced = apply_processing(sliced, processing)
         except Exception as exc:  # noqa: BLE001
             logging.getLogger(__name__).warning("Processing pipeline failed, using raw data: %s", exc)
+
+    # 2a. Apply channel mask (NaN out excluded cells). Done AFTER processing so
+    # CMR / notch / spatial-median still see the full grid; downstream
+    # reductions either use skipna=True (means/medians) or zero-fill before
+    # FFT and re-NaN the output rows (psd_live / spectrogram_live).
+    if masked_ids:
+        sliced = _apply_channel_mask_nan(sliced, masked_ids)
 
     # 2b. PSD live: compute multitaper PSD, replacing time dim with freq.
     if request.view_type == "psd_live" and "time" in sliced.dims:
@@ -435,7 +623,14 @@ def apply_slice_request(
             arr = np.asarray(reordered.values)
             orig_shape = arr.shape[1:]
             flat = arr.reshape(arr.shape[0], -1).T  # (n_ch, time)
+            # NaN-masked rows: zero them so cogpy's FFT is finite, then NaN
+            # the corresponding output rows so reductions skip them.
+            row_masked = np.isnan(flat).any(axis=1)
+            if row_masked.any():
+                flat = np.where(row_masked[:, None], 0.0, flat)
             psd_vals, freqs = psd_multitaper(flat, fs, **mt_kwargs)
+            if row_masked.any():
+                psd_vals[row_masked] = np.nan
             # psd_vals: (n_ch, freq) -> reshape to (*orig_shape, freq) -> (freq, *orig_shape)
             psd_vals = psd_vals.reshape(*orig_shape, -1)
             psd_vals = np.moveaxis(psd_vals, -1, 0)
@@ -511,6 +706,22 @@ def apply_slice_request(
         noverlap = int(round(nperseg * spec_params.noverlap_pct / 100.0))
         noverlap = max(0, min(noverlap, nperseg - 1))
 
+        # Cap the segment count by widening the hop. mtm_spectrogram emits
+        # `(n_samples - nperseg) // (nperseg - noverlap) + 1` segments. With
+        # 95% overlap and a 60 s window at 1.25 kHz this is ~1180 segments
+        # per channel × 256 channels — which the server returns fine but the
+        # frontend tile path can't render in real time, and Arrow encode
+        # alone runs ~16 s. Increasing the hop trades temporal resolution
+        # for a tractable payload while keeping freq + spatial detail intact.
+        cap = spec_params.max_time_segments
+        if cap is not None and n_samples > nperseg:
+            hop = nperseg - noverlap
+            n_segs = (n_samples - nperseg) // hop + 1
+            if n_segs > cap:
+                hop_for_cap = -(-(n_samples - nperseg) // (cap - 1))  # ceil-div
+                hop_for_cap = max(hop, hop_for_cap)
+                noverlap = max(0, nperseg - hop_for_cap)
+
         non_time_dims = [d for d in sliced.dims if d != "time"]
         if non_time_dims:
             reordered = sliced.transpose(*non_time_dims, "time")
@@ -520,6 +731,13 @@ def apply_slice_request(
         else:
             flat = np.asarray(sliced.values, dtype=np.float64)[None, :]
             orig_shape = ()
+
+        # Channel-mask: zero out NaN'd rows so ghostipy's FFT runs on finite
+        # data; we'll re-NaN the corresponding output rows after the spec
+        # compute so reductions skip them.
+        row_masked = np.isnan(flat).any(axis=1)
+        if row_masked.any():
+            flat = np.where(row_masked[:, None], 0.0, flat)
 
         # Probe one fiber to fix the freq / time-segment shapes, then
         # parallelise the rest across channels via a thread pool.
@@ -557,9 +775,13 @@ def apply_slice_request(
                 for i, S in enumerate(ex.map(_mtspec, flat)):
                     mtspec[i] = S
         # mtspec shape: (n_ch, n_freq, n_t_segments)
-        mtspec = np.asarray(mtspec)
+        mtspec = np.asarray(mtspec, dtype=np.float64)
         freqs = np.asarray(freqs)
         t_centers = np.asarray(t_centers)
+
+        # Re-apply mask to the spec output (rows we zeroed for FFT input).
+        if row_masked.any():
+            mtspec[row_masked] = np.nan
 
         # Clip freq window. searchsorted(side="right") for the upper bound
         # so an exact-match fmax_hz is included.
@@ -571,10 +793,11 @@ def apply_slice_request(
 
         # Per-freq median baseline subtraction in log10 space (Prerau).
         # Floor at 1e-20 to keep log finite when ghostipy returns zeros at
-        # the spectrum edges.
+        # the spectrum edges. nanmedian so masked channels don't drag the
+        # baseline of unmasked ones.
         if spec_params.normalize_per_freq_median:
             log_s = np.log10(np.maximum(mtspec, 1e-20))
-            mtspec = log_s - np.median(log_s, axis=-1, keepdims=True)
+            mtspec = log_s - np.nanmedian(log_s, axis=-1, keepdims=True)
 
         # Reshape (n_ch, n_freq, n_t) → (*orig_shape, n_freq, n_t) →
         # (n_t, n_freq, *orig_shape). The frontend's extractSpectrogram
@@ -601,6 +824,7 @@ def apply_slice_request(
                 **dict(sliced.attrs),
                 "spectrogram_live_nperseg": int(nperseg),
                 "spectrogram_live_noverlap": int(noverlap),
+                "spectrogram_live_n_time_segments": int(len(t_centers)),
                 "spectrogram_live_fs": float(fs),
                 "spectrogram_live_bandwidth_hz": float(bandwidth_eff),
                 "spectrogram_live_bandwidth_requested_hz": float(spec_params.bandwidth_hz),
@@ -642,14 +866,43 @@ def apply_slice_request(
                 }
             )
 
+    # propagation_movie: keep the time axis, return N evenly-spaced frames as a
+    # (time, AP, ML) cube so the frontend can preload the whole window once and
+    # play back via RAF without per-frame round-trips. n_frames defaults to ~30
+    # frames/s of the visible window, capped at 240 to keep payloads small.
+    if request.view_type == "propagation_movie" and "time" in sliced.dims:
+        time_len = int(sliced.sizes.get("time", 0))
+        if time_len == 0:
+            raise ValueError("propagation_movie: time window is empty")
+        if request.n_frames is not None:
+            n_frames = int(request.n_frames)
+        elif request.time_range is not None:
+            window_s = float(request.time_range[1]) - float(request.time_range[0])
+            n_frames = max(1, min(240, int(round(window_s * 30.0))))
+        else:
+            n_frames = min(60, time_len)
+        n_frames = max(1, min(n_frames, time_len))
+        idx = np.linspace(0, time_len - 1, n_frames, dtype=int)
+        idx = np.unique(idx)
+        sliced = sliced.isel(time=idx)
+        sliced = sliced.assign_attrs(
+            {
+                **dict(sliced.attrs),
+                "view_type": "propagation_movie",
+                "n_frames": int(sliced.sizes["time"]),
+            }
+        )
+
     # psd_average: collapse time → mean over visible window → (freq, ...)
+    # skipna so masked-channel NaN cells don't poison the time mean for
+    # unmasked spatial neighbours.
     if request.view_type == "psd_average" and "time" in sliced.dims:
-        sliced = sliced.mean(dim="time", keep_attrs=True)
+        sliced = sliced.mean(dim="time", keep_attrs=True, skipna=True)
 
     # psd_spatial: collapse time → select freq point → (AP, ML) or (channel,)
     if request.view_type == "psd_spatial":
         if "time" in sliced.dims:
-            sliced = sliced.mean(dim="time", keep_attrs=True)
+            sliced = sliced.mean(dim="time", keep_attrs=True, skipna=True)
         if "freq" in sliced.dims:
             target_freq = float(request.selection.freq)
             sliced = sliced.sel(freq=target_freq, method="nearest")
@@ -663,6 +916,11 @@ def apply_slice_request(
 
     if request.view_type in ("timeseries", "navigator") and "time" in sliced.dims:
         sliced = zscore_offset(sliced, offset_scale=3.0)
+        # Record the display transform so the frontend can show users that
+        # on-screen values are NOT in the tensor's native units. Audit F3.
+        sliced = sliced.assign_attrs(
+            {**dict(sliced.attrs), "display_transforms": ["zscore_offset(scale=3.0)"]}
+        )
 
     if "time" in sliced.dims and sliced.sizes.get("time", 0) == 0:
         raise ValueError("slice request returned no data")
@@ -862,8 +1120,13 @@ def downsample_time_axis(data: xr.DataArray, max_points: int, method: Downsample
     out_times = np.empty(n_buckets * 2, dtype=time_vals.dtype)
     out_vals = np.empty((n_buckets * 2, n_feat), dtype=np.float64)
 
-    # Vectorised: for each bucket, compute argmin/argmax of the mean across features
-    # to pick representative min/max indices, then gather the full row.
+    # Audit F5: emit each bucket's two representative samples at their actual
+    # source-time positions, not at the bucket edges.  Pick the time index
+    # where the globally most-extreme feature hits its bucket-min (and -max),
+    # then gather every feature's value at that single time.  This keeps the
+    # output a single shared time axis while making every emitted timestamp a
+    # real sample time — a 1 ms spike near the centre of a 100 ms bucket no
+    # longer renders 50 ms off.
     for i in range(n_buckets):
         s, e = int(starts[i]), int(stops[i])
         chunk = flat[s:e]  # (bucket_len, n_feat)
@@ -873,13 +1136,19 @@ def downsample_time_axis(data: xr.DataArray, max_points: int, method: Downsample
             out_vals[2 * i] = chunk[0]
             out_vals[2 * i + 1] = chunk[0]
         else:
-            # Per-feature min/max, then gather at bucket boundary times
-            mins = chunk.min(axis=0)
-            maxs = chunk.max(axis=0)
-            out_times[2 * i] = time_vals[s]
-            out_times[2 * i + 1] = time_vals[e - 1]
-            out_vals[2 * i] = mins
-            out_vals[2 * i + 1] = maxs
+            per_feat_argmin = chunk.argmin(axis=0)  # (n_feat,) local indices
+            per_feat_argmax = chunk.argmax(axis=0)
+            feat_idx = np.arange(n_feat)
+            per_feat_min_vals = chunk[per_feat_argmin, feat_idx]
+            per_feat_max_vals = chunk[per_feat_argmax, feat_idx]
+            lead_min_feat = int(np.argmin(per_feat_min_vals))
+            lead_max_feat = int(np.argmax(per_feat_max_vals))
+            idx_min = int(per_feat_argmin[lead_min_feat])
+            idx_max = int(per_feat_argmax[lead_max_feat])
+            out_times[2 * i] = time_vals[s + idx_min]
+            out_times[2 * i + 1] = time_vals[s + idx_max]
+            out_vals[2 * i] = chunk[idx_min]
+            out_vals[2 * i + 1] = chunk[idx_max]
 
     # De-duplicate consecutive identical times (from single-sample buckets)
     # and sort by time
@@ -943,6 +1212,165 @@ def encode_arrow_payload(data: xr.DataArray) -> str:
     with pa_ipc.new_stream(sink, table.schema) as writer:
         writer.write_table(table)
     return base64.b64encode(sink.getvalue()).decode("ascii")
+
+
+# ── contract v2 wire format ─────────────────────────────────────────────────
+#
+# v1 encodes one row per cell (long-format). For a (time, freq, AP, ML)
+# spectrogram_live cube that is ~3 M rows × 5 cols, ~56 MB on the wire after
+# base64. v2 encodes the same cube as a single record batch with one row:
+#
+#   data:           FixedSizeList<float32, prod(shape)>  — row-major values
+#   coords/<dim>:   FixedSizeList<float64|str, dim_size> — per-dim coord array
+#
+# Schema metadata under the `tensorscope` key holds dims/shape/dtype/units/
+# attrs/display_transforms/processing/slice_provenance (per §3.1 of
+# docs/design/contract-v2.md). The decoder reads metadata first to know the
+# dim ordering, then reshapes data by `shape`. No per-row coord duplication,
+# no base64 — the response body is raw Arrow IPC bytes.
+
+# Canonical key under which the v2 metadata blob lives on the schema. Kept
+# as a constant so the parity test and the JS decoder agree on it.
+CONTRACT_V2_METADATA_KEY = "tensorscope"
+CONTRACT_V2_VERSION = "2.0"
+
+# Internal attrs we never serialise into the v2 `attrs` blob — they are
+# either already represented as top-level metadata fields (display_transforms,
+# selected_time) or are bookkeeping for downstream views (spectrogram_live_meta).
+_V2_ATTRS_BLACKLIST: frozenset[str] = frozenset({
+    "display_transforms",
+    "selected_time",
+    "spectrogram_live_meta",
+})
+
+
+def _jsonable_attr(value: Any) -> Any:
+    """Coerce an xarray attr value into something json.dumps can swallow."""
+    if isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, (np.integer, int)):
+        return int(value)
+    if isinstance(value, (np.floating, float)):
+        v = float(value)
+        return v if np.isfinite(v) else None
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (list, tuple)):
+        return [_jsonable_attr(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _jsonable_attr(v) for k, v in value.items()}
+    return str(value)
+
+
+def _coord_field(dim: str, values: np.ndarray) -> tuple[pa.Field, pa.Array]:
+    """Build a single-row FixedSizeList column for one dim's coord array.
+
+    Numeric coords go out as float64 (the broadest lossless container — the
+    JS decoder turns them into a Float64Array). String/object coords go out
+    as a FixedSizeList<utf8> for parity with `dim_size`. Length is always
+    `dim_size`, so the FixedSizeList list_size matches the slice extent.
+    """
+    name = f"coords/{dim}"
+    n = int(values.size)
+    if values.dtype.kind in ("i", "u", "f"):
+        # Plain numeric — float64 keeps every probe-coord representable.
+        flat = pa.array(np.asarray(values, dtype=np.float64), type=pa.float64())
+        field = pa.field(name, pa.list_(pa.float64(), list_size=n))
+    else:
+        # Datetime, string, object — stringify defensively. Rare for our
+        # current tensors; covered so a string-keyed dim doesn't crash.
+        flat = pa.array([str(v) for v in values.tolist()], type=pa.utf8())
+        field = pa.field(name, pa.list_(pa.utf8(), list_size=n))
+    return field, pa.FixedSizeListArray.from_arrays(flat, list_size=n)
+
+
+def encode_arrow_v2(
+    data: xr.DataArray,
+    *,
+    processing: dict[str, Any] | None = None,
+    slice_provenance: dict[str, Any] | None = None,
+) -> bytes:
+    """Encode a slice as raw Arrow IPC bytes per the v2 wire contract.
+
+    The output is a single-batch IPC stream (callers send it directly as the
+    HTTP body — no base64, no JSON wrapper). Decoders read schema metadata
+    under the ``tensorscope`` key, then unpack the FixedSizeList values
+    columns. See §3.1 of docs/design/contract-v2.md.
+
+    ``processing`` and ``slice_provenance`` are passed through the slice
+    handler so the metadata blob mirrors v1's ``meta.processing`` and
+    ``meta.downsampling``. They are optional — omitted means the encoder
+    is being used outside the slice path (tests, future tooling).
+    """
+    shape = tuple(int(s) for s in data.shape)
+    n_total = int(np.prod(shape)) if shape else 1
+
+    # ── Metadata blob ───────────────────────────────────────────────────
+    units = data.attrs.get("units")
+    attrs_clean: dict[str, Any] = {}
+    for key, value in dict(data.attrs).items():
+        if key in _V2_ATTRS_BLACKLIST:
+            continue
+        attrs_clean[str(key)] = _jsonable_attr(value)
+
+    display_transforms = list(data.attrs.get("display_transforms", []) or [])
+
+    metadata: dict[str, Any] = {
+        "version": CONTRACT_V2_VERSION,
+        "dims": [str(d) for d in data.dims],
+        "shape": list(shape),
+        "dtype": "float32",
+        "units": str(units) if units is not None else None,
+        "attrs": attrs_clean,
+        "display_transforms": display_transforms,
+    }
+    if processing is not None:
+        metadata["processing"] = processing
+    if slice_provenance is not None:
+        metadata["slice_provenance"] = slice_provenance
+    # selected_time is conceptually slice provenance (which sample we
+    # snapped to); keep it readable at the top level for parity with v1's
+    # meta.selected_time field.
+    if "selected_time" in data.attrs:
+        metadata["selected_time"] = _jsonable_attr(data.attrs["selected_time"])
+
+    schema_metadata = {
+        CONTRACT_V2_METADATA_KEY.encode("ascii"): json.dumps(
+            metadata, separators=(",", ":"), default=str,
+        ).encode("utf-8"),
+    }
+
+    # ── Field layout ────────────────────────────────────────────────────
+    # data: FixedSizeList<float32, prod(shape)> with one row containing the
+    # full row-major value cube. NaN survives the float32 cast.
+    flat_vals = np.ascontiguousarray(data.values, dtype=np.float32).reshape(-1)
+    if flat_vals.size != n_total:
+        # Defensive: shape() and ravel() should agree, but if the underlying
+        # array is somehow non-contiguous + odd-shaped, reshape catches it.
+        raise ValueError(
+            f"encode_arrow_v2: ravel mismatch (got {flat_vals.size}, expected {n_total})"
+        )
+    data_inner = pa.array(flat_vals, type=pa.float32())
+    data_field = pa.field("data", pa.list_(pa.float32(), list_size=n_total))
+    data_arr = pa.FixedSizeListArray.from_arrays(data_inner, list_size=n_total)
+
+    fields: list[pa.Field] = [data_field]
+    arrays: list[pa.Array] = [data_arr]
+    for dim in data.dims:
+        if dim not in data.coords:
+            continue
+        coord_vals = np.asarray(data.coords[dim].values)
+        field, arr = _coord_field(str(dim), coord_vals)
+        fields.append(field)
+        arrays.append(arr)
+
+    schema = pa.schema(fields, metadata=schema_metadata)
+    batch = pa.RecordBatch.from_arrays(arrays, schema=schema)
+
+    sink = BytesIO()
+    with pa_ipc.new_stream(sink, schema) as writer:
+        writer.write_batch(batch)
+    return sink.getvalue()
 
 
 def brainstate_intervals(
