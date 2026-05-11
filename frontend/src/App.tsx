@@ -14,6 +14,7 @@ import { ExploreTabContent } from "./components/layout/ExploreTabContent";
 import { EventsTabContent } from "./components/layout/EventsTabContent";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
 import { useEventNavigation } from "./components/views/useEventNavigation";
+import { useEventReviewShortcuts } from "./components/views/useEventReviewShortcuts";
 import { useAppStore } from "./store/appStore";
 import { useSelectionStore, toSelectionDTO } from "./store/selectionStore";
 
@@ -102,6 +103,17 @@ function App() {
     [firstEventStream, selectionState.timeCursor, selectionDraft, eventNav], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
+  // Global keyboard shortcuts for event review (j/k prev/next, y/n/m/u
+  // accept/reject/maybe/clear). Bails when focus is in an input. See
+  // `docs/design/event-review.md`.
+  useEventReviewShortcuts({
+    tensorName: selectedTensor,
+    streamName: firstEventStream?.name ?? null,
+    currentEventId: eventNav.selectedEventId,
+    goPrev: () => goToEvent("prev"),
+    goNext: () => goToEvent("next"),
+  });
+
   if (stateQuery.isLoading || !stateQuery.data || !layoutDraft) {
     return <div className="empty-state">Connecting to TensorScope API…</div>;
   }
@@ -133,6 +145,7 @@ function App() {
             }
             eventsContent={
               <EventsTabContent
+                tensorName={selectedTensor}
                 streamMeta={firstEventStream}
                 events={eventWindowQuery.data ?? []}
                 selectedTime={selectionState.timeCursor}

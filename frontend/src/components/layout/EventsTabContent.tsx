@@ -8,6 +8,8 @@ import { EventTableView } from "../views/EventTableView";
 import type { EventRecordDTO, EventStreamMetaDTO } from "../../api/types";
 
 type EventsTabContentProps = {
+  /** Active tensor name — needed by the table to scope review decisions. */
+  tensorName: string | null;
   streamMeta: EventStreamMetaDTO | null;
   events: EventRecordDTO[];
   selectedTime: number;
@@ -19,6 +21,7 @@ type EventsTabContentProps = {
 };
 
 export function EventsTabContent({
+  tensorName,
   streamMeta,
   events,
   selectedTime,
@@ -30,6 +33,7 @@ export function EventsTabContent({
 }: EventsTabContentProps) {
   return (
     <EventTableView
+      tensorName={tensorName}
       streamMeta={streamMeta}
       events={events}
       selectedTime={selectedTime}
