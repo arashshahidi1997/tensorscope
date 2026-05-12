@@ -1113,6 +1113,30 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
 }
 .ts-focus-clear:hover { color: #f47174; }
 
+/* Bokeh-style cross-view crosshair overlay. Lives as a sibling of the
+ * chart canvas; positioned relative to the chart wrapper. The thin grey
+ * line is always 1 px so it doesn't blur. */
+.crosshair-vline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(229, 192, 123, 0.75);
+  pointer-events: none;
+  z-index: 4;
+  transform: translateX(-0.5px);
+}
+.crosshair-hline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: rgba(229, 192, 123, 0.75);
+  pointer-events: none;
+  z-index: 4;
+  transform: translateY(-0.5px);
+}
+
 .settings-overlay {
   position: fixed;
   inset: 0;

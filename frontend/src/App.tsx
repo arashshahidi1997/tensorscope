@@ -16,6 +16,7 @@ import { EventsTabContent } from "./components/layout/EventsTabContent";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
 import { useEventNavigation } from "./components/views/useEventNavigation";
 import { useEventReviewShortcuts } from "./components/views/useEventReviewShortcuts";
+import { useGestureShortcuts } from "./components/views/useGestureShortcuts";
 import { buildStreamColorMap } from "./components/views/eventStreamColors";
 import { useAppStore } from "./store/appStore";
 import { useEventStreamsStore } from "./store/eventStreamsStore";
@@ -172,6 +173,10 @@ function App() {
     goPrev: () => goToEvent("prev"),
     goNext: () => goToEvent("next"),
   });
+
+  // Bokeh-style gesture shortcuts: p/b/s switch the active drag tool,
+  // w toggles wheel-zoom, c toggles the crosshair inspector.
+  useGestureShortcuts();
 
   if (stateQuery.isLoading || !stateQuery.data || !layoutDraft) {
     return <div className="empty-state">Connecting to TensorScope API…</div>;

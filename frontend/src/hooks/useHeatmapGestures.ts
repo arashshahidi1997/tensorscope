@@ -1,4 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useGestureStore, type DragTool, type ScrollTool } from "../store/gestureStore";
+import { useHoverStore } from "../store/hoverStore";
+
+// Same legacy-vocab bridge as `useChartTools`. The heatmap-side mouse
+// handlers only care about "is the user currently dragging-to-pan or
+// dragging-to-zoom" — box_select isn't wired yet in the canvas backends.
+function dragToTool(d: DragTool): "zoom" | "pan" {
+  return d === "pan" ? "pan" : "zoom";
+}
+function toolToDrag(t: "zoom" | "pan"): DragTool {
+  return t === "pan" ? "pan" : "box_zoom";
+}
+function scrollToWheelZoom(s: ScrollTool): boolean {
+  return s === "wheel_zoom";
+}
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -48,11 +63,26 @@ export function useHeatmapGestures(opts: HeatmapGestureOptions): HeatmapGestureR
   const extXLo = externalXRange?.[0];
   const extXHi = externalXRange?.[1];
 
-  // Tool state
-  const [activeTool, setActiveTool] = useState<"zoom" | "pan">("zoom");
-  const [wheelZoom, setWheelZoom] = useState(true);
-  const toolRef = useRef<"zoom" | "pan">("zoom");
-  const wheelZoomRef = useRef(true);
+  // Gesture tools live in the shared gestureStore — same state powers
+  // the timeseries view, so "pan" picked in the timeseries toolbar
+  // applies on the heatmap and vice versa. See
+  // `frontend/src/store/gestureStore.ts`.
+  const drag = useGestureStore((s) => s.drag);
+  const scroll = useGestureStore((s) => s.scroll);
+  const setDrag = useGestureStore((s) => s.setDrag);
+  const setScroll = useGestureStore((s) => s.setScroll);
+  const activeTool = dragToTool(drag);
+  const wheelZoom = scrollToWheelZoom(scroll);
+  const setActiveTool = useCallback(
+    (t: "zoom" | "pan") => setDrag(toolToDrag(t)),
+    [setDrag],
+  );
+  const setWheelZoom = useCallback(
+    (v: boolean) => setScroll(v ? "wheel_zoom" : "off"),
+    [setScroll],
+  );
+  const toolRef = useRef<"zoom" | "pan">(activeTool);
+  const wheelZoomRef = useRef(wheelZoom);
   useEffect(() => { toolRef.current = activeTool; }, [activeTool]);
   useEffect(() => { wheelZoomRef.current = wheelZoom; }, [wheelZoom]);
 
@@ -248,7 +278,30 @@ export function useHeatmapGestures(opts: HeatmapGestureOptions): HeatmapGestureR
       onXRangeChangeRef.current?.([newXLo, newXHi]);
     };
 
+    // Publish the hover position to the shared store so other views
+    // can draw a Bokeh-style crosshair at this (time, freq). Throttled
+    // implicitly by the browser's mousemove fire rate; the store update
+    // is `set()` so subscribers only re-render on actual change.
+    const onCanvasHover = (e: MouseEvent) => {
+      const r = canvas.getBoundingClientRect();
+      const vp = viewportRef.current;
+      const xFrac = (e.clientX - r.left) / r.width;
+      const yFrac = (e.clientY - r.top) / r.height;
+      if (xFrac < 0 || xFrac > 1 || yFrac < 0 || yFrac > 1) return;
+      const time = vp.xLo + xFrac * (vp.xHi - vp.xLo);
+      const freq = vp.yHi - yFrac * (vp.yHi - vp.yLo); // top = yHi
+      useHoverStore.setState({
+        hoverTime: Number.isFinite(time) ? time : null,
+        hoverFreq: Number.isFinite(freq) ? freq : null,
+      });
+    };
+    const onCanvasLeave = () => {
+      useHoverStore.setState({ hoverTime: null, hoverFreq: null });
+    };
+
     canvas.addEventListener("mousedown", onMouseDown);
+    canvas.addEventListener("mousemove", onCanvasHover);
+    canvas.addEventListener("mouseleave", onCanvasLeave);
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
     canvas.addEventListener("wheel", onWheel, { passive: false });
@@ -256,6 +309,8 @@ export function useHeatmapGestures(opts: HeatmapGestureOptions): HeatmapGestureR
 
     return () => {
       canvas.removeEventListener("mousedown", onMouseDown);
+      canvas.removeEventListener("mousemove", onCanvasHover);
+      canvas.removeEventListener("mouseleave", onCanvasLeave);
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
       canvas.removeEventListener("wheel", onWheel);

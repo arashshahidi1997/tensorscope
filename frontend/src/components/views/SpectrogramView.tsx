@@ -4,6 +4,7 @@ import { useHeatmapGestures } from "../../hooks/useHeatmapGestures";
 import { useAppStore } from "../../store/appStore";
 import type { SliceViewProps } from "./viewTypes";
 import { XTicks, YTicks } from "./AxisTicks";
+import { CrosshairOverlay } from "./CrosshairOverlay";
 import { TimeScaleBar } from "./ChartToolbar";
 import { getColormapLUT } from "./colormaps";
 
@@ -236,6 +237,8 @@ export function SpectrogramView({
               }}
             />
           )}
+          {/* Cross-view hover crosshair (Bokeh-style inspector). */}
+          <CrosshairOverlay tLo={tLo} tHi={tHi} fLo={fLo} fHi={fHi} freqLog={freqLogScale} />
         </div>
         <XTicks lo={tLo} hi={tHi} />
         <div className="axis-x-label">Time (s)</div>

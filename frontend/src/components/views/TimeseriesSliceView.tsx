@@ -6,6 +6,7 @@ import { buildRegionResolver } from "../../api/probeLayout";
 import { useProbeLayoutQuery } from "../../api/queries";
 import { useAppStore, type BandPreset } from "../../store/appStore";
 import { useChannelViewportShortcuts } from "./useChannelViewportShortcuts";
+import { CrosshairOverlay } from "./CrosshairOverlay";
 import type { BrainstateIntervalDTO, EventRecordDTO } from "../../api/types";
 import type { SliceViewProps } from "./viewTypes";
 import { ChartToolbar } from "./ChartToolbar";
@@ -996,11 +997,19 @@ export function TimeseriesSliceView({
         </div>
       )}
       <div
+        className="uplot-crosshair-host"
+        style={{ position: "relative", flex: 1, minHeight: 0 }}
+      >
+        <div
         ref={containerRef}
         className="uplot-wrap"
-        style={{ flex: 1, minHeight: 0 }}
+        style={{ width: "100%", height: "100%" }}
         title={`${series.length} ch \u00B7 ${times.length} samples`}
       />
+        {timeWindow && (
+          <CrosshairOverlay tLo={timeWindow[0]} tHi={timeWindow[1]} />
+        )}
+      </div>
       {dataRange && timeWindow && selection && (
         <TimeseriesNavStrip
           dataRange={dataRange}

@@ -4,6 +4,7 @@ import { useHeatmapGestures } from "../../hooks/useHeatmapGestures";
 import { useAppStore } from "../../store/appStore";
 import { YTicks } from "./AxisTicks";
 import { ColorBar } from "./ColorBar";
+import { CrosshairOverlay } from "./CrosshairOverlay";
 import { getColormapLUT } from "./colormaps";
 
 type PSDHeatmapProps = {
@@ -302,6 +303,8 @@ export function PSDHeatmapView({
         <YTicks lo={vpFLo} hi={vpFHi} logScale={freqLogScale} />
         <div ref={containerRef} className="axis-canvas-area">
           <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%", cursor: "crosshair" }} />
+          {/* Frequency-only crosshair (X axis is channel, no time). */}
+          <CrosshairOverlay tLo={0} tHi={1} fLo={vpFLo} fHi={vpFHi} freqLog={freqLogScale} />
         </div>
         <div className="axis-x-ticks" />
         <div className="axis-x-label">Channel</div>

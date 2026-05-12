@@ -21,9 +21,24 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type uPlot from "uplot";
+import { useGestureStore, type DragTool, type ScrollTool } from "../../store/gestureStore";
 
 export type GestureTool = "pan" | "zoom";
 export type YMode = "auto" | "fixed" | "fit";
+
+// Lossy bridge: the chart toolbar API still uses "pan" | "zoom" (legacy
+// vocabulary) but the global store has the full Bokeh-style drag set.
+// `box_select` falls through to "zoom" until the timeseries view grows
+// a selection-region overlay (follow-up).
+function dragToTool(d: DragTool): GestureTool {
+  return d === "pan" ? "pan" : "zoom";
+}
+function toolToDrag(t: GestureTool): DragTool {
+  return t === "pan" ? "pan" : "box_zoom";
+}
+function scrollToWheelZoom(s: ScrollTool): boolean {
+  return s === "wheel_zoom";
+}
 
 export type ChartToolsResult = {
   activeTool: GestureTool;
@@ -50,14 +65,32 @@ export type ChartToolsResult = {
 export function useChartTools(
   chartRef: React.RefObject<uPlot | null>,
 ): ChartToolsResult {
-  const [activeTool, setActiveTool] = useState<GestureTool>("zoom");
-  const [wheelZoom, setWheelZoom] = useState(true);
+  // Gesture tools live in the shared gestureStore so a single toolbar
+  // applies across timeseries, spectrogram, PSD-heatmap, etc. Y-mode
+  // stays local — it's a per-chart config, not a gesture.
+  const drag = useGestureStore((s) => s.drag);
+  const scroll = useGestureStore((s) => s.scroll);
+  const setDrag = useGestureStore((s) => s.setDrag);
+  const setScroll = useGestureStore((s) => s.setScroll);
+
+  const activeTool = dragToTool(drag);
+  const wheelZoom = scrollToWheelZoom(scroll);
+
+  const setActiveTool = useCallback(
+    (t: GestureTool) => setDrag(toolToDrag(t)),
+    [setDrag],
+  );
+  const toggleWheelZoom = useCallback(
+    () => setScroll(scroll === "wheel_zoom" ? "off" : "wheel_zoom"),
+    [setScroll, scroll],
+  );
+
   const [yMode, setYMode] = useState<YMode>("auto");
 
   // Mirror state into refs so gesture handlers always read current values
   // without requiring chart recreation when tool changes.
-  const toolRef = useRef<GestureTool>("zoom");
-  const wheelZoomRef = useRef(true);
+  const toolRef = useRef<GestureTool>(activeTool);
+  const wheelZoomRef = useRef(wheelZoom);
   const yModeRef = useRef<YMode>("auto");
   useEffect(() => { toolRef.current = activeTool; }, [activeTool]);
   useEffect(() => { wheelZoomRef.current = wheelZoom; }, [wheelZoom]);
@@ -77,8 +110,6 @@ export function useChartTools(
     if (!chart || !init) return;
     chart.setScale("x", { min: init.min, max: init.max });
   }, [chartRef]);
-
-  const toggleWheelZoom = useCallback(() => setWheelZoom((v) => !v), []);
 
   return {
     activeTool,

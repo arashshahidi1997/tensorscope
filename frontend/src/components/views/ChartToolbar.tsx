@@ -1,11 +1,17 @@
 /**
  * ChartToolbar — gesture mode controls for a uPlot timeseries chart.
  *
- * Purely presentational. All state lives in useChartTools and is passed in
- * as props, so the toolbar never influences the chart lifecycle.
+ * Purely presentational. All state lives in useChartTools (which proxies
+ * the global gestureStore) and is passed in as props, so the toolbar
+ * never influences the chart lifecycle.
+ *
+ * The drag / scroll / inspect controls follow Bokeh's category model:
+ * one active drag tool, one active scroll tool, zero-or-more inspectors.
+ * https://docs.bokeh.org/en/latest/docs/user_guide/interaction/tools.html
  */
 import { useEffect, useRef, useState } from "react";
 import type { GestureTool, YMode } from "./useChartTools";
+import { hasInspector, useGestureStore } from "../../store/gestureStore";
 
 export const TIME_SCALES = [
   { label: "10ms", seconds: 0.01 },
@@ -39,27 +45,42 @@ export function ChartToolbar({
   yMode,
   onSetYMode,
 }: ChartToolbarProps) {
+  const inspectors = useGestureStore((s) => s.inspectors);
+  const toggleInspector = useGestureStore((s) => s.toggleInspector);
+  const crosshairOn = hasInspector(inspectors, "crosshair");
   return (
     <div className="ts-toolbar">
+      {/* Drag tools — one active. */}
       <button
         type="button"
         className={`ts-tool${activeTool === "zoom" ? " active" : ""}`}
-        title="Box Zoom — drag to zoom a region"
+        title="Box zoom (b) — drag to zoom a region"
         onClick={() => onSetTool("zoom")}
       >&#x229E;</button>
       <button
         type="button"
         className={`ts-tool${activeTool === "pan" ? " active" : ""}`}
-        title="Pan — drag to scroll"
+        title="Pan (p) — drag to scroll"
         onClick={() => onSetTool("pan")}
       >&#x27FA;</button>
+      <div className="ts-toolbar-sep" />
+      {/* Scroll tool — wheel zoom on/off. */}
       <button
         type="button"
         className={`ts-tool${wheelZoom ? " active" : ""}`}
-        title={`Wheel Zoom ${wheelZoom ? "(ON)" : "(OFF)"} — scroll to zoom at cursor`}
+        title={`Wheel zoom (w) ${wheelZoom ? "ON" : "OFF"} — scroll to zoom at cursor`}
         onClick={onToggleWheelZoom}
       >&#x2299;</button>
       <div className="ts-toolbar-sep" />
+      {/* Inspectors — multiple may stack. */}
+      <button
+        type="button"
+        className={`ts-tool${crosshairOn ? " active" : ""}`}
+        title={`Crosshair (c) ${crosshairOn ? "ON" : "OFF"} — show a synchronised cursor across linked views`}
+        onClick={() => toggleInspector("crosshair")}
+      >&#xFF0B;</button>
+      <div className="ts-toolbar-sep" />
+      {/* Y-axis modes — chart-local, not a gesture. */}
       <button
         type="button"
         className={`ts-tool${yMode === "auto" ? " active" : ""}`}
@@ -79,10 +100,11 @@ export function ChartToolbar({
         onClick={() => onSetYMode("fit")}
       >&#x21D5;</button>
       <div className="ts-toolbar-sep" />
+      {/* Reset action. */}
       <button
         type="button"
         className="ts-tool"
-        title="Reset view"
+        title="Reset view (r)"
         onClick={onReset}
       >&#x21BA;</button>
     </div>
