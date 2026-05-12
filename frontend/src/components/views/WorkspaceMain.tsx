@@ -42,7 +42,7 @@ import {
   type PSDHeatmapData,
   type Spectrogram,
 } from "../../api/arrow";
-import type { SelectionDTO } from "../../api/types";
+import type { SelectionDTO, TensorSliceRequestDTO } from "../../api/types";
 import { resolveBand, useAppStore } from "../../store/appStore";
 import { useSelectionStore, toSelectionDTO } from "../../store/selectionStore";
 import { getAvailableViews, getOrthoPair, viewRegistry } from "../../registry/viewRegistry";
@@ -115,6 +115,8 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     freqLogScale,
     bandPreset,
     bandCustom,
+    focusChannel,
+    setFocusChannel,
     workspaceObjects,
     setWorkspaceObjects,
     setObjectVisible,
@@ -175,6 +177,34 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   }, [stateQuery.data?.tensors, setWorkspaceObjects]);
 
   const tensorQuery = useTensorQuery(selectedTensor);
+
+  // Escape clears the focus-channel mode globally. Bails inside inputs so
+  // hitting Escape to close a popover (event annotation) doesn't also
+  // exit focus.
+  useEffect(() => {
+    if (!focusChannel) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t instanceof HTMLElement &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT" ||
+          t.isContentEditable)
+      ) return;
+      setFocusChannel(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [focusChannel, setFocusChannel]);
+
+  // Switching tensors clears any stale focus — `ap=5, ml=3` only means
+  // something for the tensor whose grid you clicked on.
+  useEffect(() => {
+    setFocusChannel(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTensor]);
 
   // Derive available views from stateQuery immediately (no waterfall) and
   // fall back to the richer tensorQuery once it resolves.
@@ -248,9 +278,31 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     eventsByStream,
   ]);
 
+  /**
+   * Focus-channel restriction. When the reviewer has clicked a spatial
+   * cell, both the timeseries and spectrogram_live should drill into
+   * that single (AP, ML) cell rather than show all 256 channels. Server
+   * `ap_range`/`ml_range` are inclusive `[lo, hi]`, so a one-cell range
+   * is `[ap, ap]`. Single-channel `(channel,)` tensors don't have AP/ML
+   * dims; the server ignores the params and the focus mode is a no-op.
+   */
+  const withFocus = useCallback(
+    <T extends TensorSliceRequestDTO | null>(req: T): T => {
+      if (!req || !focusChannel) return req;
+      return {
+        ...req,
+        ap_range: [focusChannel.ap, focusChannel.ap],
+        ml_range: [focusChannel.ml, focusChannel.ml],
+      } as T;
+    },
+    [focusChannel],
+  );
+
   const timeseriesSliceQuery = useSliceQuery(
     selectedTensor,
-    hasTimeseries ? makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow) : null,
+    hasTimeseries
+      ? withFocus(makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow))
+      : null,
   );
   const spatialSliceQuery = useSliceQuery(
     selectedTensor,
@@ -304,7 +356,9 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   // x-axis tracks the timeseries / navigator visible range.
   const spectrogramLiveQuery = useSliceQuery(
     selectedTensor,
-    hasSpectrogramLive ? makeSpectrogramLiveRequest(selectionDraft, safeWindow) : null,
+    hasSpectrogramLive
+      ? withFocus(makeSpectrogramLiveRequest(selectionDraft, safeWindow))
+      : null,
   );
   const navigatorSliceQuery = useSliceQuery(
     selectedTensor,
@@ -318,14 +372,14 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const timeseriesV2Query = useV2TimeseriesQuery(
     selectedTensor,
     hasTimeseries && v2Enabled
-      ? makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow)
+      ? withFocus(makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow))
       : null,
     "Timeseries",
   );
   const spectrogramLiveV2Query = useV2SpectrogramQuery(
     selectedTensor,
     hasSpectrogramLive && v2Enabled
-      ? makeSpectrogramLiveRequest(selectionDraft, safeWindow)
+      ? withFocus(makeSpectrogramLiveRequest(selectionDraft, safeWindow))
       : null,
     "SpectrogramLive",
   );
@@ -343,10 +397,10 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const activeBand = resolveBand(bandPreset, bandCustom);
   const bandpassRequest =
     hasTimeseries && v2Enabled && activeBand
-      ? {
+      ? withFocus({
           ...makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow),
           bandpass: { lo_hz: activeBand[0], hi_hz: activeBand[1] },
-        }
+        })
       : null;
   const timeseriesBandpassQuery = useV2TimeseriesQuery(
     selectedTensor,
@@ -524,6 +578,8 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         v2BandpassData={v2BandpassData}
         bandPreset={bandPreset}
         bandActive={activeBand}
+        focusChannel={focusChannel}
+        onClearFocusChannel={() => setFocusChannel(null)}
         selection={selectionDraft}
         eventsByStream={eventsByStream}
         streamColors={streamColorsMap}
@@ -545,9 +601,14 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       <SpatialMapComponent
         slice={spatialSliceQuery.data}
         selection={selectionDraft}
-        onSelectCell={(ap, ml) =>
-          onCommitSelection({ ...selectionDraft, ap, ml, channel: null })
-        }
+        onSelectCell={(ap, ml) => {
+          // Drilling down: enter focus mode AND move the cursor. The
+          // timeseries + spectrogram_live slices pick up `focusChannel`
+          // via `withFocus()` and restrict to this single cell. Escape
+          // / "✕" in the focus banner clears it.
+          setFocusChannel({ ap, ml });
+          onCommitSelection({ ...selectionDraft, ap, ml, channel: null });
+        }}
         onHoverElectrode={setHoveredElectrode}
       />
     ) : (
@@ -561,9 +622,10 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         tensorName={selectedTensor}
         timeCoord={timeCoord}
         selectionDraft={selectionDraft}
-        onSelectCell={(ap, ml) =>
-          onCommitSelection({ ...selectionDraft, ap, ml, channel: null })
-        }
+        onSelectCell={(ap, ml) => {
+          setFocusChannel({ ap, ml });
+          onCommitSelection({ ...selectionDraft, ap, ml, channel: null });
+        }}
         onHoverElectrode={setHoveredElectrode}
       />
     );
@@ -694,9 +756,13 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
           decoded={decoded}
           selectedFreq={selectionDraft.freq}
           onSelectFreq={handleSelectFreq}
-          onSelectCell={(ap, ml) =>
-            onCommitSelection({ ...selectionDraft, ap, ml, channel: null })
-          }
+          onSelectCell={(ap, ml) => {
+            // PSD-spatial map: same drill-down behaviour as the main
+            // spatial map. The reviewer picked the cell whose PSD they
+            // want to dig into — show that one channel everywhere.
+            setFocusChannel({ ap, ml });
+            onCommitSelection({ ...selectionDraft, ap, ml, channel: null });
+          }}
         />
       );
     } else {

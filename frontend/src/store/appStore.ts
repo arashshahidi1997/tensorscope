@@ -57,6 +57,14 @@ type AppStore = {
    * `docs/design/channel-viewport.md` G2.
    */
   tsFirstChannel: number;
+  /**
+   * "Focus on one channel" mode for the timeseries + spectrogram_live
+   * views. When non-null, both views slice with ap_range/ml_range
+   * restricted to this single cell — the reviewer clicked a spatial
+   * cell to drill into that electrode's trace + spectrogram. Click
+   * another cell to swap, hit Escape to clear.
+   */
+  focusChannel: { ap: number; ml: number } | null;
   workspaceObjects: WorkspaceObject[];
   setWorkspaceObjects: (objs: WorkspaceObject[]) => void;
   setObjectVisible: (id: string, visible: boolean) => void;
@@ -85,6 +93,8 @@ type AppStore = {
    */
   scrollChannels: (delta: number, total: number, nVisible: number) => void;
   setTsFirstChannel: (idx: number) => void;
+  /** Enter / leave focus-channel mode. Pass `null` to clear. */
+  setFocusChannel: (coord: { ap: number; ml: number } | null) => void;
 };
 
 export type BandPreset = "off" | "spindle" | "ripple" | "slow" | "custom";
@@ -174,4 +184,6 @@ export const useAppStore = create<AppStore>((set) => ({
       const next = Math.max(0, Math.min(maxStart, s.tsFirstChannel + delta));
       return next === s.tsFirstChannel ? s : { tsFirstChannel: next };
     }),
+  focusChannel: null,
+  setFocusChannel: (coord) => set({ focusChannel: coord }),
 }));

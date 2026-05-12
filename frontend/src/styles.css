@@ -1084,6 +1084,35 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
   font-size: 10.5px;
 }
 
+/* Focus banner — appears in the band-picker strip when the reviewer
+ * has drilled into a single (AP, ML) cell via a spatial-map click. */
+.ts-focus-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid #d29922;
+  border-radius: 3px;
+  background: color-mix(in srgb, #d29922 14%, transparent);
+  color: #d29922;
+  font-weight: 600;
+}
+.ts-focus-label { font-weight: 600; }
+.ts-focus-coord {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+}
+.ts-focus-clear {
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 2px;
+}
+.ts-focus-clear:hover { color: #f47174; }
+
 .settings-overlay {
   position: fixed;
   inset: 0;

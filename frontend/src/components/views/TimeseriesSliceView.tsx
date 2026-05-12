@@ -237,6 +237,8 @@ export function TimeseriesSliceView({
   slice,
   v2Data,
   v2BandpassData,
+  focusChannel,
+  onClearFocusChannel,
   bandPreset,
   bandActive,
   selection,
@@ -259,6 +261,13 @@ export function TimeseriesSliceView({
   v2BandpassData?: ColumnarTimeseries | null;
   bandPreset?: BandPreset;
   bandActive?: [number, number] | null;
+  /**
+   * When the reviewer has drilled into a single (AP, ML) electrode via a
+   * spatial-map click, this carries that cell. Renders a small "Focus:
+   * AP=… ML=… ✕" banner the user can dismiss with Escape or the button.
+   */
+  focusChannel?: { ap: number; ml: number } | null;
+  onClearFocusChannel?: () => void;
   /**
    * Multi-stream event overlay (G5). When supplied, replaces the single-
    * stream `events` prop for marker drawing; the per-stream color comes
@@ -961,6 +970,18 @@ export function TimeseriesSliceView({
         onSetYMode={tools.setYMode}
       />
       <BandPickerInline bandPreset={bandPreset ?? "off"} bandActive={bandActive ?? null}>
+        {focusChannel && (
+          <span className="ts-focus-banner" data-testid="ts-focus-banner">
+            <span className="ts-focus-label">Focus:</span>
+            <span className="ts-focus-coord">AP={focusChannel.ap} ML={focusChannel.ml}</span>
+            <button
+              type="button"
+              className="ts-focus-clear"
+              title="Exit focus mode (Esc)"
+              onClick={() => onClearFocusChannel?.()}
+            >×</button>
+          </span>
+        )}
         <ChannelViewportInline
           firstChannel={firstChannel}
           nVisible={Math.min(N_VISIBLE, series.length)}
