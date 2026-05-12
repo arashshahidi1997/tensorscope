@@ -224,6 +224,71 @@ def test_spectrogram_live_auto_shrinks_nperseg_in_meta() -> None:
     assert da.attrs["spectrogram_live_fs"] == pytest.approx(1000.0)
 
 
+# ── time-segment cap ─────────────────────────────────────────────────────
+
+
+def test_spectrogram_live_segment_cap_widens_hop_on_long_window() -> None:
+    """A long window with high overlap would emit thousands of segments;
+    max_time_segments caps the count by widening the hop. Default cap is 200."""
+    signal = _make_signal(n_time=40_000, fs=1000.0)
+    from tensorscope.server.state import apply_slice_request
+    request = TensorSliceRequestDTO(
+        view_type="spectrogram_live",
+        selection=SelectionDTO(time=20.0, freq=10.0, ap=0, ml=0),
+        time_range=(0.0, 40.0),
+        # default max_time_segments=200, default 95% overlap → would emit ~780
+    )
+    da = apply_slice_request(signal, request)
+    n_segs = da.attrs["spectrogram_live_n_time_segments"]
+    assert n_segs <= 200
+    # Cap kicked in → effective overlap dropped below the 95% request, so
+    # noverlap < ceil(nperseg * 0.95).
+    nperseg = da.attrs["spectrogram_live_nperseg"]
+    noverlap = da.attrs["spectrogram_live_noverlap"]
+    assert noverlap < int(round(nperseg * 0.95))
+
+
+def test_spectrogram_live_segment_cap_passthrough_on_short_window() -> None:
+    """When the natural segment count is below the cap, the cap is a no-op
+    and the requested noverlap is preserved."""
+    signal = _make_signal(n_time=4000, fs=1000.0)
+    from tensorscope.server.state import apply_slice_request
+    request = TensorSliceRequestDTO(
+        view_type="spectrogram_live",
+        selection=SelectionDTO(time=2.0, freq=10.0, ap=0, ml=0),
+        time_range=(0.0, 4.0),
+        spectrogram_live_params=SpectrogramLiveParamsDTO(
+            nperseg_s=1.0, noverlap_pct=95.0, max_time_segments=200,
+        ),
+    )
+    da = apply_slice_request(signal, request)
+    n_segs = da.attrs["spectrogram_live_n_time_segments"]
+    assert n_segs <= 200
+    # 4 s / 0.05 s hop → ~61 segments, well below the cap → keep the 95% overlap.
+    nperseg = da.attrs["spectrogram_live_nperseg"]
+    noverlap = da.attrs["spectrogram_live_noverlap"]
+    assert noverlap == int(round(nperseg * 0.95))
+
+
+def test_spectrogram_live_segment_cap_disabled_with_none() -> None:
+    """max_time_segments=None disables the cap; segment count tracks the
+    natural (window, nperseg, overlap) combination."""
+    signal = _make_signal(n_time=20_000, fs=1000.0)
+    from tensorscope.server.state import apply_slice_request
+    request = TensorSliceRequestDTO(
+        view_type="spectrogram_live",
+        selection=SelectionDTO(time=10.0, freq=10.0, ap=0, ml=0),
+        time_range=(0.0, 20.0),
+        spectrogram_live_params=SpectrogramLiveParamsDTO(
+            nperseg_s=1.0, noverlap_pct=95.0, max_time_segments=None,
+        ),
+    )
+    da = apply_slice_request(signal, request)
+    # 20 s window, 1 s nperseg, 95% overlap → hop=50 ms → ~381 segments.
+    n_segs = da.attrs["spectrogram_live_n_time_segments"]
+    assert n_segs > 200
+
+
 # ── view registry ────────────────────────────────────────────────────────
 
 

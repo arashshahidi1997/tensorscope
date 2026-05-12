@@ -8,6 +8,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -17,6 +18,7 @@ import xarray as xr
 
 from tensorscope.core.events import EventRegistry, EventStream
 from tensorscope.core.layout import LayoutManager
+from tensorscope.core.probe_layout import ProbeLayout
 from tensorscope.core.state import SelectionState, TensorNode, TensorScopeState, Viewport
 from tensorscope.core.transforms import TransformCache, TransformExecutor, TransformRegistry, WorkspaceDAG
 from tensorscope.core.transforms.builtins import register_builtins
@@ -25,9 +27,11 @@ from tensorscope.core.transforms.model import DerivedTensor
 from tensorscope.server.models import (
     CoordSummaryDTO,
     DownsampleMethod,
+    ElectrodeDTO,
     ElectrodeLayoutDTO,
     EventStreamMetaDTO,
     LayoutDTO,
+    ProbeLayoutDTO,
     ProcessingParamsDTO,
     SelectionDTO,
     StateDTO,
@@ -41,8 +45,8 @@ from tensorscope.server.models import (
 
 _INLINE_COORD_LIMIT = 32
 _VIEW_REGISTRY: dict[frozenset[str], list[str]] = {
-    frozenset({"time", "AP", "ML"}): ["timeseries", "spatial_map", "propagation_frame", "propagation_movie", "navigator", "psd_live", "spectrogram_live"],
-    frozenset({"time", "channel"}): ["timeseries", "navigator", "psd_live", "spectrogram_live"],
+    frozenset({"time", "AP", "ML"}): ["timeseries", "spatial_map", "propagation_frame", "propagation_movie", "navigator", "psd_live", "spectrogram_live", "event_average"],
+    frozenset({"time", "channel"}): ["timeseries", "navigator", "psd_live", "spectrogram_live", "event_average"],
     frozenset({"time", "freq", "AP", "ML"}): ["spectrogram", "psd_spatial"],
     frozenset({"time", "freq", "channel"}): ["spectrogram", "psd_average"],
 }
@@ -64,6 +68,15 @@ class ServerState:
     layout: LayoutManager
     events: EventRegistry
     brainstates: xr.DataArray | None = None
+    # G7: per-electrode region annotations loaded from a sidecar JSON file.
+    # None when no sidecar accompanied the dataset — the /probe_layout
+    # endpoint returns 404 in that case and the frontend renders unchanged.
+    probe_layout: ProbeLayout | None = None
+    # G9: directory the dataset was loaded from. Used as the destination
+    # for review-decision exports (``<dataset_dir>/review/...``). None when
+    # the server was constructed from an in-memory DataArray (tests, demos)
+    # — review export then returns 403.
+    dataset_dir: Path | None = None
     processing: ProcessingParamsDTO = None  # type: ignore[assignment]
     transform_registry: TransformRegistry = None  # type: ignore[assignment]
     _transform_executor: TransformExecutor = None  # type: ignore[assignment]
@@ -201,6 +214,25 @@ class ServerState:
             self.channel_masks.pop(tensor_name, None)
         return self.channel_mask_for(tensor_name)
 
+    def probe_layout_dto(self) -> ProbeLayoutDTO | None:
+        """Serialise the loaded probe layout, or None if no sidecar was found."""
+        layout = self.probe_layout
+        if layout is None:
+            return None
+        return ProbeLayoutDTO(
+            n_channels=layout.n_channels,
+            electrodes=[
+                ElectrodeDTO(
+                    region=el.region,
+                    channel_id=el.channel_id,
+                    ap=el.ap,
+                    ml=el.ml,
+                    label=el.label,
+                )
+                for el in layout.electrodes
+            ],
+        )
+
     def electrode_layout(self, name: str) -> ElectrodeLayoutDTO:
         """Extract electrode layout from a tensor's AP/ML coordinates.
 
@@ -294,6 +326,29 @@ class ServerState:
             data = node.data
         processing_error = self._processing_errors.get(name)
         masked_ids = self.channel_masks.get(name, [])
+        if request.view_type == "event_average":
+            # event_average sources from the FULL tensor (not a time-windowed
+            # view) since the lag windows are anchored at event onsets that
+            # span the recording. apply_slice_request's time/freq windowing
+            # and view-specific reducers don't apply here — we drop straight
+            # into the dedicated epoch-stacker.
+            sliced, extra_provenance = self._slice_event_average(
+                data, request, masked_ids=masked_ids
+            )
+            processing_meta = {
+                "requested": processing_requested,
+                "applied": processing_requested and processing_error is None,
+                "error": processing_error,
+            }
+            slice_provenance = {
+                "method": request.downsample.value,
+                "max_points": request.max_points,
+                "original_shape": list(node.data.shape),
+                "returned_shape": list(sliced.shape),
+                "masked_ids": list(masked_ids) if masked_ids else [],
+                "event_average": extra_provenance,
+            }
+            return node.data, sliced, processing_meta, slice_provenance
         sliced = apply_slice_request(data, request, processing=None, masked_ids=masked_ids)
         bandpass_meta: dict[str, Any] | None = None
         if request.bandpass is not None:
@@ -313,6 +368,141 @@ class ServerState:
         if bandpass_meta is not None:
             slice_provenance["bandpass"] = bandpass_meta
         return node.data, sliced, processing_meta, slice_provenance
+
+    def _slice_event_average(
+        self,
+        data: xr.DataArray,
+        request: TensorSliceRequestDTO,
+        *,
+        masked_ids: list[int],
+    ) -> tuple[xr.DataArray, dict[str, Any]]:
+        """Build an event-locked summary trace.
+
+        Returns ``(reduced_xarray, provenance_dict)`` where ``reduced_xarray``
+        has ``lag`` as its first dim (per the v2 frontend extractor contract)
+        and ``provenance_dict`` records the stream name, lag window, event
+        count, aggregator, and whether the request was capped.
+        """
+        from cogpy.brainstates.intervals import perievent_epochs
+        from cogpy.triggered import (
+            triggered_average,
+            triggered_median,
+            triggered_snr,
+            triggered_std,
+        )
+
+        params = request.event_average_params
+        if params is None:
+            raise ValueError("event_average requires event_average_params")
+        if "time" not in data.dims or "time" not in data.coords:
+            raise ValueError("event_average requires a 'time' dimension with coords")
+
+        stream = self.events.get(params.event_stream_name)
+        if stream is None:
+            raise KeyError(
+                f"event stream '{params.event_stream_name}' is not registered"
+            )
+        event_times = np.asarray(stream.df[stream.time_col].values, dtype=float)
+
+        pre = -float(params.lag_window[0])
+        post = float(params.lag_window[1])
+        if pre < 0 or post < 0:
+            raise ValueError(
+                "lag_window must straddle zero (pre = -lag_window[0] >= 0, post >= 0)"
+            )
+
+        # Cap event count BEFORE stacking — perievent_epochs allocates an
+        # (n_events, ..., n_lag) cube and a 35 k-event stream against a
+        # 256-channel grid would be tens of GB. First-N is intentional:
+        # cheap, deterministic, and good enough for "does the mean look
+        # like a spindle". Random subsampling is a future option.
+        n_total = int(event_times.size)
+        cap = params.max_events
+        capped = cap is not None and n_total > int(cap)
+        if capped:
+            event_times = event_times[: int(cap)]
+        n_used = int(event_times.size)
+        if n_used == 0:
+            raise ValueError(
+                f"event stream '{params.event_stream_name}' is empty — nothing to align"
+            )
+
+        # cogpy filtering already requires `fs`; infer once from coords here
+        # so the perievent helper has a clean float to consume.
+        time_vals = np.asarray(data.coords["time"].values, dtype=float)
+        if time_vals.size < 2:
+            raise ValueError("event_average requires a tensor with >= 2 time samples")
+        attr_fs = data.attrs.get("fs")
+        if attr_fs is not None and float(attr_fs) > 0:
+            fs = float(attr_fs)
+        else:
+            fs = float(1.0 / np.median(np.diff(time_vals)))
+
+        # Mask channels BEFORE stacking. The reducers below use skipna so
+        # NaN'd cells drop out of the per-event sample cleanly.
+        if masked_ids:
+            data = _apply_channel_mask_nan(data, masked_ids)
+
+        epochs = perievent_epochs(
+            data, event_times, fs, pre=pre, post=post, time_dim="time"
+        )
+
+        aggregate = params.aggregate
+        if aggregate == "mean":
+            reduced = triggered_average(epochs, event_dim="event")
+        elif aggregate == "median":
+            reduced = triggered_median(epochs, event_dim="event")
+        elif aggregate == "std":
+            reduced = triggered_std(epochs, event_dim="event")
+        elif aggregate == "snr":
+            reduced = triggered_snr(epochs, event_dim="event")
+        else:  # pragma: no cover — validated by pydantic Literal
+            raise ValueError(f"unknown aggregate '{aggregate}'")
+
+        if not isinstance(reduced, xr.DataArray):
+            # cogpy returns ndarray for ndarray input; perievent_epochs
+            # produces DataArray so this path should not fire — defensive.
+            reduced = xr.DataArray(
+                np.asarray(reduced), dims=tuple(epochs.dims[1:])
+            )
+
+        if params.pool_channels:
+            pool_dims = [d for d in reduced.dims if d != "lag"]
+            if pool_dims:
+                reduced = reduced.mean(dim=pool_dims, skipna=True, keep_attrs=True)
+
+        # Frontend extractor expects 'lag' as the leading dim so the typed
+        # column read is uniform across (lag,), (lag, channel), and
+        # (lag, AP, ML) layouts.
+        if "lag" in reduced.dims and reduced.dims[0] != "lag":
+            other = [d for d in reduced.dims if d != "lag"]
+            reduced = reduced.transpose("lag", *other)
+
+        reduced = reduced.assign_attrs(
+            {
+                **dict(reduced.attrs),
+                "event_average_stream": params.event_stream_name,
+                "event_average_n_events_used": n_used,
+                "event_average_n_events_total": n_total,
+                "event_average_aggregate": aggregate,
+                "event_average_pre_s": float(pre),
+                "event_average_post_s": float(post),
+                "event_average_pool_channels": bool(params.pool_channels),
+            }
+        )
+
+        provenance = {
+            "event_stream_name": params.event_stream_name,
+            "lag_window": [float(params.lag_window[0]), float(params.lag_window[1])],
+            "n_events_total": n_total,
+            "n_events_used": n_used,
+            "max_events": int(cap) if cap is not None else None,
+            "capped": bool(capped),
+            "aggregate": aggregate,
+            "pool_channels": bool(params.pool_channels),
+            "fs": fs,
+        }
+        return reduced, provenance
 
     def tensor_slice(self, name: str, request: TensorSliceRequestDTO) -> TensorSliceDTO:
         _, sliced, processing_meta, slice_provenance = self._prepare_slice(name, request)
@@ -339,6 +529,8 @@ class ServerState:
             # the schema metadata (not in JSON meta).
             "contract_version": "1.0",
         }
+        if "event_average" in slice_provenance:
+            meta["event_average"] = slice_provenance["event_average"]
         return TensorSliceDTO(
             name=name,
             view_type=request.view_type,
@@ -373,6 +565,8 @@ def create_server_state(
     events: EventRegistry | None = None,
     layout: LayoutManager | None = None,
     brainstates: xr.DataArray | None = None,
+    probe_layout: ProbeLayout | None = None,
+    dataset_dir: Path | None = None,
 ) -> ServerState:
     """Create a server-ready state from one or more named tensors.
 
@@ -410,6 +604,8 @@ def create_server_state(
         layout=layout or LayoutManager(),
         events=events or EventRegistry(),
         brainstates=brainstates,
+        probe_layout=probe_layout,
+        dataset_dir=dataset_dir,
     )
 
 

@@ -1,32 +1,45 @@
 import { useEffect, useMemo, useRef } from "react";
-import { decodeArrowSlice, extractSpectrogram } from "../../api/arrow";
+import { decodeArrowSlice, extractSpectrogram, type Spectrogram } from "../../api/arrow";
 import { useHeatmapGestures } from "../../hooks/useHeatmapGestures";
 import { useAppStore } from "../../store/appStore";
 import type { SliceViewProps } from "./viewTypes";
 import { XTicks, YTicks } from "./AxisTicks";
 import { TimeScaleBar } from "./ChartToolbar";
+import { getColormapLUT } from "./colormaps";
 
-// ── Colormap ──────────────────────────────────────────────────────────────────
+// ── Colormap ─────────────────────────────────────────────────────────────────
+// Use the real `viridis` LUT (matplotlib default for heatmaps; perceptually
+// uniform). Kept brighter-than-inferno on purpose: median-subtracted
+// spectrogram values cluster near zero, and inferno's lower half is dark
+// enough to render those as near-black. Audit S1/S2 — also satisfied,
+// because viridis is a real matplotlib LUT, not the 3-line approximation
+// the previous code shipped.
+const SPEC_LUT = getColormapLUT("viridis");
 
 function valueToColor(v: number, min: number, max: number): [number, number, number] {
   if (!Number.isFinite(v)) return [20, 20, 20];
   const t = Math.max(0, Math.min(1, (v - min) / (max - min || 1)));
-  const r = Math.round(255 * Math.min(1, t * 2));
-  const g = Math.round(255 * Math.max(0, t * 2 - 0.6));
-  const b = Math.round(255 * Math.max(0, 0.5 - Math.abs(t - 0.25)));
-  return [r, g, b];
+  const idx = Math.round(t * 255) * 4;
+  return [SPEC_LUT[idx], SPEC_LUT[idx + 1], SPEC_LUT[idx + 2]];
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function SpectrogramView({
   slice,
+  v2Data,
   selection,
   onSelectTime,
   onSelectFreq,
   onTimeWindowChange,
   timeWindow,
-}: SliceViewProps) {
+}: SliceViewProps & {
+  /**
+   * Contract-v2 pre-extracted spectrogram — when present, replaces the
+   * `slice` decode. See `docs/design/contract-v2.md` §5.
+   */
+  v2Data?: Spectrogram | null;
+}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const freqLogScale = useAppStore((s) => s.freqLogScale);
@@ -42,10 +55,10 @@ export function SpectrogramView({
 
   // Decode data
   const { times, freqs, values } = useMemo(() => {
-    const decoded = decodeArrowSlice(slice);
-    return extractSpectrogram(decoded);
+    if (v2Data) return v2Data;
+    return extractSpectrogram(decodeArrowSlice(slice));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slice.payload]);
+  }, [v2Data, slice.payload]);
 
   // Data bounds
   const dataTMin = times.length > 0 ? times[0] : 0;
@@ -69,6 +82,28 @@ export function SpectrogramView({
     externalXRange: timeWindow,
   });
 
+  // Audit S3: compute the in-viewport color range up front so the paint
+  // path AND the ColorBar legend agree on what the on-screen colors mean.
+  const colorRange = useMemo(() => {
+    if (times.length === 0 || freqs.length === 0) return { cMin: 0, cMax: 1 };
+    const { xLo: tLo, xHi: tHi, yLo: fLo, yHi: fHi } = viewport;
+    let cMin = Infinity;
+    let cMax = -Infinity;
+    for (let ti = 0; ti < times.length; ti++) {
+      if (times[ti] < tLo || times[ti] > tHi) continue;
+      for (let fi = 0; fi < freqs.length; fi++) {
+        if (freqs[fi] < fLo || freqs[fi] > fHi) continue;
+        const v = values[ti][fi];
+        if (Number.isFinite(v)) {
+          if (v < cMin) cMin = v;
+          if (v > cMax) cMax = v;
+        }
+      }
+    }
+    if (!Number.isFinite(cMin)) return { cMin: 0, cMax: 1 };
+    return { cMin, cMax };
+  }, [times, freqs, values, viewport]);
+
   // ── Canvas rendering — re-renders on viewport or data change ────────────
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -90,18 +125,7 @@ export function SpectrogramView({
     const logFHi = useLog ? Math.log10(fHi) : 0;
     const logFRange = logFHi - logFLo || 1;
 
-    // Find min/max within viewport for color scaling
-    let cMin = Infinity;
-    let cMax = -Infinity;
-    for (let ti = 0; ti < times.length; ti++) {
-      if (times[ti] < tLo || times[ti] > tHi) continue;
-      for (let fi = 0; fi < freqs.length; fi++) {
-        if (freqs[fi] < fLo || freqs[fi] > fHi) continue;
-        const v = values[ti][fi];
-        if (Number.isFinite(v)) { if (v < cMin) cMin = v; if (v > cMax) cMax = v; }
-      }
-    }
-    if (!Number.isFinite(cMin)) { cMin = 0; cMax = 1; }
+    const { cMin, cMax } = colorRange;
 
     const imgData = ctx.createImageData(canvasW, canvasH);
     for (let px = 0; px < canvasW; px++) {
@@ -124,7 +148,7 @@ export function SpectrogramView({
       }
     }
     ctx.putImageData(imgData, 0, 0);
-  }, [times, freqs, values, viewport, freqLogScale]);
+  }, [times, freqs, values, viewport, freqLogScale, colorRange]);
 
   // Rules of Hooks: all hooks above, conditional return below
   if (!selection || times.length === 0 || freqs.length === 0) {
@@ -175,7 +199,7 @@ export function SpectrogramView({
       {/* Spectrogram with axes */}
       <div className="axis-canvas-wrap" style={{ flex: 1, minHeight: 0 }}>
         <div className="axis-y-label">Freq (Hz)</div>
-        <YTicks lo={fLo} hi={fHi} logScale={freqLogScale && fLo > 0} />
+        <YTicks lo={fLo} hi={fHi} logScale={freqLogScale} />
         <div className="axis-canvas-area">
           <canvas
             ref={canvasRef}

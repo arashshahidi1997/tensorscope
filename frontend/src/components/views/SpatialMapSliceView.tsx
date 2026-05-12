@@ -1,6 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { decodeArrowSlice, extractSpatialCells } from "../../api/arrow";
+import { buildRegionResolver } from "../../api/probeLayout";
+import { useProbeLayoutQuery } from "../../api/queries";
+import { useAppStore } from "../../store/appStore";
+import { useMaskStore } from "../../store/maskStore";
 import { ChannelGridRenderer } from "./ChannelGridRenderer";
+import { ColorBar } from "./ColorBar";
 import type { SpatialCellWithId } from "./SpatialRenderer";
 import type { SliceViewProps } from "./viewTypes";
 
@@ -23,6 +28,25 @@ export function SpatialMapSliceView({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<ChannelGridRenderer>(new ChannelGridRenderer());
+
+  // Pull mask for the active tensor. Subscribe via the masks slice so a
+  // toggle in the sidebar repaints in place without a fresh slice fetch.
+  const selectedTensor = useAppStore((s) => s.selectedTensor);
+  const maskedArray = useMaskStore((s) => (selectedTensor ? s.masks[selectedTensor] : undefined));
+  const maskedSet = maskedArray ? new Set(maskedArray) : undefined;
+
+  // G7: per-electrode region annotations. Returns null when no sidecar is
+  // loaded — the renderer treats `undefined` as "no overlay" so the
+  // unannotated view is unchanged.
+  const { data: probeLayout } = useProbeLayoutQuery();
+
+  // Hover state owned by the view itself so we can show a region tooltip
+  // without forcing parents to track hover coordinates. The cell-hover
+  // callback to the parent is preserved for the existing electrode-hover
+  // wiring (e.g. cross-view highlighting).
+  const [tooltip, setTooltip] = useState<
+    { x: number; y: number; region: string; label: string | null } | null
+  >(null);
 
   // Decode slice data once per slice prop change.
   const cellsRef = useRef<SpatialCellWithId[]>([]);
@@ -52,6 +76,13 @@ export function SpatialMapSliceView({
     nAPRef.current = 0;
     nMLRef.current = 0;
   }
+
+  // Resolve the probe layout against the current grid width. Memoising
+  // here avoids rebuilding the Map on hover-only renders.
+  const regionResolver = useMemo(
+    () => buildRegionResolver(probeLayout, nMLRef.current),
+    [probeLayout, nMLRef.current],
+  );
 
   // Initialize renderer when canvas mounts, and handle resize via ResizeObserver.
   useLayoutEffect(() => {
@@ -84,6 +115,11 @@ export function SpatialMapSliceView({
         selectedIds,
         minValue: minValueRef.current,
         maxValue: maxValueRef.current,
+        maskedIds: maskedSet,
+        colormap: "jet",
+        smoothing: true,
+        regionByFlatId: regionResolver.regionByFlatId,
+        regionPalette: regionResolver.palette,
       });
     });
 
@@ -107,8 +143,13 @@ export function SpatialMapSliceView({
       selectedIds,
       minValue: minValueRef.current,
       maxValue: maxValueRef.current,
+      maskedIds: maskedSet,
+      colormap: "jet",
+      smoothing: false,
+      regionByFlatId: regionResolver.regionByFlatId,
+      regionPalette: regionResolver.palette,
     });
-  }, [slice, colorScale, hoveredId, selectedIds]);
+  }, [slice, colorScale, hoveredId, selectedIds, maskedArray, regionResolver]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -137,12 +178,21 @@ export function SpatialMapSliceView({
       const y = e.clientY - rect.top;
       const id = rendererRef.current.hitTest(x, y);
       onHoverElectrode?.(id);
+      if (id !== null && regionResolver.regionByFlatId.size > 0) {
+        const region = regionResolver.regionByFlatId.get(id);
+        if (region) {
+          setTooltip({ x, y, region, label: null });
+          return;
+        }
+      }
+      setTooltip(null);
     },
-    [onHoverElectrode],
+    [onHoverElectrode, regionResolver],
   );
 
   const handleMouseLeave = useCallback(() => {
     onHoverElectrode?.(null);
+    setTooltip(null);
   }, [onHoverElectrode]);
 
   // Guard: must come AFTER all hooks.
@@ -154,7 +204,8 @@ export function SpatialMapSliceView({
   const aspectRatio = nML / nAP;
 
   return (
-    <div className="axis-canvas-wrap" title="Click a cell to select AP/ML">
+    <div style={{ display: "flex", width: "100%", height: "100%", gap: 4 }}>
+    <div className="axis-canvas-wrap" style={{ flex: 1, minHeight: 0 }} title="Click a cell to select AP/ML">
       <div className="axis-y-label">AP</div>
       <div className="axis-y-ticks" />
       <div className="axis-canvas-area" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -176,10 +227,39 @@ export function SpatialMapSliceView({
             onMouseMove={handleMouseMove}
             onMouseLeave={handleMouseLeave}
           />
+          {tooltip && (
+            <div
+              className="spatial-region-tooltip"
+              data-testid="spatial-region-tooltip"
+              style={{
+                position: "absolute",
+                left: tooltip.x + 12,
+                top: tooltip.y + 12,
+                pointerEvents: "none",
+                background: "rgba(13,17,23,0.92)",
+                color: "#e6edf3",
+                padding: "3px 8px",
+                borderRadius: 4,
+                fontSize: 12,
+                border: "1px solid rgba(148,163,184,0.35)",
+                whiteSpace: "nowrap",
+                zIndex: 10,
+              }}
+            >
+              {tooltip.region}
+            </div>
+          )}
         </div>
       </div>
       <div className="axis-x-ticks" />
       <div className="axis-x-label">ML</div>
+    </div>
+      <ColorBar
+        colormap="jet"
+        min={minValueRef.current}
+        max={maxValueRef.current}
+        label="value"
+      />
     </div>
   );
 }

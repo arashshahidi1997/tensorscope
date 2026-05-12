@@ -4,10 +4,15 @@ import type {
   DetectRequestDTO,
   DetectResultDTO,
   DetectorDefinitionDTO,
+  EventDecisionBatchDTO,
+  EventDecisionExportResponseDTO,
+  EventDecisionListDTO,
   EventRecordDTO,
   EventStreamMetaDTO,
   LayoutDTO,
   LayoutUpdateDTO,
+  MaskStateDTO,
+  ProbeLayoutDTO,
   ProcessingParamsDTO,
   SelectionDTO,
   StateDTO,
@@ -73,6 +78,33 @@ export const api = {
     });
   },
 
+  /**
+   * Contract-v2 binary slice fetch.
+   *
+   * Returns the raw Arrow IPC bytes — no JSON wrap, no base64. Caller
+   * decodes via `decodeLabeledTensor` (sync) or hands the buffer to the
+   * worker pool (`getArrowWorkerPool().submit`) for off-main-thread
+   * decode. See `docs/design/contract-v2.md` §3.1.
+   */
+  async getTensorSliceV2(
+    name: string,
+    body: TensorSliceRequestDTO,
+    signal?: AbortSignal,
+  ): Promise<ArrayBuffer> {
+    const response = await fetch(`/api/v2/tensors/${name}/slice`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || `Request failed: ${response.status}`);
+    }
+    return response.arrayBuffer();
+  },
+
   getSelection(): Promise<SelectionDTO> {
     return request<SelectionDTO>("/api/v1/selection");
   },
@@ -111,6 +143,17 @@ export const api = {
     return request<ProcessingParamsDTO>("/api/v1/processing", {
       method: "PUT",
       body: JSON.stringify(body),
+    });
+  },
+
+  getMask(tensor: string): Promise<MaskStateDTO> {
+    return request<MaskStateDTO>(`/api/v1/masks/${tensor}`);
+  },
+
+  setMask(tensor: string, masked_ids: number[]): Promise<MaskStateDTO> {
+    return request<MaskStateDTO>(`/api/v1/masks/${tensor}`, {
+      method: "PUT",
+      body: JSON.stringify({ masked_ids }),
     });
   },
 
@@ -165,6 +208,20 @@ export const api = {
 
   getDAGProvenance(tensorNodeId: string): Promise<ProvenanceStepDTO[]> {
     return request<ProvenanceStepDTO[]>(`/api/v1/dag/provenance/${tensorNodeId}`);
+  },
+
+  // Probe-layout sidecar (G7). Resolves to null when no sidecar was loaded —
+  // a 404 is the expected "feature is opt-in" signal rather than an error.
+  async getProbeLayout(): Promise<ProbeLayoutDTO | null> {
+    const response = await fetch("/api/v1/probe_layout", {
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+    });
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new Error((await response.text()) || `Request failed: ${response.status}`);
+    }
+    return (await response.json()) as ProbeLayoutDTO;
   },
 
   // Brainstates API
@@ -241,6 +298,23 @@ export const api = {
     return request<{ status: string; tensor_node_id: string }>(
       `/api/v1/pipeline/demote/${encodeURIComponent(tensorNodeId)}`,
       { method: "POST" },
+    );
+  },
+
+  // G9 — event-review decision export.
+  exportEventDecisions(
+    streamName: string,
+    body: EventDecisionBatchDTO,
+  ): Promise<EventDecisionExportResponseDTO> {
+    return request<EventDecisionExportResponseDTO>(
+      `/api/v1/events/${encodeURIComponent(streamName)}/decisions`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  },
+
+  importEventDecisions(streamName: string): Promise<EventDecisionListDTO> {
+    return request<EventDecisionListDTO>(
+      `/api/v1/events/${encodeURIComponent(streamName)}/decisions`,
     );
   },
 };

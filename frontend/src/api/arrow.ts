@@ -19,6 +19,22 @@ export type SpatialCell = {
   value: number;
 };
 
+export type SpatialMovieFrame = {
+  /** Frame timestamp in seconds (from the source time coord). */
+  time: number;
+  /** Cells for this frame, sorted by (ap, ml) — same convention as extractSpatialCells. */
+  cells: SpatialCell[];
+};
+
+export type SpatialMovie = {
+  frames: SpatialMovieFrame[];
+  nAP: number;
+  nML: number;
+  /** Global min/max across all frames — used for color-locked playback. */
+  min: number;
+  max: number;
+};
+
 export type FreqCurve = {
   freqs: number[];
   values: number[];
@@ -239,6 +255,78 @@ export function extractSpatialCells(decoded: DecodedSlice): SpatialCell[] {
 }
 
 /**
+ * Decodes a `(time, AP, ML)` propagation_movie payload into per-frame
+ * SpatialCell arrays + global min/max for color-locked playback.
+ *
+ * The Arrow table has columns: time, AP, ML, value.  Cells are grouped by
+ * unique time, then within each frame normalized to 0-based AP/ML rank
+ * indices (consistent with extractSpatialCells).
+ */
+export function extractSpatialFrames(decoded: DecodedSlice): SpatialMovie {
+  const empty: SpatialMovie = { frames: [], nAP: 0, nML: 0, min: 0, max: 1 };
+  if (
+    !decoded.columns.includes("time") ||
+    !decoded.columns.includes("AP") ||
+    !decoded.columns.includes("ML") ||
+    !decoded.columns.includes("value")
+  ) {
+    return empty;
+  }
+
+  // Collect all unique AP / ML raw coords across the whole movie so cell
+  // positions stay stable across frames (a cell missing a row in one frame
+  // would otherwise re-rank the grid for that frame).
+  const apRaws = new Set<number>();
+  const mlRaws = new Set<number>();
+  // Group rows by time first, holding raw AP/ML so we can rank globally.
+  const byTime = new Map<number, Array<{ apRaw: number; mlRaw: number; value: number }>>();
+  let min = Infinity;
+  let max = -Infinity;
+
+  for (const row of decoded.rows) {
+    const time = toNumber(row.time);
+    const ap = toNumber(row.AP);
+    const ml = toNumber(row.ML);
+    const value = toNumber(row.value);
+    if (time === null || ap === null || ml === null || value === null) continue;
+    apRaws.add(ap);
+    mlRaws.add(ml);
+    if (value < min) min = value;
+    if (value > max) max = value;
+    if (!byTime.has(time)) byTime.set(time, []);
+    byTime.get(time)!.push({ apRaw: ap, mlRaw: ml, value });
+  }
+
+  if (byTime.size === 0) return empty;
+
+  const apSorted = Array.from(apRaws).sort((a, b) => a - b);
+  const mlSorted = Array.from(mlRaws).sort((a, b) => a - b);
+  const apRank = new Map(apSorted.map((v, i) => [v, i]));
+  const mlRank = new Map(mlSorted.map((v, i) => [v, i]));
+
+  const times = Array.from(byTime.keys()).sort((a, b) => a - b);
+  const frames: SpatialMovieFrame[] = times.map((t) => {
+    const entries = byTime.get(t)!;
+    const cells = entries
+      .map((e) => ({
+        ap: apRank.get(e.apRaw)!,
+        ml: mlRank.get(e.mlRaw)!,
+        value: e.value,
+      }))
+      .sort((a, b) => a.ap - b.ap || a.ml - b.ml);
+    return { time: t, cells };
+  });
+
+  return {
+    frames,
+    nAP: apSorted.length,
+    nML: mlSorted.length,
+    min: Number.isFinite(min) ? min : 0,
+    max: Number.isFinite(max) ? max : 1,
+  };
+}
+
+/**
  * Average PSD curve: groups by freq, averages value over all spatial dims.
  * Input: (freq, AP, ML) or (freq, channel) — no time dim after psd_average collapse.
  */
@@ -371,6 +459,56 @@ export function extractPSDAverage(decoded: DecodedSlice): PSDAvgData {
   }
 
   return { freqs, mean, std };
+}
+
+export type EventAverageSeries = {
+  key: string;
+  label: string;
+  values: number[];
+};
+
+export type EventAverageData = {
+  /** Lag values in seconds (sorted). */
+  lags: number[];
+  /** One entry per channel (or one pooled entry). Length == lags.length. */
+  series: EventAverageSeries[];
+};
+
+/**
+ * Extract a (lag, [channel|AP×ML]) event-average payload.
+ *
+ * Mirrors `extractTimeseriesColumnar` but on a lag axis. Long-format Arrow
+ * with columns `(lag, value)`, optionally plus `channel` or `(AP, ML)` —
+ * matches the server's v1 `encode_arrow_payload` envelope (server/state.py).
+ */
+export function extractEventAverage(decoded: DecodedSlice): EventAverageData {
+  if (!decoded.columns.includes("lag") || !decoded.columns.includes("value")) {
+    return { lags: [], series: [] };
+  }
+
+  const groups = new Map<string, { label: string; byLag: Map<number, number> }>();
+  for (const row of decoded.rows) {
+    const lag = toNumber(row.lag);
+    const value = toNumber(row.value);
+    if (lag === null || value === null) continue;
+    const { key, label } = seriesKey(row);
+    if (!groups.has(key)) groups.set(key, { label, byLag: new Map() });
+    groups.get(key)!.byLag.set(lag, value);
+  }
+
+  if (groups.size === 0) return { lags: [], series: [] };
+
+  const lags = Array.from(
+    new Set(Array.from(groups.values()).flatMap((g) => Array.from(g.byLag.keys()))),
+  ).sort((a, b) => a - b);
+
+  const series = Array.from(groups.entries()).map(([key, { label, byLag }]) => ({
+    key,
+    label,
+    values: lags.map((l) => byLag.get(l) ?? NaN),
+  }));
+
+  return { lags, series };
 }
 
 /**

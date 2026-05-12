@@ -36,11 +36,23 @@ export type EventReviewActions = {
   setDecision: (key: string, status: EventReviewStatus) => void;
   clearDecision: (key: string) => void;
   updateNotes: (key: string, notes: string) => void;
+  updateTags: (key: string, tags: string[]) => void;
   /**
    * Drop every decision scoped to a (tensor, stream) pair. Useful when
    * the user wants to restart a review from scratch.
    */
   clearScope: (tensorName: string, streamName: string) => void;
+  /**
+   * Bulk-replace every decision in a (tensor, stream) scope. Used by the
+   * server-rehydration path (G9): when the page loads and the server
+   * holds decisions on disk, we mirror them into the store so the panel
+   * shows them immediately. Decisions outside the scope are untouched.
+   */
+  replaceScope: (
+    tensorName: string,
+    streamName: string,
+    entries: Array<{ eventId: string | number; decision: EventDecision }>,
+  ) => void;
 };
 
 /** Compose the persist key for one event. Keep this stable — changing
@@ -51,6 +63,23 @@ export function decisionKey(
   eventId: string | number,
 ): string {
   return `${tensorName}|${streamName}|${eventId}`;
+}
+
+/** Enumerate every decision in a (tensor, stream) scope. Used by the
+ *  "Export decisions" path so the caller doesn't have to walk the
+ *  store's prefix-keyed map by hand. */
+export function decisionsInScope(
+  decisions: DecisionMap,
+  tensorName: string,
+  streamName: string,
+): Array<{ eventId: string; decision: EventDecision }> {
+  const prefix = `${tensorName}|${streamName}|`;
+  const out: Array<{ eventId: string; decision: EventDecision }> = [];
+  for (const [k, v] of Object.entries(decisions)) {
+    if (!k.startsWith(prefix)) continue;
+    out.push({ eventId: k.slice(prefix.length), decision: v });
+  }
+  return out;
 }
 
 /** Helper: count reviewed-vs-total for a given scope. Used by the panel
@@ -106,12 +135,37 @@ export const useEventReviewStore = create<EventReviewState & EventReviewActions>
           };
         }),
 
+      updateTags: (key, tags) =>
+        set((s) => {
+          const existing = s.decisions[key];
+          if (!existing) return s; // tags only attach to decided events
+          return {
+            decisions: {
+              ...s.decisions,
+              [key]: { ...existing, tags: [...tags] },
+            },
+          };
+        }),
+
       clearScope: (tensorName, streamName) =>
         set((s) => {
           const prefix = `${tensorName}|${streamName}|`;
           const next: DecisionMap = {};
           for (const [k, v] of Object.entries(s.decisions)) {
             if (!k.startsWith(prefix)) next[k] = v;
+          }
+          return { decisions: next };
+        }),
+
+      replaceScope: (tensorName, streamName, entries) =>
+        set((s) => {
+          const prefix = `${tensorName}|${streamName}|`;
+          const next: DecisionMap = {};
+          for (const [k, v] of Object.entries(s.decisions)) {
+            if (!k.startsWith(prefix)) next[k] = v;
+          }
+          for (const { eventId, decision } of entries) {
+            next[decisionKey(tensorName, streamName, eventId)] = decision;
           }
           return { decisions: next };
         }),

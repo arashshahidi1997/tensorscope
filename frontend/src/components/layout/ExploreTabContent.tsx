@@ -11,6 +11,7 @@ import type { SelectionDTO } from "../../api/types";
 import { useAppStore } from "../../store/appStore";
 import { useSelectionStore, toSelectionDTO } from "../../store/selectionStore";
 import { CollapsibleSection } from "./CollapsibleSection";
+import { MaskPanel } from "../controls/MaskPanel";
 import { ProcessingPanel } from "../controls/ProcessingPanel";
 import { SelectionPanel, type SelectionPanelBounds } from "../controls/SelectionPanel";
 
@@ -51,10 +52,12 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
     psdFmax,
     psdNW,
     psdWindowS,
+    psdLockToEvent,
     freqLogScale,
     setPsdFmax,
     setPsdNW,
     setPsdWindowS,
+    togglePsdLockToEvent,
     toggleFreqLogScale,
   } = useAppStore();
 
@@ -158,12 +161,25 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
               max={60}
               step={0.1}
               value={psdWindowS}
+              disabled={psdLockToEvent}
               onChange={(e) => {
                 const v = parseFloat(e.target.value);
                 if (Number.isFinite(v) && v > 0) setPsdWindowS(v);
               }}
               style={{ width: 60, fontSize: 12 }}
             />
+          </label>
+          <label
+            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}
+            title="When on, PSD time range tracks the selected event's [t, t_end] span instead of the window slider above."
+          >
+            <input
+              type="checkbox"
+              checked={psdLockToEvent}
+              onChange={togglePsdLockToEvent}
+              data-testid="psd-lock-to-event"
+            />
+            Lock PSD to selected event
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
             <input
@@ -182,6 +198,24 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
           bounds={selectionBounds}
           onSelectionChange={selectionState.patchFromDTO}
           onCommit={(s) => onCommitSelection(s)}
+        />
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Channel Mask" defaultOpen={false}>
+        <MaskPanel
+          tensorName={selectedTensor}
+          nAP={(() => {
+            const dims = tensorMeta?.dims ?? [];
+            const shape = tensorMeta?.shape ?? [];
+            const i = dims.indexOf("AP");
+            return i >= 0 ? shape[i] : null;
+          })()}
+          nML={(() => {
+            const dims = tensorMeta?.dims ?? [];
+            const shape = tensorMeta?.shape ?? [];
+            const i = dims.indexOf("ML");
+            return i >= 0 ? shape[i] : null;
+          })()}
         />
       </CollapsibleSection>
     </>

@@ -12,9 +12,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from tensorscope.core.events import EventRegistry, EventStream
+from tensorscope.core.probe_layout import ProbeLayout
 from tensorscope.server.models import ApiErrorDTO
 from tensorscope.server.routers import brainstates as brainstates_router_mod
-from tensorscope.server.routers import dag, events, layout, pipeline, processing, selection, state, stream, tensors, transforms, viewport
+from tensorscope.server.routers import dag, event_review, events, layout, masks, pipeline, probe_layout as probe_layout_router_mod, processing, selection, state, stream, tensors, tensors_v2, transforms, viewport
 from tensorscope.server.session import SESSION_COOKIE_NAME, SessionManager
 from tensorscope.server.state import ServerState, create_server_state
 
@@ -48,6 +49,8 @@ def create_app(
     tensor_name: str = "signal",
     events_registry: EventRegistry | None = None,
     brainstates: xr.DataArray | None = None,
+    probe_layout: ProbeLayout | None = None,
+    dataset_dir: Path | None = None,
     static_dir: Path | None = None,
     title: str = "TensorScope API",
     pair_mode: bool = False,
@@ -62,7 +65,14 @@ def create_app(
         Python agent and a browser session see the same tensors, events, and
         selection.
     """
-    base_state = create_server_state(data, tensor_name=tensor_name, events=events_registry, brainstates=brainstates)
+    base_state = create_server_state(
+        data,
+        tensor_name=tensor_name,
+        events=events_registry,
+        brainstates=brainstates,
+        probe_layout=probe_layout,
+        dataset_dir=dataset_dir,
+    )
     app = FastAPI(title=title, version="0.2.0")
     app.state.session_manager = SessionManager(base_state, pair_mode=pair_mode)
     app.state.pair_mode = pair_mode
@@ -75,12 +85,19 @@ def create_app(
     app.include_router(viewport.router, prefix="/api/v1")
     app.include_router(layout.router, prefix="/api/v1")
     app.include_router(events.router, prefix="/api/v1")
+    app.include_router(event_review.router, prefix="/api/v1")
     app.include_router(processing.router, prefix="/api/v1")
     app.include_router(transforms.router, prefix="/api/v1")
     app.include_router(dag.router, prefix="/api/v1")
     app.include_router(pipeline.router, prefix="/api/v1")
     app.include_router(brainstates_router_mod.router, prefix="/api/v1")
+    app.include_router(masks.router, prefix="/api/v1")
     app.include_router(stream.router, prefix="/api/v1")
+    app.include_router(probe_layout_router_mod.router, prefix="/api/v1")
+    # Contract v2 — wire-format-only revision; reuses every other v1 router
+    # (selection, processing, masks, transforms, ...) unchanged. Only the
+    # /tensors/{name}/slice encoder differs. See docs/design/contract-v2.md.
+    app.include_router(tensors_v2.router, prefix="/api/v2")
 
     # Serve frontend static files if available
     dist_dir = static_dir if static_dir is not None else _find_frontend_dist()

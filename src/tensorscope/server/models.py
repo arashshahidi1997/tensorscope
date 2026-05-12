@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -134,6 +134,28 @@ class ElectrodeLayoutDTO(BaseModel):
     ap_coords: list[float]  # sorted unique AP coordinate values
     ml_coords: list[float]  # sorted unique ML coordinate values
     n_electrodes: int = Field(ge=0)
+
+
+class ElectrodeDTO(BaseModel):
+    """Per-electrode region annotation surfaced by GET /probe_layout (G7)."""
+
+    region: str
+    channel_id: int | None = None
+    ap: int | None = None
+    ml: int | None = None
+    label: str | None = None
+
+
+class ProbeLayoutDTO(BaseModel):
+    """Probe layout sidecar payload — minimal v0 (G7).
+
+    Carries per-electrode region annotations; the richer model in
+    ``docs/design/probe-layout.md`` (groups, geometry, reference) is
+    deferred. Returned by ``GET /probe_layout``.
+    """
+
+    n_channels: int = Field(ge=0)
+    electrodes: list[ElectrodeDTO]
 
 
 class TensorSummaryDTO(BaseModel):
@@ -291,6 +313,58 @@ class BandpassParamsDTO(BaseModel):
         return self
 
 
+class EventAverageParamsDTO(BaseModel):
+    """Parameters for the ``event_average`` view.
+
+    Stacks per-event windows of length ``lag_window[1] - lag_window[0]`` from
+    the source tensor, then reduces across events with the chosen aggregator.
+    Mirrors the cogpy ``triggered_*`` API: mean / std / median operate
+    element-wise across the event axis; ``snr`` = mean / (std / sqrt(n)).
+
+    A ``max_events`` guard caps the stack size — detector-driven streams
+    (35 k spindles on the audit bundle) would otherwise build a (n_events,
+    channels, n_lag) cube too big for an interactive round-trip.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_stream_name: str = Field(
+        min_length=1,
+        description="Name of the event stream registered in the session.",
+    )
+    lag_window: tuple[float, float] = Field(
+        default=(-1.0, 1.0),
+        description="Window (seconds) around event onset; [pre, post] with pre<=0<post typical.",
+    )
+    max_events: int | None = Field(
+        default=200,
+        ge=1,
+        description=(
+            "Cap on events stacked into the epoch cube. None disables. Excess "
+            "events are taken from the start of the stream (first N) — keep "
+            "small for interactive use."
+        ),
+    )
+    aggregate: Literal["mean", "median", "snr", "std"] = Field(
+        default="mean",
+        description="Reduction across the event axis.",
+    )
+    pool_channels: bool = Field(
+        default=False,
+        description=(
+            "If True, also average across channel / AP / ML dims so the "
+            "response is a single (lag,) trace."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check_lag(self) -> "EventAverageParamsDTO":
+        lo, hi = float(self.lag_window[0]), float(self.lag_window[1])
+        if hi <= lo:
+            raise ValueError("lag_window upper bound must exceed lower bound")
+        return self
+
+
 class TensorSliceRequestDTO(BaseModel):
     """Slice request body."""
 
@@ -310,6 +384,7 @@ class TensorSliceRequestDTO(BaseModel):
     psd_params: PsdParamsDTO | None = None
     spectrogram_live_params: SpectrogramLiveParamsDTO | None = None
     bandpass: BandpassParamsDTO | None = None
+    event_average_params: EventAverageParamsDTO | None = None
 
     @model_validator(mode="after")
     def validate_request(self) -> "TensorSliceRequestDTO":
@@ -331,6 +406,11 @@ class TensorSliceRequestDTO(BaseModel):
 
         if self.view_type == "propagation_movie" and self.time_range is None:
             raise ValueError("time_range is required for propagation_movie requests")
+
+        if self.view_type == "event_average" and self.event_average_params is None:
+            raise ValueError(
+                "event_average_params is required for event_average requests"
+            )
 
         for value in (self.time_range, self.freq_range, self.ap_range, self.ml_range):
             if value is not None and value[1] < value[0]:
@@ -662,3 +742,56 @@ class PipelineImportResponseDTO(BaseModel):
     executed: list[str] = []
     skipped: list[str] = []
     errors: dict[str, str] = {}
+
+
+# ── G9 — event-review decision export ─────────────────────────────────
+
+
+class EventDecisionDTO(BaseModel):
+    """One reviewer decision attached to a single event.
+
+    Mirrors ``EventDecision`` in ``frontend/src/store/eventReviewStore.ts``.
+    ``event_id`` is whatever the event stream's ``id_col`` carries (string
+    or int — strings are accepted to keep the wire format honest).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: str | int
+    status: Literal["accepted", "rejected", "maybe"]
+    decided_at: int = Field(ge=0)  # unix ms, matches the frontend store
+    notes: str | None = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class EventDecisionBatchDTO(BaseModel):
+    """POST body for ``/events/{stream}/decisions`` — all decisions for one stream."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decisions: list[EventDecisionDTO] = Field(default_factory=list)
+
+
+class EventDecisionExportResponseDTO(BaseModel):
+    """Reply returned after a successful POST."""
+
+    stream: str
+    path: str  # absolute filesystem path of the parquet/csv file
+    format: Literal["parquet", "csv"]
+    n_decisions: int = Field(ge=0)
+    saved_at: int = Field(ge=0)  # unix ms
+
+
+class EventDecisionListDTO(BaseModel):
+    """Reply returned by GET ``/events/{stream}/decisions``.
+
+    ``saved_at`` and ``path`` are present only when a file already exists
+    on disk; a fresh dataset that has never been exported returns
+    ``decisions=[]`` and the timestamp/path fields are ``None``.
+    """
+
+    stream: str
+    decisions: list[EventDecisionDTO] = Field(default_factory=list)
+    path: str | None = None
+    format: Literal["parquet", "csv"] | None = None
+    saved_at: int | None = None

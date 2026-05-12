@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   clampWindow,
+  eventTimeRange,
   makeDefaultSliceRequest,
   makeNavigatorRequest,
   makeOrthoSpatialRequest,
+  makePropagationMovieRequest,
   makePSDLiveRequest,
   makeSpectrogramLiveRequest,
 } from "./queries";
@@ -129,6 +131,71 @@ describe("makePSDLiveRequest", () => {
     const req = makePSDLiveRequest(SEL, 1, TIME_COORD, { NW: 6, fmax: 80 });
     expect(req.psd_params).toEqual({ NW: 6, fmax: 80 });
   });
+
+  it("uses lockedTimeRange (G8) instead of the cursor-centred window when provided", () => {
+    // 0.5 s event at t=10, ±0.25 s margin → caller passes [9.75, 10.75].
+    const req = makePSDLiveRequest(SEL, 1, TIME_COORD, undefined, [9.75, 10.75]);
+    expect(req.time_range).toEqual([9.75, 10.75]);
+  });
+
+  it("clamps lockedTimeRange against the tensor bounds (G8)", () => {
+    // Event whose locked window pokes past the recording end.
+    const req = makePSDLiveRequest(SEL, 1, TIME_COORD, undefined, [48, 55]);
+    expect(req.time_range).toEqual([48, 50]);
+  });
+
+  it("falls back to cursor-centred window when lockedTimeRange is null (G8 toggle off)", () => {
+    const req = makePSDLiveRequest(SEL, 2, TIME_COORD, undefined, null);
+    expect(req.time_range).toEqual([9, 11]);
+  });
+});
+
+describe("eventTimeRange (G8)", () => {
+  it("uses t_end when present", () => {
+    const r = eventTimeRange({ t: 10, t_end: 10.5 }, "t");
+    expect(r).toEqual([10, 10.5]);
+  });
+
+  it("derives t_end from duration_s when t_end is absent", () => {
+    const r = eventTimeRange({ t: 10, duration_s: 0.5 }, "t");
+    expect(r).toEqual([10, 10.5]);
+  });
+
+  it("falls back to bare duration when duration_s is absent", () => {
+    const r = eventTimeRange({ t: 10, duration: 0.25 }, "t");
+    expect(r).toEqual([10, 10.25]);
+  });
+
+  it("returns a zero-width span for point events (no duration info)", () => {
+    const r = eventTimeRange({ t: 10 }, "t");
+    expect(r).toEqual([10, 10]);
+  });
+
+  it("falls back to record.t when the stream's time_col is missing", () => {
+    // Mirrors `coincidence.ts` extractEventTimes — `record.t` is the
+    // canonical fallback when the explicit time_col isn't populated.
+    const r = eventTimeRange({ t: 10 }, "onset_s");
+    expect(r).toEqual([10, 10]);
+  });
+
+  it("returns null when no finite time is available", () => {
+    expect(eventTimeRange({ t: "nope" }, "t")).toBeNull();
+    expect(eventTimeRange({}, "t")).toBeNull();
+    expect(eventTimeRange(null, "t")).toBeNull();
+    expect(eventTimeRange(undefined, "t")).toBeNull();
+  });
+
+  it("ignores nonsensical t_end (< t)", () => {
+    // Bad record where t_end precedes t — treat as point event rather than
+    // emit an inverted window the server would reject.
+    const r = eventTimeRange({ t: 10, t_end: 9 }, "t");
+    expect(r).toEqual([10, 10]);
+  });
+
+  it("parses string-valued times like the rest of the event pipeline", () => {
+    const r = eventTimeRange({ t: "10.0", duration_s: "0.5" }, "t");
+    expect(r).toEqual([10, 10.5]);
+  });
 });
 
 describe("makeSpectrogramLiveRequest", () => {
@@ -176,5 +243,25 @@ describe("makeSpectrogramLiveRequest", () => {
   it("omits spectrogram_live_params when none supplied (server defaults apply)", () => {
     const req = makeSpectrogramLiveRequest(SEL, [0, 10]);
     expect(req.spectrogram_live_params).toBeUndefined();
+  });
+});
+
+describe("makePropagationMovieRequest", () => {
+  it("builds a propagation_movie request with the visible window", () => {
+    const req = makePropagationMovieRequest(SEL, [10, 20], 60);
+    expect(req.view_type).toBe("propagation_movie");
+    expect(req.time_range).toEqual([10, 20]);
+    expect(req.n_frames).toBe(60);
+  });
+
+  it("omits n_frames when not supplied (server defaults to ~window_s × 30)", () => {
+    const req = makePropagationMovieRequest(SEL, [0, 5]);
+    expect(req.n_frames).toBeUndefined();
+  });
+
+  it("does not set max_points or downsample (movie carries its own time axis)", () => {
+    const req = makePropagationMovieRequest(SEL, [0, 5], 30);
+    expect(req.max_points).toBeUndefined();
+    expect(req.downsample).toBeUndefined();
   });
 });

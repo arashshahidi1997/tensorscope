@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import { tableFromArrays, tableToIPC } from "apache-arrow";
 import {
   decodeArrowSlice,
+  extractEventAverage,
   extractTimeseriesColumnar,
   extractTimeseriesColumnarFast,
   extractSpatialCells,
+  extractSpatialFrames,
   extractFreqCurve,
   extractPSDHeatmap,
   extractPSDAverage,
@@ -129,6 +131,70 @@ describe("extractSpatialCells", () => {
   it("returns empty when columns missing", () => {
     const decoded = decodeArrowSlice(buildSlice({ AP: [0], value: [1] })); // no ML
     expect(extractSpatialCells(decoded)).toEqual([]);
+  });
+});
+
+describe("extractSpatialFrames", () => {
+  it("groups (time, AP, ML) rows into per-frame cell arrays with global min/max", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({
+        time: [0, 0, 0, 0, 1, 1, 1, 1],
+        AP: [0, 0, 1, 1, 0, 0, 1, 1],
+        ML: [0, 1, 0, 1, 0, 1, 0, 1],
+        value: [1, 2, 3, 4, 10, 20, 30, 40],
+      }),
+    );
+    const movie = extractSpatialFrames(decoded);
+    expect(movie.frames).toHaveLength(2);
+    expect(movie.nAP).toBe(2);
+    expect(movie.nML).toBe(2);
+    expect(movie.min).toBe(1);
+    expect(movie.max).toBe(40);
+    expect(movie.frames[0].time).toBe(0);
+    expect(movie.frames[1].time).toBe(1);
+    // Frame 0 cells sorted by (ap, ml)
+    expect(movie.frames[0].cells).toEqual([
+      { ap: 0, ml: 0, value: 1 },
+      { ap: 0, ml: 1, value: 2 },
+      { ap: 1, ml: 0, value: 3 },
+      { ap: 1, ml: 1, value: 4 },
+    ]);
+  });
+
+  it("normalizes float AP/ML coords to 0-based ranks with stable order across frames", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({
+        time: [0, 0, 1, 1],
+        AP: [0.5, 1.5, 0.5, 1.5],
+        ML: [10, 20, 10, 20],
+        value: [1, 2, 3, 4],
+      }),
+    );
+    const movie = extractSpatialFrames(decoded);
+    expect(movie.frames[0].cells[0].ap).toBe(0);
+    expect(movie.frames[0].cells[1].ap).toBe(1);
+    expect(movie.frames[1].cells[0].ap).toBe(0);
+    expect(movie.frames[1].cells[1].ap).toBe(1);
+  });
+
+  it("returns empty movie when required columns are missing", () => {
+    const decoded = decodeArrowSlice(buildSlice({ AP: [0], value: [1] }));
+    const movie = extractSpatialFrames(decoded);
+    expect(movie.frames).toEqual([]);
+    expect(movie.nAP).toBe(0);
+  });
+
+  it("sorts frames by ascending time", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({
+        time: [2, 2, 0, 0, 1, 1],
+        AP: [0, 0, 0, 0, 0, 0],
+        ML: [0, 1, 0, 1, 0, 1],
+        value: [9, 9, 1, 1, 5, 5],
+      }),
+    );
+    const movie = extractSpatialFrames(decoded);
+    expect(movie.frames.map((f) => f.time)).toEqual([0, 1, 2]);
   });
 });
 
@@ -266,6 +332,41 @@ describe("extractSpectrogram", () => {
       }),
     );
     expect(extractSpectrogram(decoded).values).toEqual([[3, 15]]);
+  });
+});
+
+describe("extractEventAverage", () => {
+  it("groups per-channel traces onto a shared lag axis", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({
+        lag: [-0.1, 0.0, 0.1, -0.1, 0.0, 0.1],
+        channel: [0, 0, 0, 1, 1, 1],
+        value: [1, 2, 3, 4, 5, 6],
+      }),
+    );
+    const result = extractEventAverage(decoded);
+    expect(result.lags).toEqual([-0.1, 0, 0.1]);
+    expect(result.series).toHaveLength(2);
+    const ch0 = result.series.find((s) => s.key === "ch-0")!;
+    const ch1 = result.series.find((s) => s.key === "ch-1")!;
+    expect(ch0.values).toEqual([1, 2, 3]);
+    expect(ch1.values).toEqual([4, 5, 6]);
+  });
+
+  it("collapses a pooled (lag,) payload to a single signal series", () => {
+    const decoded = decodeArrowSlice(
+      buildSlice({ lag: [-0.2, 0.0, 0.2], value: [10, 20, 30] }),
+    );
+    const result = extractEventAverage(decoded);
+    expect(result.lags).toEqual([-0.2, 0, 0.2]);
+    expect(result.series).toHaveLength(1);
+    expect(result.series[0].key).toBe("signal");
+    expect(result.series[0].values).toEqual([10, 20, 30]);
+  });
+
+  it("returns empty when required columns are missing", () => {
+    const decoded = decodeArrowSlice(buildSlice({ foo: [1, 2] }));
+    expect(extractEventAverage(decoded)).toEqual({ lags: [], series: [] });
   });
 });
 

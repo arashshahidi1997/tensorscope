@@ -16,10 +16,12 @@
  *   - `clampWindow`             → guard against out-of-range slice requests
  *   - `DataSource` (dataSource.ts) → the interface all of the above implicitly implement
  */
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import type { BrainstateIntervalDTO, BrainstateMetaDTO, CoordSummary, ProcessingParamsDTO, SelectionDTO, TensorSliceRequestDTO } from "./types";
+import type { BrainstateIntervalDTO, BrainstateMetaDTO, CoordSummary, EventAverageParamsDTO, EventRecordDTO, MaskStateDTO, ProbeLayoutDTO, ProcessingParamsDTO, SelectionDTO, TensorSliceRequestDTO } from "./types";
 import type { WorkspaceDAGDTO } from "../types/dag";
+import type { ColumnarTimeseries, PSDHeatmapData, Spectrogram } from "./arrow";
+import { getArrowWorkerPool } from "./workerPool";
 
 export function useStateQuery() {
   return useQuery({
@@ -58,6 +60,143 @@ export function useSliceQuery(name: string | null, request: TensorSliceRequestDT
   });
 }
 
+// ── Contract v2 ─────────────────────────────────────────────────────────────
+//
+// Phase 1: a parallel `useV2PSDHeatmapQuery` that fetches the binary v2
+// payload, ships the ArrayBuffer to the worker pool for decode + extract,
+// and returns the same `PSDHeatmapData` shape the v1 path produces. Behind
+// `localStorage["tensorscope:v2"] === "1"`. Only PSDHeatmap migrates this
+// session; remaining views follow per the parity-gate process in
+// `docs/design/contract-v2.md` §5.
+
+export const V2_FLAG_KEY = "tensorscope:v2";
+
+export function isV2Enabled(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage?.getItem(V2_FLAG_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+// One-shot console log of the v2 payload size (and a v1 size comparison
+// when measurable) so we can verify the audit's claim of ~5× reduction
+// against the live audit bundle without instrumenting devtools by hand.
+// Logged once per view-type (psd_heatmap, timeseries, spectrogram_live,
+// navigator) so each gets a measured ratio in the console.
+const _v2SizeLogged = new Set<string>();
+function logV2PayloadSize(
+  viewLabel: string,
+  name: string,
+  request: TensorSliceRequestDTO,
+  v2Bytes: number,
+): void {
+  if (_v2SizeLogged.has(viewLabel)) return;
+  _v2SizeLogged.add(viewLabel);
+  // Fire-and-forget v1 fetch so we can compare on first load. Errors are
+  // swallowed — this is observability, not a correctness path.
+  void api
+    .getTensorSlice(name, request)
+    .then((v1) => {
+      const v1Bytes = v1.payload?.length ?? 0;
+      const ratio = v1Bytes > 0 ? (v1Bytes / v2Bytes).toFixed(2) : "n/a";
+      // eslint-disable-next-line no-console
+      console.info(
+        `[contract-v2] ${viewLabel} wire size: v2 ${v2Bytes.toLocaleString()} bytes ` +
+          `vs v1 ${v1Bytes.toLocaleString()} bytes (ratio ${ratio}×)`,
+      );
+    })
+    .catch(() => {
+      // eslint-disable-next-line no-console
+      console.info(`[contract-v2] ${viewLabel} v2 wire size: ${v2Bytes.toLocaleString()} bytes`);
+    });
+}
+
+/**
+ * v2 PSDHeatmap query — raw Arrow bytes → worker decode → PSDHeatmapData.
+ *
+ * Returns the same shape as `extractPSDHeatmap(decoded)` from the v1 path,
+ * so `PSDHeatmapView` doesn't need to know which contract supplied it.
+ *
+ * `placeholderData: keepPreviousData` is the optimistic-render hook —
+ * during a refetch, React Query keeps the previous slice's `PSDHeatmapData`
+ * in `data`, so the view re-renders with stale-but-visible content rather
+ * than blanking. See `docs/design/contract-v2.md` §0.2.
+ */
+export function useV2PSDHeatmapQuery(
+  name: string | null,
+  request: TensorSliceRequestDTO | null,
+) {
+  return useQuery<PSDHeatmapData>({
+    queryKey: ["slice-v2", "psd_heatmap", name, request],
+    queryFn: async ({ signal }) => {
+      const buf = await api.getTensorSliceV2(name!, request!, signal);
+      logV2PayloadSize("PSDHeatmap", name!, request!, buf.byteLength);
+      const pool = getArrowWorkerPool();
+      // Worker consumes the buffer (transferred); never reads from it again.
+      return pool.submit<PSDHeatmapData>(buf, "psd_heatmap");
+    },
+    enabled: Boolean(name && request),
+    placeholderData: keepPreviousData,
+    retry: false,
+  });
+}
+
+/**
+ * v2 timeseries / navigator query — both views share the
+ * `ColumnarTimeseries` extractor output. The worker dispatches via the
+ * `viewType` argument; pass the original request's `view_type` so e.g.
+ * `useV2TimeseriesQuery(..., {view_type:"timeseries", ...})` hits the
+ * `extractTimeseriesV2` branch.
+ *
+ * Used for both `timeseries` and `navigator` requests — the worker treats
+ * them identically (both produce a `(time, channel|AP×ML)` cube).
+ */
+export function useV2TimeseriesQuery(
+  name: string | null,
+  request: TensorSliceRequestDTO | null,
+  logLabel = "Timeseries",
+) {
+  return useQuery<ColumnarTimeseries>({
+    queryKey: ["slice-v2", "timeseries", name, request],
+    queryFn: async ({ signal }) => {
+      const buf = await api.getTensorSliceV2(name!, request!, signal);
+      logV2PayloadSize(logLabel, name!, request!, buf.byteLength);
+      const pool = getArrowWorkerPool();
+      return pool.submit<ColumnarTimeseries>(buf, request!.view_type);
+    },
+    enabled: Boolean(name && request),
+    placeholderData: keepPreviousData,
+    retry: false,
+  });
+}
+
+/**
+ * v2 spectrogram (spectrogram_live or pre-computed spectrogram) — returns
+ * the same `Spectrogram` shape v1 `extractSpectrogram` produces. The
+ * worker bundles decode + 4-D-cube collapse so the main thread never sees
+ * the raw IPC bytes.
+ */
+export function useV2SpectrogramQuery(
+  name: string | null,
+  request: TensorSliceRequestDTO | null,
+  logLabel = "Spectrogram",
+) {
+  return useQuery<Spectrogram>({
+    queryKey: ["slice-v2", "spectrogram", name, request],
+    queryFn: async ({ signal }) => {
+      const buf = await api.getTensorSliceV2(name!, request!, signal);
+      logV2PayloadSize(logLabel, name!, request!, buf.byteLength);
+      const pool = getArrowWorkerPool();
+      return pool.submit<Spectrogram>(buf, request!.view_type);
+    },
+    enabled: Boolean(name && request),
+    placeholderData: keepPreviousData,
+    retry: false,
+  });
+}
+
 export function useEventWindowQuery(
   name: string | null,
   selection: SelectionDTO | null,
@@ -75,6 +214,61 @@ export function useEventWindowQuery(
       return api.getEventWindow(name!, params);
     },
     enabled: Boolean(name && selection),
+  });
+}
+
+/**
+ * Multi-stream parallel event-window fetch for the detector comparison
+ * overlay (G5). Returns a `Map<streamName, EventRecordDTO[]>` keyed by
+ * the same `["events-window", name, selection, halfWindow]` shape the
+ * single-stream hook uses — so cached results dedupe with the existing
+ * `useEventWindowQuery` call site.
+ *
+ * Streams not yet returned are omitted from the map (the timeseries view
+ * just renders fewer ticks until those queries resolve). The hook does
+ * NOT wait for all queries to settle before returning data; missing
+ * results don't block the rest.
+ */
+export function useEventWindowQueries(
+  names: string[],
+  selection: SelectionDTO | null,
+  halfWindow = 1,
+): Map<string, EventRecordDTO[]> {
+  const enabled = Boolean(selection) && names.length > 0;
+  const results = useQueries({
+    queries: names.map((name) => ({
+      queryKey: ["events-window", name, selection, halfWindow],
+      queryFn: () => {
+        const params = new URLSearchParams({
+          t0: String(Math.max(0, (selection?.time ?? 0) - halfWindow)),
+          t1: String((selection?.time ?? 0) + halfWindow),
+        });
+        if ((selection?.ap ?? null) !== null) params.set("ap", String(selection?.ap ?? 0));
+        if ((selection?.ml ?? null) !== null) params.set("ml", String(selection?.ml ?? 0));
+        return api.getEventWindow(name, params);
+      },
+      enabled,
+    })),
+  });
+  const out = new Map<string, EventRecordDTO[]>();
+  for (let i = 0; i < names.length; i++) {
+    const data = results[i]?.data;
+    if (data) out.set(names[i], data);
+  }
+  return out;
+}
+
+/**
+ * Probe-layout sidecar fetch (G7). Returns `null` when no sidecar is loaded
+ * for the active session — that is the documented "feature off" state, not
+ * an error, so the spatial map renders unchanged. Cached aggressively
+ * (`staleTime: Infinity`) because the layout doesn't mutate across slices.
+ */
+export function useProbeLayoutQuery() {
+  return useQuery<ProbeLayoutDTO | null>({
+    queryKey: ["probe-layout"],
+    queryFn: api.getProbeLayout,
+    staleTime: Infinity,
   });
 }
 
@@ -116,6 +310,28 @@ export function useSetProcessing() {
     mutationFn: (params: ProcessingParamsDTO) => api.setProcessing(params),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["processing"] });
+      queryClient.invalidateQueries({ queryKey: ["slice"] });
+    },
+  });
+}
+
+export function useMaskQuery(tensor: string | null) {
+  return useQuery<MaskStateDTO>({
+    queryKey: ["mask", tensor],
+    queryFn: () => api.getMask(tensor!),
+    enabled: Boolean(tensor),
+  });
+}
+
+export function useSetMask() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ tensor, masked_ids }: { tensor: string; masked_ids: number[] }) =>
+      api.setMask(tensor, masked_ids),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["mask", variables.tensor] });
+      // Mask change invalidates every slice — masked cells become NaN
+      // (or are paint-overlaid) on the next fetch.
       queryClient.invalidateQueries({ queryKey: ["slice"] });
     },
   });
@@ -247,24 +463,89 @@ export function makeNavigatorRequest(
   };
 }
 
-/** PSD live request centered on the selected time, independent of the visible timeseries window. */
+/** Default margin around an event when locking the PSD window to it. */
+export const PSD_EVENT_LOCK_MARGIN_S = 0.25;
+
+/**
+ * Resolve an event record's time span — `[t_start, t_end]` — from a free-form
+ * event record dict. Returns `null` when the record doesn't carry a finite
+ * event time under `timeCol` (or `t` as a fallback, mirroring `coincidence.ts`).
+ *
+ * Duration sources, in priority order: `t_end`, `duration_s`, `duration`. If
+ * none are present, the returned span has zero width (`[t, t]`) — callers
+ * extend with a margin (see `PSD_EVENT_LOCK_MARGIN_S`) so a point event still
+ * produces a finite PSD window.
+ */
+export function eventTimeRange(
+  record: Record<string, unknown> | null | undefined,
+  timeCol: string,
+): [number, number] | null {
+  if (!record) return null;
+  const rawT = record[timeCol] ?? record["t"];
+  const tNum =
+    typeof rawT === "number"
+      ? rawT
+      : typeof rawT === "string"
+        ? parseFloat(rawT)
+        : NaN;
+  if (!Number.isFinite(tNum)) return null;
+
+  const rawTEnd = record["t_end"];
+  if (rawTEnd != null) {
+    const tEnd =
+      typeof rawTEnd === "number"
+        ? rawTEnd
+        : typeof rawTEnd === "string"
+          ? parseFloat(rawTEnd)
+          : NaN;
+    if (Number.isFinite(tEnd) && tEnd >= tNum) return [tNum, tEnd];
+  }
+
+  const rawDur = record["duration_s"] ?? record["duration"];
+  if (rawDur != null) {
+    const dur =
+      typeof rawDur === "number"
+        ? rawDur
+        : typeof rawDur === "string"
+          ? parseFloat(rawDur)
+          : NaN;
+    if (Number.isFinite(dur) && dur >= 0) return [tNum, tNum + dur];
+  }
+
+  return [tNum, tNum];
+}
+
+/**
+ * PSD live request.
+ *
+ * Default: window is centered on `selection.time` with width `windowSizeS`.
+ *
+ * When `lockedTimeRange` is provided (G8 "lock PSD to event"), it overrides
+ * the cursor-centred window — the caller (typically `WorkspaceMain`) derives
+ * it from the active event record via `eventTimeRange` plus a margin so the
+ * PSD heatmap reflects the event's true duration instead of whatever value
+ * sat in the PSD-window slider.
+ */
 export function makePSDLiveRequest(
   selection: SelectionDTO,
   windowSizeS: number,
   timeCoord: CoordSummary | undefined,
   psdParams?: TensorSliceRequestDTO["psd_params"],
+  lockedTimeRange?: [number, number] | null,
 ): TensorSliceRequestDTO {
-  const safeWindowSizeS = Number.isFinite(windowSizeS) && windowSizeS > 0 ? windowSizeS : 1;
-  const halfWindow = safeWindowSizeS / 2;
-  const centeredWindow: [number, number] = [
-    Math.max(0, selection.time - halfWindow),
-    selection.time + halfWindow,
-  ];
+  const window: [number, number] = lockedTimeRange
+    ? lockedTimeRange
+    : (() => {
+        const safeWindowSizeS =
+          Number.isFinite(windowSizeS) && windowSizeS > 0 ? windowSizeS : 1;
+        const halfWindow = safeWindowSizeS / 2;
+        return [Math.max(0, selection.time - halfWindow), selection.time + halfWindow];
+      })();
 
   return {
     view_type: "psd_live",
     selection,
-    time_range: clampWindow(centeredWindow, timeCoord),
+    time_range: clampWindow(window, timeCoord),
     psd_params: psdParams,
   };
 }
@@ -295,5 +576,44 @@ export function makeSpectrogramLiveRequest(
     selection,
     time_range: timeWindow,
     spectrogram_live_params: params,
+  };
+}
+
+/**
+ * Event-average request — builds an event-locked mean/std/median/snr trace.
+ *
+ * The server stacks (event, ..., lag) epochs from the source tensor and
+ * reduces across the event axis. Lag-window defaults to ±1 s; bumping the
+ * event cap is the user's responsibility — 200 keeps an interactive
+ * round-trip tractable on dense detector streams (35 k events on the audit
+ * bundle). The `selection` is irrelevant to the server response (event
+ * windows are anchored at event onsets), but a stable sentinel keeps the
+ * React Query cache key invariant under cursor moves.
+ */
+export function makeEventAverageRequest(
+  params: EventAverageParamsDTO,
+): TensorSliceRequestDTO {
+  return {
+    view_type: "event_average",
+    selection: { time: 0, freq: 0, ap: 0, ml: 0, channel: null },
+    event_average_params: params,
+  };
+}
+
+/**
+ * Propagation-movie request — returns N evenly-spaced (AP, ML) frames over
+ * the visible window in one round-trip. The frontend preloads the whole
+ * cube and plays back via RAF instead of stepping per-frame to the server.
+ */
+export function makePropagationMovieRequest(
+  selection: SelectionDTO,
+  timeWindow: [number, number],
+  nFrames?: number,
+): TensorSliceRequestDTO {
+  return {
+    view_type: "propagation_movie",
+    selection,
+    time_range: timeWindow,
+    n_frames: nFrames,
   };
 }

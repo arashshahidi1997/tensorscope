@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { decodeArrowSlice, extractSpatialCells } from "../../api/arrow";
 import { ChannelGridRenderer } from "./ChannelGridRenderer";
+import { ColorBar } from "./ColorBar";
 import type { SpatialCellWithId } from "./SpatialRenderer";
 import type { SliceViewProps } from "./viewTypes";
 
@@ -86,6 +87,8 @@ export function PropagationView({
         selectedIds,
         minValue: globalMin ?? minValueRef.current,
         maxValue: globalMax ?? maxValueRef.current,
+        colormap: "jet",
+        smoothing: true,
       });
     });
 
@@ -111,6 +114,8 @@ export function PropagationView({
       selectedIds,
       minValue: globalMin ?? minValueRef.current,
       maxValue: globalMax ?? maxValueRef.current,
+      colormap: "jet",
+      smoothing: false,
     });
 
     // Draw the time label overlay on top of the rendered cells.
@@ -167,21 +172,46 @@ export function PropagationView({
   // Guard: must come AFTER all hooks.
   if (!selection) return null;
 
+  // Aspect-preserving wrap: mirror SpatialMapSliceView so the propagation
+  // frame stays a true (nML/nAP) box in a wider-than-tall view panel —
+  // never compressed in Y by the surrounding controller chrome.
+  const nAP = nAPRef.current || 1;
+  const nML = nMLRef.current || 1;
+  const aspectRatio = nML / nAP;
+
+  const cMin = globalMin ?? minValueRef.current;
+  const cMax = globalMax ?? maxValueRef.current;
+
   return (
-    <div className="axis-canvas-wrap" title="Spatial propagation frame — click a cell to select AP/ML">
+    <div style={{ display: "flex", width: "100%", height: "100%", gap: 4 }}>
+    <div className="axis-canvas-wrap" style={{ flex: 1, minHeight: 0 }} title="Spatial propagation frame — click a cell to select AP/ML">
       <div className="axis-y-label">AP</div>
       <div className="axis-y-ticks" />
-      <div ref={containerRef} className="axis-canvas-area">
-        <canvas
-          ref={canvasRef}
-          style={{ display: "block", width: "100%", height: "100%" }}
-          onClick={handleClick}
-          onMouseMove={handleMouseMove}
-          onMouseLeave={handleMouseLeave}
-        />
+      <div className="axis-canvas-area" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div
+          ref={containerRef}
+          style={{
+            position: "relative",
+            aspectRatio: `${aspectRatio}`,
+            maxWidth: "100%",
+            maxHeight: "100%",
+            width: aspectRatio >= 1 ? "100%" : "auto",
+            height: aspectRatio < 1 ? "100%" : "auto",
+          }}
+        >
+          <canvas
+            ref={canvasRef}
+            style={{ display: "block", width: "100%", height: "100%" }}
+            onClick={handleClick}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
+          />
+        </div>
       </div>
       <div className="axis-x-ticks" />
       <div className="axis-x-label">ML</div>
+    </div>
+      <ColorBar colormap="jet" min={cMin} max={cMax} label="value" />
     </div>
   );
 }

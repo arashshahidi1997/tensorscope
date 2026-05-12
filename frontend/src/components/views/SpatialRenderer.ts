@@ -32,6 +32,42 @@ export type SpatialRenderOptions = {
   minValue: number;
   /** Max data value (for color normalization). */
   maxValue: number;
+  /**
+   * Optional set of masked electrode ids — painted with a distinct hatched
+   * style (not value-colored, not transparent) so the user can see the mask
+   * footprint on top of the data.
+   */
+  maskedIds?: Set<number>;
+  /**
+   * Audit A2: matplotlib-style colormap. "jet" (the user's request) renders
+   * the classic blue→cyan→green→yellow→red ramp; "viridis"/"inferno"/
+   * "cividis" are perceptually-uniform alternatives. Falls back to the
+   * legacy HSL ramp when unset for back-compat with views still on the old
+   * "sequential" path.
+   */
+  colormap?: "jet" | "viridis" | "inferno" | "cividis" | "sequential";
+  /**
+   * Audit A2: when true, use bilinear smoothing on the canvas blit so
+   * neighbouring channels blend continuously. When false (default), upscale
+   * nearest-neighbor — gives matplotlib `imshow`'s default crisp-tile look
+   * with no visible 1-pixel gaps between cells.
+   */
+  smoothing?: boolean;
+  /**
+   * Editor mode: draw a thin 1px stroke around every cell so they're
+   * visually distinct even when all values are identical (e.g. the empty
+   * mask editor where every cell is 0). Off by default — data views render
+   * gap-free per matplotlib `imshow` look.
+   */
+  showCellBorders?: boolean;
+  /**
+   * G7: per-cell region annotation. Keyed by flat id (apIdx * nML + mlIdx).
+   * When present, the renderer draws a small region-coloured corner tab on
+   * each annotated cell. Cells without an entry render unchanged.
+   */
+  regionByFlatId?: Map<number, string>;
+  /** Region → swatch color, paired with `regionByFlatId`. */
+  regionPalette?: Map<string, string>;
 };
 
 export interface SpatialRendererBackend {

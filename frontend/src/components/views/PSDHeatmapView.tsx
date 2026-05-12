@@ -3,6 +3,8 @@ import type { PSDHeatmapData } from "../../api/arrow";
 import { useHeatmapGestures } from "../../hooks/useHeatmapGestures";
 import { useAppStore } from "../../store/appStore";
 import { YTicks } from "./AxisTicks";
+import { ColorBar } from "./ColorBar";
+import { getColormapLUT } from "./colormaps";
 
 type PSDHeatmapProps = {
   data: PSDHeatmapData;
@@ -32,13 +34,12 @@ function parseChannelLabel(label: string): { ap: number; ml: number } | null {
   return { ap: Number.parseFloat(m[1]), ml: Number.parseFloat(m[2]) };
 }
 
-/** Inferno-like colormap: black -> purple -> orange -> yellow */
+// Audit S1/S2: real matplotlib `inferno` LUT, not the prior three-line
+// approximation that bore only superficial resemblance.
+const INFERNO_LUT = getColormapLUT("inferno");
 function infernoColor(t: number): [number, number, number] {
-  const clamped = Math.max(0, Math.min(1, t));
-  const r = Math.round(255 * Math.min(1, clamped * 2));
-  const g = Math.round(255 * Math.max(0, clamped * 2 - 0.6));
-  const b = Math.round(255 * Math.max(0, 0.5 - Math.abs(clamped - 0.25)));
-  return [r, g, b];
+  const idx = Math.max(0, Math.min(255, Math.round(t * 255))) * 4;
+  return [INFERNO_LUT[idx], INFERNO_LUT[idx + 1], INFERNO_LUT[idx + 2]];
 }
 
 export function PSDHeatmapView({
@@ -105,6 +106,31 @@ export function PSDHeatmapView({
     },
   });
 
+  // Audit S3: lift the color-range computation out of the paint loop so the
+  // ColorBar legend reflects the same bounds the canvas was painted with.
+  const colorRange = useMemo(() => {
+    const vpXLo = viewport.xLo;
+    const vpXHi = viewport.xHi;
+    const vpFLo = viewport.yLo;
+    const vpFHi = viewport.yHi;
+    let logMin = Infinity;
+    let logMax = -Infinity;
+    for (let fi = 0; fi < data.freqs.length; fi++) {
+      if (data.freqs[fi] < vpFLo || data.freqs[fi] > vpFHi) continue;
+      for (let ci = 0; ci < data.channelLabels.length; ci++) {
+        if (ci < vpXLo || ci > vpXHi) continue;
+        const v = data.matrix[fi][ci];
+        if (Number.isFinite(v) && v > 0) {
+          const lv = Math.log10(v);
+          if (lv < logMin) logMin = lv;
+          if (lv > logMax) logMax = lv;
+        }
+      }
+    }
+    if (!Number.isFinite(logMin)) return { logMin: 0, logMax: 1 };
+    return { logMin, logMax };
+  }, [data, viewport]);
+
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -123,22 +149,7 @@ export function PSDHeatmapView({
     const vpFLo = viewport.yLo;
     const vpFHi = viewport.yHi;
 
-    // Compute log10 bounds (only within viewport freq range)
-    let logMin = Infinity;
-    let logMax = -Infinity;
-    for (let fi = 0; fi < freqs.length; fi++) {
-      if (freqs[fi] < vpFLo || freqs[fi] > vpFHi) continue;
-      for (let ci = 0; ci < channelLabels.length; ci++) {
-        if (ci < vpXLo || ci > vpXHi) continue;
-        const v = matrix[fi][ci];
-        if (Number.isFinite(v) && v > 0) {
-          const lv = Math.log10(v);
-          if (lv < logMin) logMin = lv;
-          if (lv > logMax) logMax = lv;
-        }
-      }
-    }
-    if (!Number.isFinite(logMin)) { logMin = 0; logMax = 1; }
+    const { logMin, logMax } = colorRange;
 
     const nF = freqs.length;
     const nC = channelLabels.length;
@@ -210,7 +221,7 @@ export function PSDHeatmapView({
       ctx.lineTo(x, h);
       ctx.stroke();
     }
-  }, [selectedFreq, freqLogScale, viewport, selectedColumn]);
+  }, [selectedFreq, freqLogScale, viewport, selectedColumn, colorRange]);
 
   // Resize handling
   useLayoutEffect(() => {
@@ -284,15 +295,23 @@ export function PSDHeatmapView({
         >log</button>
       </div>
 
-      {/* Heatmap with axes */}
+      {/* Heatmap with axes + colorbar legend (audit S3) */}
+      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
       <div className="axis-canvas-wrap" style={{ flex: 1, minHeight: 0 }}>
         <div className="axis-y-label">Freq (Hz)</div>
-        <YTicks lo={vpFLo} hi={vpFHi} logScale={freqLogScale && vpFLo > 0} />
+        <YTicks lo={vpFLo} hi={vpFHi} logScale={freqLogScale} />
         <div ref={containerRef} className="axis-canvas-area">
           <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%", cursor: "crosshair" }} />
         </div>
         <div className="axis-x-ticks" />
         <div className="axis-x-label">Channel</div>
+      </div>
+        <ColorBar
+          colormap="inferno"
+          min={colorRange.logMin}
+          max={colorRange.logMax}
+          label="log₁₀(power)"
+        />
       </div>
     </div>
   );

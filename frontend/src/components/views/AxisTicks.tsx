@@ -7,6 +7,31 @@
 
 type TickDef = { value: number; label: string; pct: number };
 
+/**
+ * Magnitude-aware label formatter.  Audit S10 / A1f: `v.toFixed(0)` truncated
+ * sub-Hz tick values to "0", silently obscuring the delta-band (0.5–4 Hz)
+ * range users care about most.  This formatter scales precision to the value
+ * itself — sub-decimal values get 2–3 decimals; integers and above get 0.
+ */
+export function formatTickLabel(value: number, niceStep?: number): string {
+  if (!Number.isFinite(value)) return "";
+  const v = Math.abs(value);
+  if (v === 0) return "0";
+  const stepDecimals =
+    niceStep !== undefined && niceStep > 0
+      ? Math.max(0, -Math.floor(Math.log10(niceStep)))
+      : v < 0.01
+        ? 3
+        : v < 0.1
+          ? 2
+          : v < 1
+            ? 2
+            : v < 10
+              ? 1
+              : 0;
+  return value.toFixed(stepDecimals);
+}
+
 /** Generate ~count evenly-spaced tick values between lo and hi. */
 export function makeTicks(lo: number, hi: number, count = 4): TickDef[] {
   if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return [];
@@ -21,8 +46,7 @@ export function makeTicks(lo: number, hi: number, count = 4): TickDef[] {
   const start = Math.ceil(lo / niceStep) * niceStep;
   for (let v = start; v <= hi; v += niceStep) {
     const pct = ((v - lo) / range) * 100;
-    const label = niceStep >= 1 ? v.toFixed(0) : v.toFixed(Math.max(0, -Math.floor(Math.log10(niceStep))));
-    ticks.push({ value: v, label, pct });
+    ticks.push({ value: v, label: formatTickLabel(v, niceStep), pct });
   }
   return ticks;
 }
@@ -37,8 +61,13 @@ export function makeTicks(lo: number, hi: number, count = 4): TickDef[] {
  * for the linear case.
  */
 export function makeLogTicks(lo: number, hi: number): TickDef[] {
-  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo || lo <= 0) return [];
-  const logLo = Math.log10(lo);
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return [];
+  // Audit A1 / A1c: when the lower bound is non-positive, clip it to a small
+  // epsilon for tick generation so the user still gets log labels (the canvas
+  // separately falls back to linear positioning, which is fine — labels are a
+  // value-set hint, not a position-set hint).
+  const effectiveLo = Math.max(lo, 1e-3);
+  const logLo = Math.log10(effectiveLo);
   const logHi = Math.log10(hi);
   const logRange = logHi - logLo;
 
@@ -52,10 +81,9 @@ export function makeLogTicks(lo: number, hi: number): TickDef[] {
     const base = Math.pow(10, d);
     for (const m of sub) {
       const v = m * base;
-      if (v < lo || v > hi) continue;
+      if (v < effectiveLo || v > hi) continue;
       const pct = ((Math.log10(v) - logLo) / logRange) * 100;
-      const label = v >= 1 ? v.toFixed(0) : v.toString();
-      ticks.push({ value: v, label, pct });
+      ticks.push({ value: v, label: formatTickLabel(v), pct });
     }
   }
   return ticks;

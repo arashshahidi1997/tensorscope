@@ -48,6 +48,14 @@ export const DEFAULT_SLOT_LAYOUT: ViewSlotLayout = {
       ],
       minHeight: 220,
     },
+    {
+      id: "event",
+      label: "Event",
+      slots: [
+        { viewId: "event_average", region: "left", widthFraction: 1.0 },
+      ],
+      minHeight: 220,
+    },
   ],
 };
 

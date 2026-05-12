@@ -1,5 +1,11 @@
 # Idea
 
+[**Non-grid probe geometries + 3D atlas registration (rat WHS / Long-Evans)**](idea-arash-20260510-113227-909826.md){ .note-card-title }
+
+<small>**date:** 2026-05-10 · **status:** open · **tags:** [idea, design, probe, atlas, anatomy, neuropixels, brainglobe]</small>
+
+---
+
 [**Use case: human + agent interactive validation of detected sleep events (spindle**](idea-arash-20260507-161642-673518.md){ .note-card-title }
 
 <small>**date:** 2026-05-07 · **status:** open · **confidence:** 1.0</small>

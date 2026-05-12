@@ -121,13 +121,13 @@ export function LayoutShell({
           <LayoutPresetPicker />
           <span className="topbar-chip muted">{sessionId.slice(0, 8)}</span>
           <button
-            className="collapse-toggle"
+            className="collapse-toggle bottom-toggle"
             onClick={toggleBottomPanel}
             aria-label={bottomPanelCollapsed ? "Show bottom panel" : "Hide bottom panel"}
             title={`Toggle bottom panel (Ctrl+J)`}
             type="button"
           >
-            {bottomPanelCollapsed ? "\u25BD" : "\u25B3"}
+            {bottomPanelCollapsed ? "\u25BC" : "\u25B2"}
           </button>
           {toolbar}
           <button
@@ -187,6 +187,21 @@ export function LayoutShell({
       >
         {bottomPanel}
       </div>
+
+      {/* Floating "pull-up" tab when the bottom panel is docked away — sits at
+          the bottom-right of the workspace so the affordance is anchored to
+          where the panel will reappear (not buried in the topbar). */}
+      {bottomPanelCollapsed && (
+        <button
+          type="button"
+          className="bottom-pullup-tab"
+          onClick={toggleBottomPanel}
+          aria-label="Show bottom panel"
+          title="Show bottom panel (Ctrl+J)"
+        >
+          ▲ navigator
+        </button>
+      )}
     </div>
   );
 }

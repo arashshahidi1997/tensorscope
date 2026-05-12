@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import { decodeArrowSlice, extractTimeseriesColumnar } from "../../api/arrow";
+import { decodeArrowSlice, extractTimeseriesColumnar, type ColumnarTimeseries } from "../../api/arrow";
 import type { BrainstateIntervalDTO } from "../../api/types";
 import type { SliceViewProps } from "./viewTypes";
 import { makeBrainstateDrawHook } from "./brainstateOverlay";
@@ -57,6 +57,7 @@ function attachNavigatorGestures(chart: uPlot, refs: NavigatorGestureRefs): () =
 
 export function NavigatorView({
   slice,
+  v2Data,
   selection,
   onSelectTime,
   onTimeWindowChange,
@@ -66,6 +67,11 @@ export function NavigatorView({
   onTimeWindowChange?: (window: [number, number]) => void;
   brainstateIntervals?: BrainstateIntervalDTO[];
   brainstateOverlayEnabled?: boolean;
+  /**
+   * Contract-v2 pre-extracted columnar data — when present, replaces the
+   * `slice` decode entirely. See `docs/design/contract-v2.md` §5.
+   */
+  v2Data?: ColumnarTimeseries | null;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<uPlot | null>(null);
@@ -83,8 +89,9 @@ export function NavigatorView({
 
   // ── Data decoding ────────────────────────────────────────────────────────
   const { times, meanValues } = useMemo(() => {
-    const decoded = decodeArrowSlice(slice);
-    const { times: ts, series } = extractTimeseriesColumnar(decoded);
+    const columnar = v2Data ?? extractTimeseriesColumnar(decodeArrowSlice(slice));
+    const ts = columnar.times;
+    const series = columnar.series;
     if (ts.length === 0 || series.length === 0) return { times: [], meanValues: [] };
     const mean = ts.map((_, ti) => {
       let sum = 0, count = 0;
@@ -96,7 +103,7 @@ export function NavigatorView({
     });
     return { times: ts, meanValues: mean };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slice.payload]);
+  }, [v2Data, slice.payload]);
 
   // ── Chart lifecycle ──────────────────────────────────────────────────────
   useEffect(() => {

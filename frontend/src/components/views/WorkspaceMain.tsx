@@ -12,15 +12,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   clampWindow,
+  eventTimeRange,
   makeDefaultSliceRequest,
   useProcessingQuery,
   useSetProcessing,
   makeNavigatorRequest,
   makePSDLiveRequest,
   makeSpectrogramLiveRequest,
+  PSD_EVENT_LOCK_MARGIN_S,
   useBrainstateIntervalsQuery,
   useBrainstateMetaQuery,
-  useEventWindowQuery,
+  useEventWindowQueries,
   useSliceQuery,
   useStateQuery,
   useTensorQuery,
@@ -29,6 +31,9 @@ import {
   useV2TimeseriesQuery,
   isV2Enabled,
 } from "../../api/queries";
+import { coincidenceIndicesByStream, extractEventTimes } from "../../api/coincidence";
+import { useEventStreamsStore } from "../../store/eventStreamsStore";
+import { buildStreamColorMap } from "./eventStreamColors";
 import {
   decodeArrowSlice,
   extractPSDHeatmap,
@@ -41,6 +46,7 @@ import type { SelectionDTO } from "../../api/types";
 import { resolveBand, useAppStore } from "../../store/appStore";
 import { useSelectionStore, toSelectionDTO } from "../../store/selectionStore";
 import { getAvailableViews, getOrthoPair, viewRegistry } from "../../registry/viewRegistry";
+import { EventAverageView } from "./EventAverageView";
 import { HypnogramView } from "./HypnogramView";
 import { NavigatorView } from "./NavigatorView";
 import { TimeScaleBar } from "./ChartToolbar";
@@ -105,6 +111,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     psdFmax,
     psdNW,
     psdWindowS,
+    psdLockToEvent,
     freqLogScale,
     bandPreset,
     bandCustom,
@@ -193,6 +200,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     v === "psd_heatmap" || v === "psd_curve" || v === "psd_spatial",
   );
   const hasSpectrogramLive = effectiveActiveViews.includes("spectrogram_live");
+  const hasEventAverage = effectiveActiveViews.includes("event_average");
 
   // Detect if the active tensor supports ortho-slicing (4D: time, freq, AP, ML)
   const tensorDims = tensorQuery.data?.dims ?? activeTensorSummary?.dims ?? [];
@@ -203,6 +211,42 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   // Clamp the time window to data bounds so panning outside the recording
   // never triggers a "slice returned no data" 400 from the server.
   const safeWindow = clampWindow(timeWindow, timeCoord);
+
+  // G8: PSD-lock-to-event derivation.
+  //
+  // When `psdLockToEvent` is on AND the user has an event selected, the PSD
+  // live request uses the event's `[t_start, t_end]` span (extended by
+  // PSD_EVENT_LOCK_MARGIN_S) instead of the cursor-centred window. The
+  // record is looked up by `id_col` against the same `eventsByStream` map
+  // that drives the timeseries event markers, so the locked window stays
+  // in sync with whatever the table/timeline shows.
+  const eventStreamsList = stateQuery.data?.events ?? [];
+  const { pinnedStreams, coincidenceWindow } = useEventStreamsStore();
+  const eventsByStream = useEventWindowQueries(pinnedStreams, selectionDraft, 2);
+
+  const selectedEventId = selectionState.event.eventId;
+  const selectedStreamName = selectionState.event.streamName;
+  const lockedEventTimeRange = useMemo<[number, number] | null>(() => {
+    if (!psdLockToEvent || selectedEventId == null || !selectedStreamName) return null;
+    const meta = eventStreamsList.find((s) => s.name === selectedStreamName);
+    const records = eventsByStream.get(selectedStreamName);
+    if (!meta || !records) return null;
+    const rec = records.find(
+      (r) => (r.record as Record<string, unknown>)[meta.id_col] === selectedEventId,
+    );
+    const span = eventTimeRange(rec?.record as Record<string, unknown> | undefined, meta.time_col);
+    if (!span) return null;
+    return [
+      Math.max(0, span[0] - PSD_EVENT_LOCK_MARGIN_S),
+      span[1] + PSD_EVENT_LOCK_MARGIN_S,
+    ];
+  }, [
+    psdLockToEvent,
+    selectedEventId,
+    selectedStreamName,
+    eventStreamsList,
+    eventsByStream,
+  ]);
 
   const timeseriesSliceQuery = useSliceQuery(
     selectedTensor,
@@ -223,7 +267,13 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const psdLiveQuery = useSliceQuery(
     selectedTensor,
     hasPSDLive
-      ? makePSDLiveRequest(selectionDraft, psdWindowS, timeCoord, { NW: psdNW, fmax: psdFmax })
+      ? makePSDLiveRequest(
+          selectionDraft,
+          psdWindowS,
+          timeCoord,
+          { NW: psdNW, fmax: psdFmax },
+          lockedEventTimeRange,
+        )
       : null,
   );
 
@@ -237,7 +287,13 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const psdLiveV2Query = useV2PSDHeatmapQuery(
     selectedTensor,
     hasPSDLive && v2Enabled
-      ? makePSDLiveRequest(selectionDraft, psdWindowS, timeCoord, { NW: psdNW, fmax: psdFmax })
+      ? makePSDLiveRequest(
+          selectionDraft,
+          psdWindowS,
+          timeCoord,
+          { NW: psdNW, fmax: psdFmax },
+          lockedEventTimeRange,
+        )
       : null,
   );
   // Spectrogram live — multitaper spectrogram on the visible window. Server
@@ -351,10 +407,31 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     ? (timeseriesBandpassQuery.data ?? lastBandpassV2.current)
     : null;
 
-  // Event window for timeseries markers — same query key as the inspector's call,
-  // so React Query deduplicates the request.
-  const firstEventStream = stateQuery.data?.events[0] ?? null;
-  const eventWindowQuery = useEventWindowQuery(firstEventStream?.name ?? null, selectionDraft, 2);
+  // Multi-stream event window for the timeseries markers (G5). The
+  // `pinnedStreams`/`eventsByStream` declarations live above (alongside the
+  // PSD-lock-to-event derivation that consumes them); only the derived
+  // colour map + first-stream helper hang off them here.
+  const firstEventStream = eventStreamsList[0] ?? null;
+  const streamColorsMap = useMemo(() => buildStreamColorMap(pinnedStreams), [pinnedStreams]);
+
+  const coincidentTimes = useMemo<number[]>(() => {
+    if (pinnedStreams.length < 2) return [];
+    const byStream = new Map<string, ReturnType<typeof extractEventTimes>>();
+    for (const name of pinnedStreams) {
+      const recs = eventsByStream.get(name);
+      const meta = eventStreamsList.find((s) => s.name === name) ?? null;
+      if (!recs) continue;
+      byStream.set(name, extractEventTimes(recs, meta));
+    }
+    const idx = coincidenceIndicesByStream(byStream, coincidenceWindow);
+    const times: number[] = [];
+    for (const [name, set] of idx) {
+      const evs = byStream.get(name);
+      if (!evs) continue;
+      for (const i of set) times.push(evs[i].t);
+    }
+    return times;
+  }, [pinnedStreams, eventsByStream, eventStreamsList, coincidenceWindow]);
 
   const SpatialMapComponent = viewRegistry.spatial_map as typeof SpatialMapSliceView;
   const PSDComponent = viewRegistry.psd_average;
@@ -448,7 +525,9 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         bandPreset={bandPreset}
         bandActive={activeBand}
         selection={selectionDraft}
-        events={eventWindowQuery.data ?? []}
+        eventsByStream={eventsByStream}
+        streamColors={streamColorsMap}
+        coincidentTimes={coincidentTimes}
         brainstateIntervals={brainstateIntervals}
         brainstateOverlayEnabled={brainstateOverlay && brainstateAvailable}
         onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
@@ -651,6 +730,15 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       viewElements["psd_curve"] = placeholder;
       viewElements["psd_spatial"] = placeholder;
     }
+  }
+
+  if (hasEventAverage) {
+    viewElements["event_average"] = (
+      <EventAverageView
+        tensorName={selectedTensor}
+        eventStreams={stateQuery.data?.events ?? []}
+      />
+    );
   }
 
   if (firstEventStream && hasSpatial) {

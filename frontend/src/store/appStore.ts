@@ -35,6 +35,13 @@ type AppStore = {
   psdFmax: number;
   psdNW: number;
   psdWindowS: number;
+  /**
+   * When true and an event is selected, the PSD live request uses the
+   * event's `[t_start, t_end]` span (plus a small margin) instead of the
+   * cursor-centered `psdWindowS` window. See `docs/design/...` G8.
+   * Session-local — not persisted.
+   */
+  psdLockToEvent: boolean;
   freqLogScale: boolean;
   /**
    * Per-view bandpass overlay (timeseries view). Controls the
@@ -67,6 +74,7 @@ type AppStore = {
   setPsdFmax: (value: number) => void;
   setPsdNW: (value: number) => void;
   setPsdWindowS: (value: number) => void;
+  togglePsdLockToEvent: () => void;
   toggleFreqLogScale: () => void;
   setBandPreset: (preset: BandPreset) => void;
   setBandCustom: (lo: number, hi: number) => void;
@@ -147,10 +155,12 @@ export const useAppStore = create<AppStore>((set) => ({
   psdFmax: 100,
   psdNW: 4,
   psdWindowS: 1,
+  psdLockToEvent: false,
   freqLogScale: false,
   setPsdFmax: (value) => set({ psdFmax: value }),
   setPsdNW: (value) => set({ psdNW: value }),
   setPsdWindowS: (value) => set({ psdWindowS: value }),
+  togglePsdLockToEvent: () => set((s) => ({ psdLockToEvent: !s.psdLockToEvent })),
   toggleFreqLogScale: () => set((s) => ({ freqLogScale: !s.freqLogScale })),
   bandPreset: "off",
   bandCustom: [11, 16],

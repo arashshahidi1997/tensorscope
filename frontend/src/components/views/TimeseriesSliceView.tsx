@@ -2,15 +2,18 @@ import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { extractTimeseriesColumnarFast, type ColumnarTimeseries } from "../../api/arrow";
+import { buildRegionResolver } from "../../api/probeLayout";
+import { useProbeLayoutQuery } from "../../api/queries";
 import { useAppStore, type BandPreset } from "../../store/appStore";
 import { useChannelViewportShortcuts } from "./useChannelViewportShortcuts";
-import type { BrainstateIntervalDTO } from "../../api/types";
+import type { BrainstateIntervalDTO, EventRecordDTO } from "../../api/types";
 import type { SliceViewProps } from "./viewTypes";
 import { ChartToolbar } from "./ChartToolbar";
 import { useChartTools } from "./useChartTools";
 import type { GestureTool, YMode } from "./useChartTools";
 import { makeBrainstateDrawHook } from "./brainstateOverlay";
 import { TimeseriesNavStrip } from "./TimeseriesNavStrip";
+import { COINCIDENCE_COLOR } from "./eventStreamColors";
 
 const COLORS = ["#d3ff68", "#73d2de", "#ff9770", "#c492ff", "#f4d35e", "#8bd450", "#ff6b9d", "#a8e6cf"];
 
@@ -238,6 +241,9 @@ export function TimeseriesSliceView({
   bandActive,
   selection,
   events = [],
+  eventsByStream,
+  streamColors,
+  coincidentTimes,
   brainstateIntervals = [],
   brainstateOverlayEnabled = false,
   onSelectTime,
@@ -249,19 +255,20 @@ export function TimeseriesSliceView({
   brainstateOverlayEnabled?: boolean;
   /** Full data extent in seconds; if omitted the nav strip is hidden. */
   dataRange?: [number, number];
-  /**
-   * Contract-v2 pre-extracted columnar data — when present, replaces the
-   * `slice` decode entirely. See `docs/design/contract-v2.md` §5.
-   */
   v2Data?: ColumnarTimeseries | null;
-  /**
-   * Filtered-band overlay (G1). When `bandActive` is non-null, the
-   * filtered series renders on top of raw at the same y-offset. See
-   * `docs/design/filtered-band-overlay.md`.
-   */
   v2BandpassData?: ColumnarTimeseries | null;
   bandPreset?: BandPreset;
   bandActive?: [number, number] | null;
+  /**
+   * Multi-stream event overlay (G5). When supplied, replaces the single-
+   * stream `events` prop for marker drawing; the per-stream color comes
+   * from `streamColors`. `coincidentTimes` is the union of event times in
+   * any pinned stream that have a match in another pinned stream — the
+   * draw hook adds a ringed glyph at those times.
+   */
+  eventsByStream?: Map<string, EventRecordDTO[]>;
+  streamColors?: Map<string, string>;
+  coincidentTimes?: number[];
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<uPlot | null>(null);
@@ -280,16 +287,27 @@ export function TimeseriesSliceView({
 
   const onSelectTimeRef = useRef(onSelectTime);
   const eventsRef = useRef(events);
+  const eventsByStreamRef = useRef(eventsByStream);
+  const streamColorsRef = useRef(streamColors);
+  const coincidentTimesRef = useRef(coincidentTimes);
   const onTimeWindowChangeRef = useRef(onTimeWindowChange);
   const brainstateIntervalsRef = useRef(brainstateIntervals);
   const brainstateEnabledRef = useRef(brainstateOverlayEnabled);
   useEffect(() => { onSelectTimeRef.current = onSelectTime; });
   useEffect(() => { eventsRef.current = events; });
+  useEffect(() => { eventsByStreamRef.current = eventsByStream; });
+  useEffect(() => { streamColorsRef.current = streamColors; });
+  useEffect(() => { coincidentTimesRef.current = coincidentTimes; });
   useEffect(() => { onTimeWindowChangeRef.current = onTimeWindowChange; });
   useEffect(() => { brainstateIntervalsRef.current = brainstateIntervals; });
   useEffect(() => { brainstateEnabledRef.current = brainstateOverlayEnabled; });
 
   const tools = useChartTools(chartRef);
+
+  // G7: probe-layout sidecar. Drives region-aware channel labels in the
+  // drawAxes hook below. Resolved against series keys so a (time,channel)
+  // tensor and a (time,AP,ML) tensor both get the same lookup behaviour.
+  const { data: probeLayout } = useProbeLayoutQuery();
 
   // Channel viewport (G2). nVisible is fixed at 32 in v0; perf-tune to
   // raise the cap is v0.1 work. See `docs/design/channel-viewport.md`.
@@ -351,6 +369,38 @@ export function TimeseriesSliceView({
   // Active whenever a timeseries view is mounted (one per workspace).
   useChannelViewportShortcuts({ totalChannels, nVisible: Math.min(N_VISIBLE, series.length) });
   const channelCapActive = totalChannels > series.length;
+
+  // G7: derive a per-visible-series region tag from the loaded probe layout.
+  // Series keys are either `ch-N` (flat channel tensors) or `ap-A-ml-M`
+  // (grid tensors); we parse both and look up via the appropriate map.
+  // Returns an array aligned with the visible `series` slice.
+  const regionTags = useMemo(() => {
+    if (!probeLayout || probeLayout.electrodes.length === 0) {
+      return null;
+    }
+    // Infer nML from grid-style series keys so flat ids match the loader.
+    let inferredNML = 0;
+    for (const s of series) {
+      const m = /^ap-\d+-ml-(\d+)$/.exec(s.key);
+      if (m) inferredNML = Math.max(inferredNML, Number(m[1]) + 1);
+    }
+    const resolver = buildRegionResolver(probeLayout, inferredNML);
+    if (resolver.isEmpty) return null;
+    return series.map((s) => {
+      const chMatch = /^ch-(\d+)$/.exec(s.key);
+      if (chMatch) {
+        return resolver.regionByChannel.get(Number(chMatch[1])) ?? null;
+      }
+      const gridMatch = /^ap-(\d+)-ml-(\d+)$/.exec(s.key);
+      if (gridMatch && inferredNML > 0) {
+        const flat = Number(gridMatch[1]) * inferredNML + Number(gridMatch[2]);
+        return resolver.regionByFlatId.get(flat) ?? null;
+      }
+      return null;
+    });
+  }, [probeLayout, series]);
+  const regionTagsRef = useRef<Array<string | null> | null>(regionTags);
+  useEffect(() => { regionTagsRef.current = regionTags; });
 
   const structuralKey = useMemo(
     () => series.map((s) => `${s.key}:${s.label}`).join("|"),
@@ -598,7 +648,19 @@ export function TimeseriesSliceView({
                     const yMid = (yTop + yBot) / 2;
                     if (yMid < u.bbox.top || yMid > u.bbox.top + u.bbox.height) continue;
                     ctx.fillStyle = "#6b7280";
-                    ctx.fillText(`${firstIdx}–${lastIdx}`, u.bbox.left - 6 * dpr, yMid);
+                    // G7: append the dominant region (first non-null tag in
+                    // the group) when a probe-layout sidecar is loaded.
+                    let regionTag: string | null = null;
+                    const tags = regionTagsRef.current;
+                    if (tags) {
+                      for (let k = firstIdx; k <= lastIdx; k++) {
+                        if (tags[k]) { regionTag = tags[k]; break; }
+                      }
+                    }
+                    const label = regionTag
+                      ? `${firstIdx}–${lastIdx} · ${regionTag}`
+                      : `${firstIdx}–${lastIdx}`;
+                    ctx.fillText(label, u.bbox.left - 6 * dpr, yMid);
                     if (g > 0) {
                       const ySep = (yTop + u.valToPos(offsets[firstIdx - 1], "y", true)) / 2;
                       if (ySep >= u.bbox.top && ySep <= u.bbox.top + u.bbox.height) {
@@ -619,24 +681,73 @@ export function TimeseriesSliceView({
               ],
               draw: [
                 (u) => {
-                  const evs = eventsRef.current;
-                  if (!evs.length) return;
                   const ctx = u.ctx;
-                  ctx.save();
-                  ctx.strokeStyle = "rgba(255,180,50,0.7)";
-                  ctx.lineWidth = 1;
-                  ctx.setLineDash([4, 3]);
-                  for (const ev of evs) {
-                    const t = Number((ev.record as Record<string, unknown>).t ?? NaN);
-                    if (!Number.isFinite(t)) continue;
-                    const x = Math.round(u.valToPos(t, "x", true));
-                    if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) continue;
-                    ctx.beginPath();
-                    ctx.moveTo(x, u.bbox.top);
-                    ctx.lineTo(x, u.bbox.top + u.bbox.height);
-                    ctx.stroke();
+                  const byStream = eventsByStreamRef.current;
+                  const colors = streamColorsRef.current;
+
+                  // Multi-stream path (G5): draw one colored tick per
+                  // event per stream. Falls back to the single-stream
+                  // `events` prop when no multi-stream data was passed.
+                  if (byStream && byStream.size > 0 && colors) {
+                    ctx.save();
+                    ctx.lineWidth = 1;
+                    ctx.setLineDash([4, 3]);
+                    for (const [name, evs] of byStream) {
+                      ctx.strokeStyle = colors.get(name) ?? "rgba(255,180,50,0.7)";
+                      for (const ev of evs) {
+                        const t = Number((ev.record as Record<string, unknown>).t ?? NaN);
+                        if (!Number.isFinite(t)) continue;
+                        const x = Math.round(u.valToPos(t, "x", true));
+                        if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) continue;
+                        ctx.beginPath();
+                        ctx.moveTo(x, u.bbox.top);
+                        ctx.lineTo(x, u.bbox.top + u.bbox.height);
+                        ctx.stroke();
+                      }
+                    }
+                    ctx.restore();
+                  } else {
+                    const evs = eventsRef.current;
+                    if (evs.length) {
+                      ctx.save();
+                      ctx.strokeStyle = "rgba(255,180,50,0.7)";
+                      ctx.lineWidth = 1;
+                      ctx.setLineDash([4, 3]);
+                      for (const ev of evs) {
+                        const t = Number((ev.record as Record<string, unknown>).t ?? NaN);
+                        if (!Number.isFinite(t)) continue;
+                        const x = Math.round(u.valToPos(t, "x", true));
+                        if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) continue;
+                        ctx.beginPath();
+                        ctx.moveTo(x, u.bbox.top);
+                        ctx.lineTo(x, u.bbox.top + u.bbox.height);
+                        ctx.stroke();
+                      }
+                      ctx.restore();
+                    }
                   }
-                  ctx.restore();
+
+                  // Coincidence glyph (G5): solid ring at top of plot for
+                  // any event time involved in a cross-stream match. Drawn
+                  // last so it sits above the per-stream dashed ticks.
+                  const coTimes = coincidentTimesRef.current;
+                  if (coTimes && coTimes.length > 0) {
+                    ctx.save();
+                    ctx.strokeStyle = COINCIDENCE_COLOR;
+                    ctx.lineWidth = 1.5;
+                    ctx.setLineDash([]);
+                    const radius = 5;
+                    const cy = u.bbox.top + radius + 2;
+                    for (const t of coTimes) {
+                      if (!Number.isFinite(t)) continue;
+                      const x = Math.round(u.valToPos(t, "x", true));
+                      if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) continue;
+                      ctx.beginPath();
+                      ctx.arc(x, cy, radius, 0, Math.PI * 2);
+                      ctx.stroke();
+                    }
+                    ctx.restore();
+                  }
                 },
                 (u) => {
                   const t = selectionTimeRef.current;
@@ -779,7 +890,7 @@ export function TimeseriesSliceView({
 
   useEffect(() => {
     chartRef.current?.redraw();
-  }, [events]);
+  }, [events, eventsByStream, coincidentTimes]);
 
   useEffect(() => {
     chartRef.current?.redraw();

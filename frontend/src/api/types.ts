@@ -101,6 +101,17 @@ export type BandpassParamsDTO = {
   order?: number;
 };
 
+export type EventAverageAggregate = "mean" | "median" | "snr" | "std";
+
+/** Parameters for the `event_average` view (G4). */
+export type EventAverageParamsDTO = {
+  event_stream_name: string;
+  lag_window?: [number, number];
+  max_events?: number | null;
+  aggregate?: EventAverageAggregate;
+  pool_channels?: boolean;
+};
+
 export type TensorSliceRequestDTO = {
   view_type: string;
   selection: SelectionDTO;
@@ -121,6 +132,8 @@ export type TensorSliceRequestDTO = {
   spectrogram_live_params?: SpectrogramLiveParamsDTO;
   /** Optional per-request bandpass — fills the band-overlay feature. */
   bandpass?: BandpassParamsDTO;
+  /** Event-locked average parameters (for event_average view_type). */
+  event_average_params?: EventAverageParamsDTO;
 };
 
 export type MaskStateDTO = {
@@ -172,6 +185,21 @@ export type ProcessingParamsDTO = {
   zscore_robust: boolean;
 };
 
+/** Per-electrode region annotation surfaced by GET /probe_layout (G7). */
+export type ElectrodeDTO = {
+  region: string;
+  channel_id: number | null;
+  ap: number | null;
+  ml: number | null;
+  label: string | null;
+};
+
+/** Probe-layout sidecar payload — minimal v0 (G7). */
+export type ProbeLayoutDTO = {
+  n_channels: number;
+  electrodes: ElectrodeDTO[];
+};
+
 export type BrainstateMetaDTO = {
   available: boolean;
   state_names: string[];
@@ -218,4 +246,35 @@ export type ApiErrorDTO = {
   code: string;
   message: string;
   details?: Record<string, unknown> | null;
+};
+
+// G9 — event-review decision export.
+export type EventReviewStatus = "accepted" | "rejected" | "maybe";
+
+export type EventDecisionDTO = {
+  event_id: string | number;
+  status: EventReviewStatus;
+  decided_at: number; // unix ms
+  notes?: string | null;
+  tags?: string[];
+};
+
+export type EventDecisionBatchDTO = {
+  decisions: EventDecisionDTO[];
+};
+
+export type EventDecisionExportResponseDTO = {
+  stream: string;
+  path: string;
+  format: "parquet" | "csv";
+  n_decisions: number;
+  saved_at: number;
+};
+
+export type EventDecisionListDTO = {
+  stream: string;
+  decisions: EventDecisionDTO[];
+  path: string | null;
+  format: "parquet" | "csv" | null;
+  saved_at: number | null;
 };

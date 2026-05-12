@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react"
 import type { DecodedSlice } from "../../api/arrow";
 import { extractPSDSpatialAtFreq } from "../../api/arrow";
 import { ChannelGridRenderer } from "./ChannelGridRenderer";
+import { ColorBar } from "./ColorBar";
 import type { SpatialCellWithId } from "./SpatialRenderer";
 
 type PSDSpatialProps = {
@@ -54,6 +55,9 @@ export function PSDSpatialView({ decoded, selectedFreq, onSelectFreq, onSelectCe
       selectedIds: [],
       minValue: minValueRef.current,
       maxValue: maxValueRef.current,
+      // Match PSD heatmap so power maps look consistent across panels.
+      colormap: "inferno",
+      smoothing: false,
     });
   }, []);
 
@@ -114,7 +118,8 @@ export function PSDSpatialView({ decoded, selectedFreq, onSelectFreq, onSelectCe
   if (rawCells.length === 0) return null;
 
   return (
-    <div className="axis-canvas-wrap" title="PSD spatial power at selected frequency">
+    <div style={{ display: "flex", width: "100%", height: "100%", gap: 4 }}>
+    <div className="axis-canvas-wrap" style={{ flex: 1, minHeight: 0 }} title="PSD spatial power at selected frequency">
       <div className="axis-y-label">AP</div>
       <div className="axis-y-ticks" />
       <div ref={containerRef} className="axis-canvas-area">
@@ -126,6 +131,13 @@ export function PSDSpatialView({ decoded, selectedFreq, onSelectFreq, onSelectCe
       </div>
       <div className="axis-x-ticks" />
       <div className="axis-x-label">ML</div>
+    </div>
+      <ColorBar
+        colormap="inferno"
+        min={minValueRef.current}
+        max={maxValueRef.current}
+        label="power"
+      />
     </div>
   );
 }

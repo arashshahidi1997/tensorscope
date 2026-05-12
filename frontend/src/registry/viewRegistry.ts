@@ -26,6 +26,7 @@ export const VIEW_DESCRIPTORS: ViewDescriptor[] = [
   { id: "psd_curve",        label: "PSD Curve",    requiredDims: ["time"],              priority: 11 },
   { id: "spectrogram_live", label: "Spectrogram",  requiredDims: ["time"],              priority: 3 },
   { id: "hypnogram",        label: "Hypnogram",    requiredDims: [],                    priority: 12 },
+  { id: "event_average",    label: "Event Average", requiredDims: ["time"],             priority: 13 },
 ];
 
 /**
@@ -71,4 +72,5 @@ export const viewRegistry: Record<string, (props: SliceViewProps) => ReactElemen
   psd_curve: PlaceholderSliceView,    // PSD panel views rendered directly in WorkspaceMain
   propagation_frame: SpatialMapSliceView,
   table: PlaceholderSliceView,
+  event_average: PlaceholderSliceView,  // rendered directly in WorkspaceMain
 };

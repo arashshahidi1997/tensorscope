@@ -1,7 +1,10 @@
 /**
- * PropagationController — wraps a spatial view with player/strip/tiled playback modes.
+ * PropagationController — wraps a spatial view with player/movie/event/strip/tiled playback modes.
  *
  * - player: sequential fetch queue (same pattern as WorkspaceMain animation), drives timeCursor
+ * - movie:  one-shot fetch of N preloaded frames + smooth RAF playback over the visible window
+ * - event:  same RAF playback, but window is centered on the current cursor (which jumps to
+ *           event times when the user picks events) with a user-configurable ±Δ half-window
  * - strip:  N evenly-spaced frames as a horizontal thumbnail row
  * - tiled:  NxM grid of frames
  *
@@ -12,10 +15,11 @@ import { useEffect, useRef, useState } from "react";
 import { useSelectionStore } from "../../store/selectionStore";
 import { AnimationController } from "../controls/AnimationController";
 import { PropagationView } from "./PropagationView";
+import { PropagationMoviePlayer } from "./PropagationMoviePlayer";
 import { decodeArrowSlice, extractSpatialCells } from "../../api/arrow";
 import type { CoordSummary, SelectionDTO, TensorSliceDTO } from "../../api/types";
 
-type PropagationMode = "player" | "strip" | "tiled";
+type PropagationMode = "player" | "movie" | "event" | "strip" | "tiled";
 
 type PropagationControllerProps = {
   tensorName: string | null;
@@ -50,6 +54,9 @@ export function PropagationController({
   const [frameCount, setFrameCount] = useState(8);
   const [gridCols, setGridCols] = useState(4);
   const [colorScaleLock, setColorScaleLock] = useState(true);
+  // Event mode: half-window in seconds around the current cursor.
+  const [eventHalfWindowS, setEventHalfWindowS] = useState(0.5);
+  const [eventFrameCount, setEventFrameCount] = useState(60);
 
   // Sync t0/t1 when timeCoord changes (on first tensor load)
   const prevMinRef = useRef<number | null>(null);
@@ -121,7 +128,7 @@ export function PropagationController({
   const [multiLoading, setMultiLoading] = useState(false);
 
   useEffect(() => {
-    if (mode === "player" || !tensorName) {
+    if (mode === "player" || mode === "movie" || mode === "event" || !tensorName) {
       setMultiFrames([]);
       setGlobalMinMax(null);
       return;
@@ -176,20 +183,57 @@ export function PropagationController({
       {/* Toolbar */}
       <div className="propagation-toolbar">
         <div className="propagation-mode-toggle">
-          {(["player", "strip", "tiled"] as PropagationMode[]).map((m) => (
+          {(["player", "movie", "event", "strip", "tiled"] as PropagationMode[]).map((m) => (
             <button
               key={m}
               type="button"
               className={`ts-tool${mode === m ? " active" : ""}`}
-              title={m === "player" ? "Player" : m === "strip" ? "Strip" : "Tiled"}
+              title={
+                m === "player" ? "Player (cursor-driven)"
+                  : m === "movie" ? "Movie (preload + RAF playback over visible window)"
+                  : m === "event" ? "Event (RAF playback ±Δs around the current cursor)"
+                  : m === "strip" ? "Strip"
+                  : "Tiled"
+              }
               onClick={() => setMode(m)}
             >
-              {m === "player" ? "▶" : m === "strip" ? "⊟" : "⊞"}
+              {m === "player" ? "▶" : m === "movie" ? "🎬" : m === "event" ? "⚡" : m === "strip" ? "⊟" : "⊞"}
             </button>
           ))}
         </div>
 
-        {mode !== "player" && (
+        {mode === "event" && (
+          <div className="propagation-settings">
+            <label className="propagation-setting" title="Half-window in seconds either side of the current cursor">
+              <span>±Δ s</span>
+              <input
+                type="number"
+                value={eventHalfWindowS}
+                min={0.01}
+                step={0.05}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  if (Number.isFinite(v) && v > 0) setEventHalfWindowS(v);
+                }}
+              />
+            </label>
+            <label className="propagation-setting">
+              <span>N</span>
+              <input
+                type="number"
+                value={eventFrameCount}
+                min={2}
+                max={240}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  if (Number.isFinite(v) && v > 0) setEventFrameCount(v);
+                }}
+              />
+            </label>
+          </div>
+        )}
+
+        {mode !== "player" && mode !== "event" && (
           <div className="propagation-settings">
             <label className="propagation-setting">
               <span>t0</span>
@@ -274,6 +318,50 @@ export function PropagationController({
           )}
         </div>
       )}
+
+      {/* Movie mode: preload N frames + RAF playback */}
+      {mode === "movie" && tensorName && (
+        <PropagationMoviePlayer
+          tensorName={tensorName}
+          timeWindow={[t0, t1]}
+          selection={selectionDraft}
+          nFrames={frameCount}
+          onSelectCell={onSelectCell}
+          onHoverElectrode={onHoverElectrode}
+          onCommitTime={(t) => useSelectionStore.getState().setTimeCursor(t)}
+        />
+      )}
+
+      {/* Event mode: same RAF playback, but the window auto-centers on the
+          current cursor (which jumps to event times when the user picks
+          events from the events sidebar). Re-fetches whenever the cursor
+          or half-window changes. */}
+      {mode === "event" && tensorName && (() => {
+        const tMin = Math.max(safeMin, timeCursor - eventHalfWindowS);
+        const tMax = Math.min(safeMax, timeCursor + eventHalfWindowS);
+        const valid = tMax > tMin;
+        return valid ? (
+          <PropagationMoviePlayer
+            // Force a remount when the centering cursor moves so the player
+            // reloads its preloaded buffer; otherwise the existing useEffect
+            // dep on [t0, t1] still triggers a refetch but skipping the
+            // remount means the playback state and frame index continuity
+            // could drift across event hops.
+            key={`event-${timeCursor.toFixed(4)}`}
+            tensorName={tensorName}
+            timeWindow={[tMin, tMax]}
+            selection={selectionDraft}
+            nFrames={eventFrameCount}
+            onSelectCell={onSelectCell}
+            onHoverElectrode={onHoverElectrode}
+            onCommitTime={(t) => useSelectionStore.getState().setTimeCursor(t)}
+          />
+        ) : (
+          <div className="placeholder">
+            Cursor at {timeCursor.toFixed(2)}s is outside the data range — pick an event or move the cursor.
+          </div>
+        );
+      })()}
 
       {/* Strip mode: horizontal row of thumbnails */}
       {mode === "strip" && (

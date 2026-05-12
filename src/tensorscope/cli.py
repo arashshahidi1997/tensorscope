@@ -12,6 +12,11 @@ import uvicorn
 
 from tensorscope import __version__
 from tensorscope.core.layout import LayoutManager
+from tensorscope.core.probe_layout import (
+    ProbeLayout,
+    find_probe_layout_sidecar,
+    load_probe_layout,
+)
 from tensorscope.server.app import create_app
 
 
@@ -103,6 +108,20 @@ def _load_nc_as_dataarray(path: Path) -> xr.DataArray:
         if len(ds.data_vars) == 1:
             return next(iter(ds.data_vars.values()))
         raise ValueError(f"Expected a single DataArray in {path}, found {list(ds.data_vars)}")
+
+
+def _load_probe_layout(data_path: Path) -> ProbeLayout | None:
+    """Try to load a probe-layout sidecar next to (or inside) the data path."""
+    sidecar = find_probe_layout_sidecar(data_path)
+    if sidecar is None:
+        return None
+    try:
+        layout = load_probe_layout(sidecar)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Warning: could not load probe layout from {sidecar.name}: {exc}")
+        return None
+    print(f"Loaded probe layout: {layout.n_channels} electrodes ({sidecar.name})")
+    return layout
 
 
 def _load_brainstates(data_path: Path) -> xr.DataArray | None:
@@ -202,13 +221,18 @@ def _choose_port(host: str, preferred_port: int, max_attempts: int = 100) -> int
 
 
 def _cmd_serve(data_path: Path, tensor_name: str, host: str, port: int, pair: bool = False) -> int:
+    probe_layout = _load_probe_layout(data_path)
+    # Review-decision exports (G9) land next to the dataset. For a single
+    # .nc file, the parent directory is the canonical sidecar location.
+    dataset_dir = data_path if data_path.is_dir() else data_path.parent
     if data_path.is_dir():
         tensors, brainstates, events = _load_bundle(data_path)
         if brainstates is not None:
             print(f"Loaded brainstates: {brainstates.dims} {brainstates.shape}")
         app = create_app(
             tensors, tensor_name=tensor_name, events_registry=events,
-            brainstates=brainstates, pair_mode=pair,
+            brainstates=brainstates, probe_layout=probe_layout,
+            dataset_dir=dataset_dir, pair_mode=pair,
         )
     else:
         data = _load_dataarray(data_path)
@@ -218,7 +242,8 @@ def _cmd_serve(data_path: Path, tensor_name: str, host: str, port: int, pair: bo
             print(f"Loaded brainstates: {brainstates.dims} {brainstates.shape}")
         app = create_app(
             data, tensor_name=tensor_name, events_registry=events,
-            brainstates=brainstates, pair_mode=pair,
+            brainstates=brainstates, probe_layout=probe_layout,
+            dataset_dir=dataset_dir, pair_mode=pair,
         )
     if pair:
         print("Agent-pairing mode: all clients share one session.")

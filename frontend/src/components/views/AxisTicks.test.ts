@@ -1,5 +1,26 @@
 import { describe, it, expect } from "vitest";
-import { makeTicks, makeLogTicks } from "./AxisTicks";
+import { makeTicks, makeLogTicks, formatTickLabel } from "./AxisTicks";
+
+describe("formatTickLabel (audit S10 / A1f)", () => {
+  it("preserves sub-Hz values with at least 2 decimals (no more truncating 0.5 → '0')", () => {
+    expect(formatTickLabel(0.5)).toBe("0.50");
+    expect(formatTickLabel(0.05)).toBe("0.05");
+    expect(formatTickLabel(0.005)).toBe("0.005");
+  });
+
+  it("scales precision with magnitude", () => {
+    expect(formatTickLabel(1)).toBe("1.0");
+    expect(formatTickLabel(10)).toBe("10");
+    expect(formatTickLabel(123)).toBe("123");
+  });
+
+  it("uses niceStep precision when supplied", () => {
+    // niceStep=0.5 → 1 decimal; ensures linear ticks at 0.5/1.0/1.5 don't collapse to 0/1/1.
+    expect(formatTickLabel(0.5, 0.5)).toBe("0.5");
+    expect(formatTickLabel(1.0, 0.5)).toBe("1.0");
+    expect(formatTickLabel(1.5, 0.5)).toBe("1.5");
+  });
+});
 
 describe("makeTicks (linear)", () => {
   it("produces evenly spaced nice ticks", () => {
@@ -53,9 +74,15 @@ describe("makeLogTicks", () => {
     expect(values).not.toContain(5);
   });
 
-  it("returns [] when lo <= 0 (log undefined)", () => {
-    expect(makeLogTicks(0, 100)).toEqual([]);
-    expect(makeLogTicks(-1, 10)).toEqual([]);
+  it("clips lo to a small epsilon when lo <= 0 (audit A1)", () => {
+    // makeLogTicks no longer returns [] for non-positive lo — it clips to
+    // 1e-3 so the user still sees log labels even when the canvas is forced
+    // to linear positioning. Audit A1 / A1c.
+    const ticks0 = makeLogTicks(0, 100);
+    expect(ticks0.length).toBeGreaterThan(0);
+    expect(ticks0.every((t) => t.value > 0)).toBe(true);
+    const ticksNeg = makeLogTicks(-1, 10);
+    expect(ticksNeg.length).toBeGreaterThan(0);
   });
 
   it("clips ticks to the visible window", () => {

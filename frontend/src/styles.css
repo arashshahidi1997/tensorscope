@@ -727,6 +727,44 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
   margin-bottom: 6px;
 }
 
+/* G9 — Export decisions controls. Sits in the events panel-heading
+ * above the prev/next nav. */
+.export-decisions-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.export-decisions-btn {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.export-decisions-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.export-decisions-btn:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.export-decisions-status {
+  font-size: 11px;
+}
+
+.export-status.error {
+  color: #f47174;
+}
+
 .nav-btn {
   padding: 2px 10px;
   border: 1px solid var(--border);
@@ -803,6 +841,176 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
   opacity: 0.7;
 }
 .review-counter {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+/* Multi-stream event panel (G5) — pinned-stream strip + coincidence summary. */
+.event-streams-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 0 6px;
+  font-size: 11px;
+}
+.event-stream-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 12px;
+  padding: 0 2px 0 6px;
+  background: transparent;
+}
+.event-stream-chip.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.event-stream-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text, #e6edf3);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 1px 4px;
+}
+.event-stream-name:hover { color: var(--accent); }
+.event-stream-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.event-stream-close {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 4px;
+}
+.event-stream-close:hover { color: #f85149; }
+.event-stream-add {
+  background: var(--surface, #161b22);
+  color: var(--muted);
+  border: 1px dashed var(--border, #30363d);
+  border-radius: 12px;
+  padding: 1px 6px;
+  font-size: 11px;
+}
+.event-coincidence-window {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+.event-coincidence-window input {
+  width: 48px;
+  background: var(--surface, #161b22);
+  color: var(--text, #e6edf3);
+  border: 1px solid var(--border, #30363d);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-family: inherit;
+}
+.event-coincidence-summary {
+  font-size: 11px;
+  padding: 2px 0 4px;
+}
+.event-coincidence-summary strong {
+  color: #ff3b30;
+  font-weight: 600;
+}
+.event-row.coincident .status-cell { color: #ff3b30; }
+.event-row.coincident { box-shadow: inset 2px 0 0 #ff3b30; }
+
+/* G6 — per-event annotation popover (status + notes + tags). */
+.status-badge-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 18px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+.status-badge-btn:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: 3px;
+}
+.event-row.annotation-open {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.notes-cell {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+}
+.annotation-popover-row td {
+  background: var(--surface, #161b22);
+  padding: 0;
+  border-bottom: 1px solid var(--border, #30363d);
+}
+.annotation-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--accent);
+}
+.annotation-popover fieldset.annotation-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font-size: 11px;
+}
+.annotation-popover .annotation-status legend {
+  padding: 0 4px 0 0;
+  font-size: 11px;
+}
+.annotation-popover .annotation-status label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+}
+.annotation-status-accepted span { color: #3fb950; }
+.annotation-status-rejected span { color: #f85149; }
+.annotation-status-maybe    span { color: #d29922; }
+.annotation-status-pending  span { color: var(--muted); }
+.annotation-notes,
+.annotation-tags {
+  background: var(--bg, #0d1117);
+  color: var(--text, #e6edf3);
+  border: 1px solid var(--border, #30363d);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 6px;
+  resize: vertical;
+}
+.annotation-notes:focus,
+.annotation-tags:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.annotation-hint {
+  font-size: 10px;
   font-family: var(--font-mono, ui-monospace, monospace);
 }
 
