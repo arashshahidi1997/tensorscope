@@ -765,6 +765,11 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
   color: #f47174;
 }
 
+.export-dirty {
+  color: #d29922;
+  font-weight: 600;
+}
+
 .nav-btn {
   padding: 2px 10px;
   border: 1px solid var(--border);

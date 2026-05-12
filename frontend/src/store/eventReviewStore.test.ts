@@ -4,6 +4,7 @@ import {
   countReviewedInScope,
   decisionKey,
   decisionsInScope,
+  fingerprintScope,
   useEventReviewStore,
 } from "./eventReviewStore";
 
@@ -165,5 +166,119 @@ describe("eventReviewStore", () => {
     expect(d[decisionKey("lfp", "spindles", "ev-x")].notes).toBe("rehydrated");
     // Sibling scope is untouched.
     expect(d[decisionKey("lfp", "ripples", 1)].status).toBe("maybe");
+  });
+
+  describe("fingerprintScope", () => {
+    it("changes when status flips", () => {
+      const s = useEventReviewStore.getState();
+      s.setDecision(decisionKey("lfp", "spindles", 1), "accepted");
+      const fp1 = fingerprintScope(
+        useEventReviewStore.getState().decisions,
+        "lfp",
+        "spindles",
+      );
+      s.setDecision(decisionKey("lfp", "spindles", 1), "rejected");
+      const fp2 = fingerprintScope(
+        useEventReviewStore.getState().decisions,
+        "lfp",
+        "spindles",
+      );
+      expect(fp1).not.toBe(fp2);
+    });
+
+    it("changes when notes change", () => {
+      const s = useEventReviewStore.getState();
+      const k = decisionKey("lfp", "spindles", 1);
+      s.setDecision(k, "accepted");
+      const fp1 = fingerprintScope(useEventReviewStore.getState().decisions, "lfp", "spindles");
+      s.updateNotes(k, "new note");
+      const fp2 = fingerprintScope(useEventReviewStore.getState().decisions, "lfp", "spindles");
+      expect(fp1).not.toBe(fp2);
+    });
+
+    it("changes when tags change", () => {
+      const s = useEventReviewStore.getState();
+      const k = decisionKey("lfp", "spindles", 1);
+      s.setDecision(k, "accepted");
+      const fp1 = fingerprintScope(useEventReviewStore.getState().decisions, "lfp", "spindles");
+      s.updateTags(k, ["candidate"]);
+      const fp2 = fingerprintScope(useEventReviewStore.getState().decisions, "lfp", "spindles");
+      expect(fp1).not.toBe(fp2);
+    });
+
+    it("is INVARIANT to decidedAt changes", () => {
+      const s = useEventReviewStore.getState();
+      const k = decisionKey("lfp", "spindles", 1);
+      s.setDecision(k, "accepted");
+      const fp1 = fingerprintScope(useEventReviewStore.getState().decisions, "lfp", "spindles");
+      // Same status, but the action stamps a fresh decidedAt under the
+      // hood. Fingerprint must not be sensitive to that — otherwise the
+      // dirty indicator would fire on every re-set.
+      s.setDecision(k, "accepted");
+      const fp2 = fingerprintScope(useEventReviewStore.getState().decisions, "lfp", "spindles");
+      expect(fp1).toBe(fp2);
+    });
+
+    it("is INVARIANT to insertion order", () => {
+      // Set up scope A in one order.
+      let s = useEventReviewStore.getState();
+      s.setDecision(decisionKey("lfp", "spindles", 1), "accepted");
+      s.setDecision(decisionKey("lfp", "spindles", 2), "rejected");
+      s.setDecision(decisionKey("lfp", "spindles", 3), "maybe");
+      const fpA = fingerprintScope(useEventReviewStore.getState().decisions, "lfp", "spindles");
+
+      useEventReviewStore.setState({ decisions: {} });
+
+      // Same set in reverse order.
+      s = useEventReviewStore.getState();
+      s.setDecision(decisionKey("lfp", "spindles", 3), "maybe");
+      s.setDecision(decisionKey("lfp", "spindles", 2), "rejected");
+      s.setDecision(decisionKey("lfp", "spindles", 1), "accepted");
+      const fpB = fingerprintScope(useEventReviewStore.getState().decisions, "lfp", "spindles");
+
+      expect(fpA).toBe(fpB);
+    });
+
+    it("filters by (tensor, stream) — sibling scopes don't leak in", () => {
+      const s = useEventReviewStore.getState();
+      // Two scopes; spindles has extra content the ripples fingerprint
+      // must NOT pick up.
+      s.setDecision(decisionKey("lfp", "spindles", 1), "accepted");
+      s.setDecision(decisionKey("lfp", "spindles", 2), "rejected");
+      s.setDecision(decisionKey("lfp", "ripples", 1), "accepted");
+
+      // Same-content fingerprint regardless of which sibling scopes
+      // happen to exist: depends ONLY on this scope's entries.
+      const fpRipple = fingerprintScope(
+        useEventReviewStore.getState().decisions,
+        "lfp",
+        "ripples",
+      );
+      const fpRippleAlone = fingerprintScope(
+        {
+          [decisionKey("lfp", "ripples", 1)]: { status: "accepted", decidedAt: 1 },
+        },
+        "lfp",
+        "ripples",
+      );
+      expect(fpRipple).toBe(fpRippleAlone);
+      // And an empty scope has a stable empty-state fingerprint.
+      expect(fingerprintScope({}, "lfp", "spindles")).toBe(
+        fingerprintScope({}, "x", "y"),
+      );
+    });
+
+    it("tag order is significant", () => {
+      const s = useEventReviewStore.getState();
+      const k = decisionKey("lfp", "spindles", 1);
+      s.setDecision(k, "accepted");
+      s.updateTags(k, ["a", "b"]);
+      const fp1 = fingerprintScope(useEventReviewStore.getState().decisions, "lfp", "spindles");
+      s.updateTags(k, ["b", "a"]);
+      const fp2 = fingerprintScope(useEventReviewStore.getState().decisions, "lfp", "spindles");
+      // The reviewer typed them in an order; we preserve that. Round-
+      // trip through parquet honours the order too.
+      expect(fp1).not.toBe(fp2);
+    });
   });
 });

@@ -23,9 +23,17 @@ import { api } from "../../api/client";
 import type { EventDecisionDTO } from "../../api/types";
 import {
   decisionsInScope,
+  fingerprintScope,
   useEventReviewStore,
   type EventDecision,
 } from "../../store/eventReviewStore";
+
+/**
+ * Debounce window before auto-save fires. Long enough that a fast
+ * burst of `j`/`y`/`n` keypresses coalesces into one POST; short
+ * enough that a reviewer's accidental tab-close survives.
+ */
+const AUTOSAVE_DEBOUNCE_MS = 2000;
 
 type Props = {
   tensorName: string;
@@ -85,6 +93,10 @@ export function ExportDecisionsControls({ tensorName, streamName }: Props) {
 
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
   const [disk, setDisk] = useState<DiskState>({ n: 0, savedAt: null, loaded: false });
+  // Last fingerprint we successfully shipped to disk. Compare against the
+  // current local fingerprint to render the "N unsaved" dirty indicator
+  // and to gate the auto-save effect.
+  const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
   // "now" is refreshed once a minute so the "X min ago" label doesn't
   // freeze. We only refresh while we actually have a saved-at timestamp
   // to display.
@@ -97,6 +109,18 @@ export function ExportDecisionsControls({ tensorName, streamName }: Props) {
     [decisions, tensorName, streamName],
   );
 
+  // Stable content-addressed fingerprint of the current local scope.
+  // Used by the dirty indicator and the auto-save debouncer.
+  const localFingerprint = useMemo(
+    () => fingerprintScope(decisions, tensorName, streamName),
+    [decisions, tensorName, streamName],
+  );
+
+  // True when local state differs from the last successful save.
+  // savedFingerprint===null means we never saved (or never confirmed),
+  // so anything local counts as unsaved.
+  const isDirty = savedFingerprint !== localFingerprint;
+
   // On mount and whenever (tensor, stream) changes, fetch the disk
   // version. If local is empty AND server has decisions, mirror them
   // into the store. This is what "reload the browser → status row
@@ -104,6 +128,9 @@ export function ExportDecisionsControls({ tensorName, streamName }: Props) {
   const seedRanRef = useRef<string>("");
   useEffect(() => {
     const scopeKey = `${tensorName}|${streamName}`;
+    // A scope change resets the "what's on disk" fingerprint snapshot —
+    // it belongs to the previous scope, not this one.
+    setSavedFingerprint(null);
     let cancelled = false;
     (async () => {
       try {
@@ -133,6 +160,41 @@ export function ExportDecisionsControls({ tensorName, streamName }: Props) {
             streamName,
             res.decisions.map(fromServerDecision),
           );
+          // After the seed, the local store mirrors disk — record that
+          // fingerprint so the dirty indicator doesn't immediately
+          // flag everything as unsaved.
+          if (!cancelled) {
+            setSavedFingerprint(
+              fingerprintScope(
+                useEventReviewStore.getState().decisions,
+                tensorName,
+                streamName,
+              ),
+            );
+          }
+        } else if (
+          // Local non-empty AND server matches local → claim "saved" so
+          // the dirty indicator stays calm. Common case: reload after a
+          // successful export; localStorage and disk agree.
+          !cancelled &&
+          res.decisions.length > 0
+        ) {
+          const localFp = fingerprintScope(
+            useEventReviewStore.getState().decisions,
+            tensorName,
+            streamName,
+          );
+          // Synthesise a fingerprint from the server payload by feeding
+          // it through the store-shape (without mutating the store).
+          const synthetic: typeof useEventReviewStore extends never
+            ? never
+            : Record<string, EventDecision> = {};
+          for (const dto of res.decisions) {
+            const { eventId, decision } = fromServerDecision(dto);
+            synthetic[`${tensorName}|${streamName}|${eventId}`] = decision;
+          }
+          const diskFp = fingerprintScope(synthetic, tensorName, streamName);
+          if (diskFp === localFp) setSavedFingerprint(localFp);
         }
       } catch {
         // Server may not support the endpoint (older builds) or the
@@ -154,7 +216,11 @@ export function ExportDecisionsControls({ tensorName, streamName }: Props) {
     return () => window.clearInterval(t);
   }, [disk.savedAt, saveState.kind]);
 
+  // Capture the fingerprint at send time so we record exactly what we
+  // shipped — concurrent edits while the request is in flight will then
+  // show as dirty against the freshly-saved baseline (correct UX).
   const onExport = useCallback(async () => {
+    const sentFp = localFingerprint;
     setSaveState({ kind: "saving" });
     try {
       const payload = {
@@ -169,14 +235,60 @@ export function ExportDecisionsControls({ tensorName, streamName }: Props) {
         n: res.n_decisions,
       });
       setDisk({ n: res.n_decisions, savedAt: res.saved_at, loaded: true });
+      setSavedFingerprint(sentFp);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setSaveState({ kind: "error", message });
     }
-  }, [localScope, streamName]);
+  }, [localScope, streamName, localFingerprint]);
+
+  // Debounced auto-save. Fires when the local fingerprint hasn't been
+  // shipped yet AND we're not currently in flight. The window is short
+  // enough that a fast burst of keypresses coalesces; long enough that
+  // accidental tab-close survives.
+  //
+  // Why a ref for the latest onExport: a fresh closure on every render
+  // would re-arm the setTimeout, so the debounce would never fire on a
+  // continuously-edited stream. The ref tracks the latest function but
+  // the effect re-runs only on fingerprint change.
+  const onExportRef = useRef(onExport);
+  useEffect(() => {
+    onExportRef.current = onExport;
+  }, [onExport]);
+  useEffect(() => {
+    if (!disk.loaded) return; // wait for the initial GET to settle
+    if (saveState.kind === "saving") return;
+    if (!isDirty) return;
+    if (localScope.length === 0 && savedFingerprint === null) return;
+    const handle = window.setTimeout(() => {
+      void onExportRef.current();
+    }, AUTOSAVE_DEBOUNCE_MS);
+    return () => window.clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localFingerprint, disk.loaded, isDirty, saveState.kind]);
+
+  // How many local entries differ from disk. Approximate — uses the
+  // count difference plus a "fingerprint differs" boolean. The exact
+  // diff-set isn't worth computing here; this is just a "you have N
+  // unsaved" pressure on the reviewer.
+  const localCount = localScope.length;
+  const unsavedCount = isDirty
+    ? Math.max(1, Math.abs(localCount - disk.n))
+    : 0;
 
   // Status row text. Order of preference: most-recent save state > disk
-  // snapshot. The two converge after a successful save.
+  // snapshot. The two converge after a successful save. The dirty
+  // suffix (" · N unsaved") appears whenever local diverges from the
+  // last-confirmed save.
+  const dirtySuffix: ReactNode = isDirty && disk.loaded ? (
+    <>
+      {" · "}
+      <span className="export-dirty" data-testid="export-dirty">
+        {unsavedCount} unsaved
+      </span>
+    </>
+  ) : null;
+
   let status: ReactNode = null;
   if (saveState.kind === "saving") {
     status = <span className="muted">Saving decisions…</span>;
@@ -184,29 +296,33 @@ export function ExportDecisionsControls({ tensorName, streamName }: Props) {
     status = (
       <span className="export-status error" data-testid="export-error">
         Save failed: {saveState.message}
+        {dirtySuffix}
       </span>
     );
   } else if (saveState.kind === "saved") {
     status = (
       <span className="muted" data-testid="export-status">
         Last saved: {timeAgo(saveState.at, now)} · {saveState.n} decisions on disk
+        {dirtySuffix}
       </span>
     );
   } else if (disk.loaded && disk.savedAt != null) {
     status = (
       <span className="muted" data-testid="export-status">
         Last saved: {timeAgo(disk.savedAt, now)} · {disk.n} decisions on disk
+        {dirtySuffix}
       </span>
     );
   } else if (disk.loaded) {
     status = (
       <span className="muted" data-testid="export-status">
-        No decisions saved to disk yet.
+        {localCount > 0
+          ? `${localCount} decisions in local store — not yet saved`
+          : "No decisions saved to disk yet."}
       </span>
     );
   }
 
-  const localCount = localScope.length;
   const exportDisabled = saveState.kind === "saving";
 
   return (

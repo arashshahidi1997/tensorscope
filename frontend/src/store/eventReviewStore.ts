@@ -82,6 +82,59 @@ export function decisionsInScope(
   return out;
 }
 
+/**
+ * Stable, content-addressed fingerprint for the decisions in a scope.
+ *
+ * Used by the auto-save / dirty-state plumbing in
+ * `ExportDecisionsControls`: compare local fingerprint vs. last-sent
+ * fingerprint to decide whether the local store has unsaved edits.
+ *
+ * Properties:
+ *   - Cheap (one pass, no JSON-stringify) so it's safe to call in render.
+ *   - Order-independent — same set of decisions hashes the same no matter
+ *     the iteration order of the decisions map.
+ *   - Sensitive to status / notes / tags but NOT to `decidedAt` — the
+ *     reviewer doesn't see decidedAt change as "new edits to save."
+ *
+ * Returns a short hex-ish string.
+ */
+export function fingerprintScope(
+  decisions: DecisionMap,
+  tensorName: string,
+  streamName: string,
+): string {
+  // FNV-1a 32-bit on a deterministic per-entry summary string. Speed and
+  // collision-resistance are both fine for a few thousand decisions.
+  const prefix = `${tensorName}|${streamName}|`;
+  // Stable order: sort the entries by event-id so the result is
+  // invariant under iteration order changes.
+  const entries: Array<[string, EventDecision]> = [];
+  for (const [k, v] of Object.entries(decisions)) {
+    if (!k.startsWith(prefix)) continue;
+    entries.push([k.slice(prefix.length), v]);
+  }
+  entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+
+  let h = 0x811c9dc5;
+  const mix = (s: string) => {
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    h ^= 0x0a; // segment separator
+    h = Math.imul(h, 0x01000193) >>> 0;
+  };
+  for (const [id, d] of entries) {
+    mix(id);
+    mix(d.status);
+    mix(d.notes ?? "");
+    // Tags are order-significant — that's a real distinction the
+    // reviewer cares about (they typed them in a specific order).
+    if (d.tags && d.tags.length) for (const t of d.tags) mix(t);
+  }
+  return `n${entries.length}.${h.toString(16).padStart(8, "0")}`;
+}
+
 /** Helper: count reviewed-vs-total for a given scope. Used by the panel
  *  counter so the math lives in one place. */
 export function countReviewedInScope(
