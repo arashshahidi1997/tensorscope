@@ -350,9 +350,10 @@ class ServerState:
             }
             return node.data, sliced, processing_meta, slice_provenance
         sliced = apply_slice_request(data, request, processing=None, masked_ids=masked_ids)
-        bandpass_meta: dict[str, Any] | None = None
-        if request.bandpass is not None:
-            sliced, bandpass_meta = _apply_bandpass_to_slice(sliced, request.bandpass)
+        # Bandpass is applied inside apply_slice_request (before downsample /
+        # zscore); it stashes its provenance here. Pop so it never leaks to
+        # the client in the Arrow attrs.
+        bandpass_meta: dict[str, Any] | None = sliced.attrs.pop("_bandpass_meta", None)
         processing_meta = {
             "requested": processing_requested,
             "applied": processing_requested and processing_error is None,
@@ -699,7 +700,16 @@ def _apply_bandpass_to_slice(
 
     sos = butter(int(params.order), [lo, hi], btype="bandpass", fs=fs, output="sos")
     axis = sliced.dims.index("time")
-    filtered = sosfiltfilt(sos, np.asarray(sliced.values, dtype=np.float64), axis=axis)
+    # sosfiltfilt's default padlen (3 * (2*n_sections + 1)) can exceed a short
+    # window and raise "input vector must be greater than padlen". Clamp it to
+    # the available samples so a narrow overlay window degrades gracefully
+    # instead of 500-ing.
+    n_samples = int(time_vals.size)
+    default_padlen = 3 * (2 * len(sos) + 1)
+    padlen = min(default_padlen, n_samples - 1) if n_samples > 1 else 0
+    filtered = sosfiltfilt(
+        sos, np.asarray(sliced.values, dtype=np.float64), axis=axis, padlen=padlen
+    )
     out = xr.DataArray(
         filtered, dims=sliced.dims, coords=sliced.coords, attrs=dict(sliced.attrs)
     )
@@ -1120,16 +1130,30 @@ def apply_slice_request(
                     {**dict(sliced.attrs), "selected_freq": _scalar_or_none(sliced.coords["freq"].values)}
                 )
 
-    if "time" in sliced.dims and request.max_points is not None:
-        sliced = downsample_time_axis(sliced, request.max_points, request.downsample)
-
+    # z-score + stacking offset is a DISPLAY transform. Apply it on the
+    # full-rate windowed data (before downsampling) so the optional bandpass
+    # overlay below filters on the same per-channel scale, and so the std is
+    # estimated from every sample rather than the decimated subset. Audit F3.
     if request.view_type in ("timeseries", "navigator") and "time" in sliced.dims:
         sliced = zscore_offset(sliced, offset_scale=3.0)
-        # Record the display transform so the frontend can show users that
-        # on-screen values are NOT in the tensor's native units. Audit F3.
+        prior = list(sliced.attrs.get("display_transforms", []) or [])
         sliced = sliced.assign_attrs(
-            {**dict(sliced.attrs), "display_transforms": ["zscore_offset(scale=3.0)"]}
+            {**dict(sliced.attrs), "display_transforms": prior + ["zscore_offset(scale=3.0)"]}
         )
+
+    # Bandpass overlay: filter the z-scored, full-rate slice BEFORE
+    # downsampling. sosfiltfilt must see the true sample rate — downsampling
+    # distorts the time spacing that fs is derived from. The filter also
+    # removes each channel's DC (the stacking offset), leaving a zero-centred
+    # band trace that the frontend re-stacks by re-adding the raw mean
+    # (see TimeseriesSliceView band substitution). Meta is stashed in attrs
+    # for the caller's provenance and popped before return.
+    if request.bandpass is not None and "time" in sliced.dims:
+        sliced, _bandpass_meta = _apply_bandpass_to_slice(sliced, request.bandpass)
+        sliced.attrs["_bandpass_meta"] = _bandpass_meta
+
+    if "time" in sliced.dims and request.max_points is not None:
+        sliced = downsample_time_axis(sliced, request.max_points, request.downsample)
 
     if "time" in sliced.dims and sliced.sizes.get("time", 0) == 0:
         raise ValueError("slice request returned no data")
@@ -1329,13 +1353,15 @@ def downsample_time_axis(data: xr.DataArray, max_points: int, method: Downsample
     out_times = np.empty(n_buckets * 2, dtype=time_vals.dtype)
     out_vals = np.empty((n_buckets * 2, n_feat), dtype=np.float64)
 
-    # Audit F5: emit each bucket's two representative samples at their actual
-    # source-time positions, not at the bucket edges.  Pick the time index
-    # where the globally most-extreme feature hits its bucket-min (and -max),
-    # then gather every feature's value at that single time.  This keeps the
-    # output a single shared time axis while making every emitted timestamp a
-    # real sample time — a 1 ms spike near the centre of a 100 ms bucket no
-    # longer renders 50 ms off.
+    # Audit F5: emit each bucket's min and max envelope at real source-time
+    # positions, not bucket edges.  Each FEATURE keeps its own bucket-min and
+    # bucket-max (so a spike in any channel survives, not just the bucket's
+    # single most-extreme one).  The output shares one time axis, which can't
+    # honour every feature's extremum position simultaneously, so the two
+    # emitted timestamps are anchored at the most-extreme feature's real
+    # sample times — the dominant channel's peak lands exactly, and a 1 ms
+    # spike near the centre of a 100 ms bucket no longer renders 50 ms off.
+    feat_idx = np.arange(n_feat)
     for i in range(n_buckets):
         s, e = int(starts[i]), int(stops[i])
         chunk = flat[s:e]  # (bucket_len, n_feat)
@@ -1347,17 +1373,14 @@ def downsample_time_axis(data: xr.DataArray, max_points: int, method: Downsample
         else:
             per_feat_argmin = chunk.argmin(axis=0)  # (n_feat,) local indices
             per_feat_argmax = chunk.argmax(axis=0)
-            feat_idx = np.arange(n_feat)
-            per_feat_min_vals = chunk[per_feat_argmin, feat_idx]
-            per_feat_max_vals = chunk[per_feat_argmax, feat_idx]
-            lead_min_feat = int(np.argmin(per_feat_min_vals))
-            lead_max_feat = int(np.argmax(per_feat_max_vals))
-            idx_min = int(per_feat_argmin[lead_min_feat])
-            idx_max = int(per_feat_argmax[lead_max_feat])
-            out_times[2 * i] = time_vals[s + idx_min]
-            out_times[2 * i + 1] = time_vals[s + idx_max]
-            out_vals[2 * i] = chunk[idx_min]
-            out_vals[2 * i + 1] = chunk[idx_max]
+            # Per-feature envelope: every channel's true min and max.
+            out_vals[2 * i] = chunk[per_feat_argmin, feat_idx]
+            out_vals[2 * i + 1] = chunk[per_feat_argmax, feat_idx]
+            # Anchor the shared timestamps at the dominant feature's extrema.
+            lead_min_feat = int(np.argmin(out_vals[2 * i]))
+            lead_max_feat = int(np.argmax(out_vals[2 * i + 1]))
+            out_times[2 * i] = time_vals[s + int(per_feat_argmin[lead_min_feat])]
+            out_times[2 * i + 1] = time_vals[s + int(per_feat_argmax[lead_max_feat])]
 
     # De-duplicate consecutive identical times (from single-sample buckets)
     # and sort by time

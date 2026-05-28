@@ -80,37 +80,18 @@ export function isV2Enabled(): boolean {
   }
 }
 
-// One-shot console log of the v2 payload size (and a v1 size comparison
-// when measurable) so we can verify the audit's claim of ~5× reduction
-// against the live audit bundle without instrumenting devtools by hand.
-// Logged once per view-type (psd_heatmap, timeseries, spectrogram_live,
-// navigator) so each gets a measured ratio in the console.
+// One-shot console log of the v2 payload size so we can spot regressions in
+// wire size from the console. Logged once per view-type (psd_heatmap,
+// timeseries, spectrogram_live, navigator). The v1-comparison fetch this
+// used to fire has been removed — the ~5× reduction is already measured, and
+// the comparison doubled every view's first-load traffic with a redundant v1
+// request even when v2 is the only active path.
 const _v2SizeLogged = new Set<string>();
-function logV2PayloadSize(
-  viewLabel: string,
-  name: string,
-  request: TensorSliceRequestDTO,
-  v2Bytes: number,
-): void {
+function logV2PayloadSize(viewLabel: string, v2Bytes: number): void {
   if (_v2SizeLogged.has(viewLabel)) return;
   _v2SizeLogged.add(viewLabel);
-  // Fire-and-forget v1 fetch so we can compare on first load. Errors are
-  // swallowed — this is observability, not a correctness path.
-  void api
-    .getTensorSlice(name, request)
-    .then((v1) => {
-      const v1Bytes = v1.payload?.length ?? 0;
-      const ratio = v1Bytes > 0 ? (v1Bytes / v2Bytes).toFixed(2) : "n/a";
-      // eslint-disable-next-line no-console
-      console.info(
-        `[contract-v2] ${viewLabel} wire size: v2 ${v2Bytes.toLocaleString()} bytes ` +
-          `vs v1 ${v1Bytes.toLocaleString()} bytes (ratio ${ratio}×)`,
-      );
-    })
-    .catch(() => {
-      // eslint-disable-next-line no-console
-      console.info(`[contract-v2] ${viewLabel} v2 wire size: ${v2Bytes.toLocaleString()} bytes`);
-    });
+  // eslint-disable-next-line no-console
+  console.info(`[contract-v2] ${viewLabel} v2 wire size: ${v2Bytes.toLocaleString()} bytes`);
 }
 
 /**
@@ -132,7 +113,7 @@ export function useV2PSDHeatmapQuery(
     queryKey: ["slice-v2", "psd_heatmap", name, request],
     queryFn: async ({ signal }) => {
       const buf = await api.getTensorSliceV2(name!, request!, signal);
-      logV2PayloadSize("PSDHeatmap", name!, request!, buf.byteLength);
+      logV2PayloadSize("PSDHeatmap", buf.byteLength);
       const pool = getArrowWorkerPool();
       // Worker consumes the buffer (transferred); never reads from it again.
       return pool.submit<PSDHeatmapData>(buf, "psd_heatmap");
@@ -162,7 +143,7 @@ export function useV2TimeseriesQuery(
     queryKey: ["slice-v2", "timeseries", name, request],
     queryFn: async ({ signal }) => {
       const buf = await api.getTensorSliceV2(name!, request!, signal);
-      logV2PayloadSize(logLabel, name!, request!, buf.byteLength);
+      logV2PayloadSize(logLabel, buf.byteLength);
       const pool = getArrowWorkerPool();
       return pool.submit<ColumnarTimeseries>(buf, request!.view_type);
     },
@@ -187,7 +168,7 @@ export function useV2SpectrogramQuery(
     queryKey: ["slice-v2", "spectrogram", name, request],
     queryFn: async ({ signal }) => {
       const buf = await api.getTensorSliceV2(name!, request!, signal);
-      logV2PayloadSize(logLabel, name!, request!, buf.byteLength);
+      logV2PayloadSize(logLabel, buf.byteLength);
       const pool = getArrowWorkerPool();
       return pool.submit<Spectrogram>(buf, request!.view_type);
     },

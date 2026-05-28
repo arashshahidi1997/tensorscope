@@ -25,6 +25,7 @@
 type PendingResolver = {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
+  worker: Worker;
 };
 
 const POOL_SIZE = 2;
@@ -40,14 +41,18 @@ class WorkerPool {
   constructor(size: number = POOL_SIZE) {
     this.workers = [];
     for (let i = 0; i < size; i++) {
-      // Vite resolves this URL at build time and emits a separate worker
-      // chunk. `type: "module"` is required for the worker file to use
-      // `import` (apache-arrow ships ESM-only).
-      const w = new Worker(new URL("./arrow.worker.ts", import.meta.url), { type: "module" });
-      w.addEventListener("message", (e) => this.handleMessage(e));
-      w.addEventListener("error", (e) => this.handleError(e));
-      this.workers.push(w);
+      this.workers.push(this.spawnWorker());
     }
+  }
+
+  private spawnWorker(): Worker {
+    // Vite resolves this URL at build time and emits a separate worker
+    // chunk. `type: "module"` is required for the worker file to use
+    // `import` (apache-arrow ships ESM-only).
+    const w = new Worker(new URL("./arrow.worker.ts", import.meta.url), { type: "module" });
+    w.addEventListener("message", (e) => this.handleMessage(e));
+    w.addEventListener("error", (e) => this.handleError(w, e));
+    return w;
   }
 
   private handleMessage(e: MessageEvent<{ id: number; ok: boolean; value?: unknown; error?: string }>): void {
@@ -59,15 +64,28 @@ class WorkerPool {
     else pending.reject(new Error(error ?? "worker decode failed"));
   }
 
-  private handleError(e: ErrorEvent): void {
-    // We don't know which request caused the worker-level error (the
-    // worker may have crashed before sending an `id`-keyed response), so
-    // reject every in-flight request to avoid silent hangs. This is
-    // conservative but matches Neuroglancer's "fail closed" stance.
+  private handleError(worker: Worker, e: ErrorEvent): void {
+    // An ErrorEvent carries no request id, so we can't pinpoint the failed
+    // decode — but we DO know which worker emitted it. Reject only THAT
+    // worker's in-flight requests (siblings are unaffected, so a single bad
+    // payload no longer fails every concurrent decode), then terminate and
+    // replace the dead worker. Without the replacement the round-robin keeps
+    // dispatching onto a crashed worker and those decodes hang forever.
     const err = new Error(`arrow.worker error: ${e.message}`);
     for (const [id, pending] of this.pending) {
-      pending.reject(err);
-      this.pending.delete(id);
+      if (pending.worker === worker) {
+        pending.reject(err);
+        this.pending.delete(id);
+      }
+    }
+    const idx = this.workers.indexOf(worker);
+    if (idx !== -1) {
+      try {
+        worker.terminate();
+      } catch {
+        /* already dead */
+      }
+      this.workers[idx] = this.spawnWorker();
     }
   }
 
@@ -76,19 +94,38 @@ class WorkerPool {
     const worker = this.workers[this.nextWorker];
     this.nextWorker = (this.nextWorker + 1) % this.workers.length;
     const submittedAt = performance.now();
+    // Capture the byte length BEFORE postMessage transfers (and neuters) the
+    // buffer — reading `buffer.byteLength` in the resolve closure would see 0.
+    const byteLength = buffer.byteLength;
     return new Promise<T>((resolve, reject) => {
       this.pending.set(id, {
         resolve: (v) => {
           const elapsed = performance.now() - submittedAt;
-          logWorkerDecodeTime(viewType, buffer.byteLength, elapsed);
+          logWorkerDecodeTime(viewType, byteLength, elapsed);
           resolve(v as T);
         },
         reject,
+        worker,
       });
       // Transfer the IPC buffer into the worker — zero-copy. Caller
       // must not touch `buffer` after this point.
       worker.postMessage({ id, buffer, viewType }, [buffer]);
     });
+  }
+
+  terminate(): void {
+    for (const w of this.workers) {
+      try {
+        w.terminate();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.workers = [];
+    for (const [, pending] of this.pending) {
+      pending.reject(new Error("worker pool terminated"));
+    }
+    this.pending.clear();
   }
 }
 
@@ -120,5 +157,6 @@ export function getArrowWorkerPool(): WorkerPool {
 
 /** For tests / teardown. */
 export function _resetWorkerPool(): void {
+  if (_pool) _pool.terminate();
   _pool = null;
 }

@@ -329,7 +329,7 @@ export function TimeseriesSliceView({
   // through ref state, the shortcut just trusts the store + computes
   // the clamp inside `scrollChannels` based on what we know at call time.
 
-  const { times, series, totalChannels, firstChannel } = useMemo(() => {
+  const { times, series, totalChannels, firstChannel, inferredNML } = useMemo(() => {
     // When a band is active we replace the raw signal values with the
     // filtered series values aligned to the raw's per-channel mean offset.
     // The chart structure stays identical so no rebuild is needed when the
@@ -337,6 +337,16 @@ export function TimeseriesSliceView({
     // raw + filtered overlay is v0.1 work.
     const raw = v2Data ?? extractTimeseriesColumnarFast(slice);
     const total = raw.series.length;
+    // Infer the grid's ML width from the FULL (uncapped) channel set. The
+    // flat-id mapping (ap*nML+ml) used for region lookup must match the
+    // backend's, which is keyed on the whole tensor — deriving nML from only
+    // the visible 32-channel window mislabels regions whenever the viewport
+    // is scrolled past the column that holds the max ML index.
+    let inferredNML = 0;
+    for (const s of raw.series) {
+      const m = /^ap-\d+-ml-(\d+)$/.exec(s.key);
+      if (m) inferredNML = Math.max(inferredNML, Number(m[1]) + 1);
+    }
     const maxStart = Math.max(0, total - N_VISIBLE);
     const start = Math.min(maxStart, Math.max(0, tsFirstChannel));
     const cap = raw.series.slice(start, start + N_VISIBLE);
@@ -364,6 +374,7 @@ export function TimeseriesSliceView({
         series: replaced,
         totalChannels: total,
         firstChannel: start,
+        inferredNML,
       };
     }
     return {
@@ -371,6 +382,7 @@ export function TimeseriesSliceView({
       series: cap,
       totalChannels: total,
       firstChannel: start,
+      inferredNML,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [v2Data, slice.payload, v2BandpassData, bandActive?.[0], bandActive?.[1], tsFirstChannel]);
@@ -388,12 +400,8 @@ export function TimeseriesSliceView({
     if (!probeLayout || probeLayout.electrodes.length === 0) {
       return null;
     }
-    // Infer nML from grid-style series keys so flat ids match the loader.
-    let inferredNML = 0;
-    for (const s of series) {
-      const m = /^ap-\d+-ml-(\d+)$/.exec(s.key);
-      if (m) inferredNML = Math.max(inferredNML, Number(m[1]) + 1);
-    }
+    // `inferredNML` comes from the full channel set (see data-pipeline memo)
+    // so flat ids match the backend regardless of viewport scroll position.
     const resolver = buildRegionResolver(probeLayout, inferredNML);
     if (resolver.isEmpty) return null;
     return series.map((s) => {
@@ -408,7 +416,7 @@ export function TimeseriesSliceView({
       }
       return null;
     });
-  }, [probeLayout, series]);
+  }, [probeLayout, series, inferredNML]);
   const regionTagsRef = useRef<Array<string | null> | null>(regionTags);
   useEffect(() => { regionTagsRef.current = regionTags; });
 

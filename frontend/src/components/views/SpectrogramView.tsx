@@ -161,6 +161,11 @@ export function SpectrogramView({
   }
 
   const { xLo: tLo, xHi: tHi, yLo: fLo, yHi: fHi } = viewport;
+  // Mirror the canvas's log/linear decision (it falls back to linear when the
+  // low edge is non-positive, since log10(<=0) is undefined). Axes/overlays
+  // must use the SAME predicate or ticks render on a log scale over a linearly
+  // painted canvas.
+  const useLogAxis = freqLogScale && fLo > 0;
 
   return (
     <div ref={wrapRef} style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column" }}>
@@ -200,7 +205,7 @@ export function SpectrogramView({
       {/* Spectrogram with axes */}
       <div className="axis-canvas-wrap" style={{ flex: 1, minHeight: 0 }}>
         <div className="axis-y-label">Freq (Hz)</div>
-        <YTicks lo={fLo} hi={fHi} logScale={freqLogScale} />
+        <YTicks lo={fLo} hi={fHi} logScale={useLogAxis} />
         <div className="axis-canvas-area">
           <canvas
             ref={canvasRef}
@@ -227,7 +232,7 @@ export function SpectrogramView({
                 position: "absolute",
                 left: 0,
                 right: 0,
-                top: `${freqLogScale && fLo > 0
+                top: `${useLogAxis
                   ? ((Math.log10(fHi) - Math.log10(selection.freq)) /
                       (Math.log10(fHi) - Math.log10(fLo))) * 100
                   : ((fHi - selection.freq) / (fHi - fLo)) * 100}%`,
@@ -238,7 +243,7 @@ export function SpectrogramView({
             />
           )}
           {/* Cross-view hover crosshair (Bokeh-style inspector). */}
-          <CrosshairOverlay tLo={tLo} tHi={tHi} fLo={fLo} fHi={fHi} freqLog={freqLogScale} />
+          <CrosshairOverlay tLo={tLo} tHi={tHi} fLo={fLo} fHi={fHi} freqLog={useLogAxis} />
         </div>
         <XTicks lo={tLo} hi={tHi} />
         <div className="axis-x-label">Time (s)</div>

@@ -1,6 +1,6 @@
 # Filtered-band overlay on timeseries
 
-**Status:** spec
+**Status:** shipped (commit `3ef6531`)
 **Created:** 2026-05-11
 **Tracks:** [issue-arash-20260511-182119-502518](../log/issue/issue-arash-20260511-182119-502518.md) G1
 
@@ -20,8 +20,15 @@ stream.
 
 - **Server**: add optional `bandpass: [lo_hz, hi_hz]` to
   `TensorSliceRequestDTO`. Applied via `scipy.signal.sosfiltfilt`
-  (4th-order Butterworth) *after* slicing, on the sliced data. Mirrors
-  the existing `bandpass` DAG transform (`core/transforms/builtins.py`).
+  (4th-order Butterworth) inside `apply_slice_request`, on the windowed
+  slice **after z-score/offset but before time downsampling**. Order
+  matters: `sosfiltfilt` derives `fs` from the time spacing, so it must
+  run before downsampling (which makes the spacing irregular and the
+  inferred `fs` wrong); it runs after `zscore_offset` so the band trace
+  shares the same per-channel scale as the raw display (the highpass arm
+  removes the stacking DC, leaving a zero-centred trace the frontend
+  re-stacks by re-adding each channel's mean). Mirrors the existing
+  `bandpass` DAG transform (`core/transforms/builtins.py`).
 - **Wire**: works on both v1 and v2 (one shared DTO). v2 (raw Arrow
   bytes) is preferred since timeseries is one of the views already wired
   to v2.
@@ -33,9 +40,11 @@ stream.
 ## Edge-effect handling (server)
 
 `sosfiltfilt` pads the signal internally with reflected copies of the
-input edges (default `padlen=3*max(len(a),len(b))`), so transients
+input edges (default `padlen=3*(2*n_sections+1)`), so transients
 during the first/last ~10 ms of a 2 s window at 1250 Hz are negligible
-for the practical band ranges (0.5–250 Hz).
+for the practical band ranges (0.5–250 Hz). The slice path clamps
+`padlen` to `n_samples-1` so a short window degrades gracefully instead
+of raising scipy's "input vector must be greater than padlen" error.
 
 For very short windows (<200 ms at 11–16 Hz, i.e. <2 cycles of the low
 end), filter ringing dominates. The slice path will refuse and surface
@@ -47,10 +56,18 @@ HTTP 400: "bandpass window too narrow: need ≥3 cycles of lo_hz"
 
 ## DTO change
 
+As shipped, `bandpass` is a structured `BandpassParamsDTO` (not a bare
+tuple), so future per-band options (order, presets) have somewhere to land:
+
 ```python
+class BandpassParamsDTO(BaseModel):
+    lo_hz: float
+    hi_hz: float
+    order: int = 4
+
 class TensorSliceRequestDTO(BaseModel):
     ...existing...
-    bandpass: tuple[float, float] | None = None
+    bandpass: BandpassParamsDTO | None = None
 ```
 
 Validators reject `lo >= hi`, negative values, and `hi > nyquist`. Nyquist

@@ -48,24 +48,32 @@ export function MaskPanel({ tensorName, nAP, nML }: MaskPanelProps) {
   // One-time hydration: if local store has nothing for this tensor and the
   // server returns something, mirror it locally without firing a PUT.
   const hydratedRef = useRef<string | null>(null);
+  // Dedup the server push PER TENSOR. A bare id-string ref would treat two
+  // tensors that happen to share an identical mask (e.g. both [1,2,3]) as
+  // already-synced and silently skip the push for the second tensor. Keying
+  // on the tensor name as well means the dedup only fires within one tensor.
+  const lastPushedRef = useRef<{ tensor: string | null; key: string }>({ tensor: null, key: "" });
   useEffect(() => {
     if (!tensorName || !maskQuery.data) return;
     if (hydratedRef.current === tensorName) return;
     if (localMask === undefined && maskQuery.data.masked_ids.length > 0) {
       setLocalMask(tensorName, maskQuery.data.masked_ids);
+      // Record the hydrated value as already-pushed so the push effect below
+      // doesn't echo it straight back to the server it just came from.
+      lastPushedRef.current = { tensor: tensorName, key: maskQuery.data.masked_ids.join(",") };
     }
     hydratedRef.current = tensorName;
   }, [tensorName, maskQuery.data, localMask, setLocalMask]);
 
   // Push local changes to the server. Debounced through the mutation so
   // rapid drag-toggles don't fire one PUT per cell.
-  const lastPushedRef = useRef<string>("");
   useEffect(() => {
     if (!tensorName) return;
     const ids = localMask ?? [];
     const key = ids.join(",");
-    if (key === lastPushedRef.current) return;
-    lastPushedRef.current = key;
+    const last = lastPushedRef.current;
+    if (last.tensor === tensorName && last.key === key) return;
+    lastPushedRef.current = { tensor: tensorName, key };
     setMaskMutation.mutate({ tensor: tensorName, masked_ids: ids });
   }, [tensorName, localMask]); // eslint-disable-line react-hooks/exhaustive-deps
 

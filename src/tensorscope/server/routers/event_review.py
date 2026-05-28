@@ -184,6 +184,13 @@ def _atomic_write(rows: list[dict[str, Any]], target: Path) -> str:
         df_csv["tags"] = df_csv["tags"].apply(json.dumps)
         df_csv.to_csv(csv_tmp, index=False)
         os.replace(csv_tmp, csv_target)
+        # A previously-successful parquet write would now shadow this fresh
+        # csv: _read_existing checks parquet first. Remove the stale parquet
+        # so subsequent reads resolve to the csv we just wrote.
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            pass
         return "csv"
 
 

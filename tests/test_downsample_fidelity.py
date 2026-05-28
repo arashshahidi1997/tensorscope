@@ -62,6 +62,32 @@ def test_minmax_emitted_times_are_real_sample_times() -> None:
         assert key in src_set, f"emitted time {ts} is not a real sample time"
 
 
+def test_minmax_preserves_per_channel_extrema() -> None:
+    """Each channel must keep its OWN bucket min/max, not the lead channel's
+    value sampled at the lead channel's extreme time.
+
+    Two channels with spikes at different times inside the same bucket: both
+    spikes must survive. The pre-fix path gathered every feature's value at a
+    single shared time index, so the non-dominant channel's spike vanished.
+    """
+    n = 200
+    fs = 1000.0
+    t = np.arange(n) / fs
+    arr = np.zeros((n, 2), dtype=np.float64)
+    # Both spikes land in the first bucket (samples 0..19 for max_points=20 →
+    # 10 buckets of 20). Channel 0 spikes at sample 3, channel 1 at sample 15.
+    arr[3, 0] = 9.0
+    arr[15, 1] = 7.0
+    da = xr.DataArray(
+        arr, dims=("time", "channel"),
+        coords={"time": t, "channel": np.arange(2)},
+    )
+    out = downsample_time_axis(da, max_points=20, method=DownsampleMethod.MINMAX)
+    out_vals = np.asarray(out.values)  # (n_out, channel)
+    assert np.isclose(out_vals[:, 0].max(), 9.0), "channel 0 spike lost"
+    assert np.isclose(out_vals[:, 1].max(), 7.0), "channel 1 spike lost"
+
+
 def test_minmax_grid_spike_placed_at_real_time() -> None:
     """Same property on a (time, AP, ML) grid — F5 affects every layout."""
     n = 1000
