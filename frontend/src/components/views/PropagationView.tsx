@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { decodeArrowSlice, extractSpatialCells } from "../../api/arrow";
+import { useAppStore } from "../../store/appStore";
+import { useMaskStore } from "../../store/maskStore";
 import { ChannelGridRenderer } from "./ChannelGridRenderer";
 import { ColorBar } from "./ColorBar";
 import type { SpatialCellWithId } from "./SpatialRenderer";
@@ -27,6 +29,19 @@ export function PropagationView({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<ChannelGridRenderer>(new ChannelGridRenderer());
+
+  // Channel mask for the active tensor — masked cells get the hatch
+  // overlay, consistent with the spatial-map + PSD-spatial views. Held
+  // in a ref too so the ResizeObserver closure (created once) reads the
+  // current mask without re-subscribing.
+  const selectedTensor = useAppStore((s) => s.selectedTensor);
+  const maskedArray = useMaskStore((s) => (selectedTensor ? s.masks[selectedTensor] : undefined));
+  const maskedSet = useMemo(
+    () => (maskedArray ? new Set(maskedArray) : undefined),
+    [maskedArray],
+  );
+  const maskedSetRef = useRef<Set<number> | undefined>(maskedSet);
+  maskedSetRef.current = maskedSet;
 
   // Decoded slice data cached in refs to avoid stale closure issues.
   const cellsRef = useRef<SpatialCellWithId[]>([]);
@@ -89,6 +104,7 @@ export function PropagationView({
         maxValue: globalMax ?? maxValueRef.current,
         colormap: "jet",
         smoothing: true,
+        maskedIds: maskedSetRef.current,
       });
     });
 
@@ -116,6 +132,7 @@ export function PropagationView({
       maxValue: globalMax ?? maxValueRef.current,
       colormap: "jet",
       smoothing: false,
+      maskedIds: maskedSetRef.current,
     });
 
     // Draw the time label overlay on top of the rendered cells.
@@ -133,7 +150,7 @@ export function PropagationView({
         }
       }
     }
-  }, [slice, hoveredId, selectedIds, globalMin, globalMax]);
+  }, [slice, hoveredId, selectedIds, globalMin, globalMax, maskedArray]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {

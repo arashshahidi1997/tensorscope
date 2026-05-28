@@ -8,13 +8,14 @@
  * Render path uses ChannelGridRenderer directly (not PropagationView) so we
  * don't re-decode on every frame advance.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   decodeArrowSlice,
   extractSpatialFrames,
   type SpatialMovie,
 } from "../../api/arrow";
 import type { SelectionDTO, TensorSliceDTO } from "../../api/types";
+import { useMaskStore } from "../../store/maskStore";
 import { ChannelGridRenderer } from "./ChannelGridRenderer";
 import { ColorBar } from "./ColorBar";
 import type { SpatialCellWithId } from "./SpatialRenderer";
@@ -57,6 +58,14 @@ export function PropagationMoviePlayer({
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<ChannelGridRenderer>(new ChannelGridRenderer());
   const cellsCache = useRef<SpatialCellWithId[][]>([]);
+
+  // Channel mask for this tensor — masked cells get the hatch overlay so
+  // the movie matches the static spatial views.
+  const maskedArray = useMaskStore((s) => (tensorName ? s.masks[tensorName] : undefined));
+  const maskedSet = useMemo(
+    () => (maskedArray ? new Set(maskedArray) : undefined),
+    [maskedArray],
+  );
 
   // Single fetch on (tensor, timeWindow, nFrames) change.
   useEffect(() => {
@@ -150,6 +159,7 @@ export function PropagationMoviePlayer({
       maxValue: m.max,
       colormap: "jet",
       smoothing: false,
+      maskedIds: maskedSet,
     });
     // Time overlay so the user can read the frame's timestamp during playback.
     const canvas = canvasRef.current;
@@ -166,7 +176,7 @@ export function PropagationMoviePlayer({
         }
       }
     }
-  }, [movie, frameIdx]);
+  }, [movie, frameIdx, maskedSet]);
 
   // RAF playback loop. fps determines the per-frame target dt; we advance
   // when wall-clock time has crossed that threshold so playback stays
