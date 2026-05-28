@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import type { DecodedSlice } from "../../api/arrow";
 import { extractPSDSpatialAtFreq } from "../../api/arrow";
+import { useAppStore } from "../../store/appStore";
+import { useMaskStore } from "../../store/maskStore";
 import { ChannelGridRenderer } from "./ChannelGridRenderer";
 import { ColorBar } from "./ColorBar";
 import type { SpatialCellWithId } from "./SpatialRenderer";
@@ -16,6 +18,16 @@ export function PSDSpatialView({ decoded, selectedFreq, onSelectFreq, onSelectCe
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<ChannelGridRenderer>(new ChannelGridRenderer());
+
+  // Channel mask for the active tensor — masked cells render with the
+  // hatch overlay, consistent with the spatial-map view. Subscribed via
+  // the mask store so a sidebar toggle repaints in place.
+  const selectedTensor = useAppStore((s) => s.selectedTensor);
+  const maskedArray = useMaskStore((s) => (selectedTensor ? s.masks[selectedTensor] : undefined));
+  const maskedSet = useMemo(
+    () => (maskedArray ? new Set(maskedArray) : undefined),
+    [maskedArray],
+  );
 
   const cellsRef = useRef<SpatialCellWithId[]>([]);
   const nAPRef = useRef(0);
@@ -58,8 +70,9 @@ export function PSDSpatialView({ decoded, selectedFreq, onSelectFreq, onSelectCe
       // Match PSD heatmap so power maps look consistent across panels.
       colormap: "inferno",
       smoothing: false,
+      maskedIds: maskedSet,
     });
-  }, []);
+  }, [maskedSet]);
 
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
@@ -93,7 +106,7 @@ export function PSDSpatialView({ decoded, selectedFreq, onSelectFreq, onSelectCe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Re-render when cells change (freq or data change)
+  // Re-render when cells change (freq or data change) or the mask toggles.
   useEffect(() => {
     renderGrid();
   }, [rawCells, renderGrid]);

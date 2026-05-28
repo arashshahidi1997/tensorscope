@@ -310,7 +310,10 @@ export function useSetProcessing() {
     mutationFn: (params: ProcessingParamsDTO) => api.setProcessing(params),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["processing"] });
+      // Same v1 + v2 invalidation as the mask mutation — processing
+      // changes every slice, and "slice" doesn't prefix-match "slice-v2".
       queryClient.invalidateQueries({ queryKey: ["slice"] });
+      queryClient.invalidateQueries({ queryKey: ["slice-v2"] });
     },
   });
 }
@@ -331,8 +334,13 @@ export function useSetMask() {
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["mask", variables.tensor] });
       // Mask change invalidates every slice — masked cells become NaN
-      // (or are paint-overlaid) on the next fetch.
+      // (or are paint-overlaid) on the next fetch. Both wire contracts:
+      // `invalidateQueries` prefix-matches, and "slice" does NOT match
+      // "slice-v2", so the v2 queries (timeseries / spectrogram_live /
+      // psd_heatmap) need their own invalidation or they'd keep showing
+      // pre-mask data.
       queryClient.invalidateQueries({ queryKey: ["slice"] });
+      queryClient.invalidateQueries({ queryKey: ["slice-v2"] });
     },
   });
 }
