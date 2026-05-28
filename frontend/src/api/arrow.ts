@@ -10,7 +10,10 @@ export type DecodedSlice = {
 
 export type ColumnarTimeseries = {
   times: number[];
-  series: Array<{ key: string; label: string; values: number[] }>;
+  // Float32Array (not number[]) so the worker can transfer each series'
+  // buffer zero-copy to the main thread, and so the timeseries view can hold
+  // the decoded values directly instead of re-copying into a typed array.
+  series: Array<{ key: string; label: string; values: Float32Array }>;
 };
 
 export type SpatialCell = {
@@ -159,7 +162,7 @@ export function extractTimeseriesColumnarFast(slice: TensorSliceDTO): ColumnarTi
   const series = keys.map((key, idx) => ({
     key,
     label: keyLabels[idx],
-    values: Array.from(seriesArrays[idx]) as number[],
+    values: seriesArrays[idx],
   }));
 
   return { times: allTimes, series };
@@ -206,11 +209,11 @@ export function extractTimeseriesColumnar(decoded: DecodedSlice): ColumnarTimese
     new Set(Array.from(groups.values()).flatMap((g) => Array.from(g.byTime.keys()))),
   ).sort((a, b) => a - b);
 
-  const series = Array.from(groups.entries()).map(([key, { label, byTime }]) => ({
-    key,
-    label,
-    values: allTimes.map((t) => byTime.get(t) ?? NaN),
-  }));
+  const series = Array.from(groups.entries()).map(([key, { label, byTime }]) => {
+    const values = new Float32Array(allTimes.length);
+    for (let i = 0; i < allTimes.length; i++) values[i] = byTime.get(allTimes[i]) ?? NaN;
+    return { key, label, values };
+  });
 
   return { times: allTimes, series };
 }

@@ -287,9 +287,9 @@ describe("extractTimeseriesV2", () => {
     const v2 = extractTimeseriesV2(labeled);
     expect(v2.times).toEqual([0.0, 0.1]);
     expect(v2.series.map((s) => s.label)).toEqual(["Ch 0", "Ch 1", "Ch 2"]);
-    expect(v2.series[0].values).toEqual([1, 4]);
-    expect(v2.series[1].values).toEqual([2, 5]);
-    expect(v2.series[2].values).toEqual([3, 6]);
+    expect(Array.from(v2.series[0].values)).toEqual([1, 4]);
+    expect(Array.from(v2.series[1].values)).toEqual([2, 5]);
+    expect(Array.from(v2.series[2].values)).toEqual([3, 6]);
   });
 
   it("collapses to single Signal series on (time,) only", () => {
@@ -309,7 +309,7 @@ describe("extractTimeseriesV2", () => {
     const v2 = extractTimeseriesV2(labeled);
     expect(v2.series).toHaveLength(1);
     expect(v2.series[0].label).toBe("Signal");
-    expect(v2.series[0].values).toEqual([10, 20, 30]);
+    expect(Array.from(v2.series[0].values)).toEqual([10, 20, 30]);
   });
 });
 

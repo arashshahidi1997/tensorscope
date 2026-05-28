@@ -56,8 +56,8 @@ describe("extractTimeseriesColumnar", () => {
     const ch0 = result.series.find((s) => s.key === "ch-0")!;
     const ch1 = result.series.find((s) => s.key === "ch-1")!;
     expect(ch0.label).toBe("Ch 0");
-    expect(ch0.values).toEqual([10, 11, 12]);
-    expect(ch1.values).toEqual([20, 21, 22]);
+    expect(Array.from(ch0.values)).toEqual([10, 11, 12]);
+    expect(Array.from(ch1.values)).toEqual([20, 21, 22]);
   });
 
   it("groups by (AP, ML) when channel column is absent", () => {

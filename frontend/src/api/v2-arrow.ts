@@ -290,10 +290,10 @@ export function extractTimeseriesV2(t: LabeledTensor): ColumnarTimeseries {
   // Build (key, label, channelIndex per non-time dim) tuples. Label format
   // mirrors v1's `seriesKey()` so uPlot's stable channel ordering and the
   // chip-strip label parsing keep working without a special v2 case.
-  let series: { key: string; label: string; values: number[] }[];
+  let series: { key: string; label: string; values: Float32Array }[];
   let perSeriesIdx: number[][];
   if (seriesDims.length === 0) {
-    series = [{ key: "signal", label: "Signal", values: new Array(nT) }];
+    series = [{ key: "signal", label: "Signal", values: new Float32Array(nT) }];
     perSeriesIdx = [[]];
   } else if (seriesDims.length === 1 && seriesDims[0].name === "channel") {
     const chVals = coords["channel"];
@@ -301,7 +301,7 @@ export function extractTimeseriesV2(t: LabeledTensor): ColumnarTimeseries {
     perSeriesIdx = [];
     for (let i = 0; i < seriesDims[0].size; i++) {
       const v = chVals ? (chVals as Float64Array | string[])[i] : i;
-      series.push({ key: `ch-${v}`, label: `Ch ${v}`, values: new Array(nT) });
+      series.push({ key: `ch-${v}`, label: `Ch ${v}`, values: new Float32Array(nT) });
       perSeriesIdx.push([i]);
     }
   } else if (
@@ -321,7 +321,7 @@ export function extractTimeseriesV2(t: LabeledTensor): ColumnarTimeseries {
         series.push({
           key: `ap-${ap}-ml-${ml}`,
           label: `(${ap},${ml})`,
-          values: new Array(nT),
+          values: new Float32Array(nT),
         });
         perSeriesIdx.push([a, m]);
       }
@@ -341,7 +341,7 @@ export function extractTimeseriesV2(t: LabeledTensor): ColumnarTimeseries {
         const raw = cv ? (cv as Float64Array | string[])[indices[i]] : indices[i];
         return `${d.name}${raw}`;
       });
-      series[c] = { key: parts.join("-"), label: parts.join("·"), values: new Array(nT) };
+      series[c] = { key: parts.join("-"), label: parts.join("·"), values: new Float32Array(nT) };
       perSeriesIdx[c] = [...indices];
       for (let i = indices.length - 1; i >= 0; i--) {
         indices[i] += 1;
@@ -479,6 +479,16 @@ export function transferablesFor(value: ExtractedV2): Transferable[] {
     const out: Transferable[] = [value.data.buffer];
     for (const v of Object.values(value.coords)) {
       if (v instanceof Float64Array) out.push(v.buffer);
+    }
+    return out;
+  }
+  // ColumnarTimeseries: each series owns a Float32Array values buffer. Ship
+  // them in the transfer list so postMessage hands them to the main thread
+  // zero-copy instead of structured-cloning every channel's samples.
+  if ("series" in value && Array.isArray(value.series)) {
+    const out: Transferable[] = [];
+    for (const s of value.series) {
+      if (s.values instanceof Float32Array) out.push(s.values.buffer);
     }
     return out;
   }

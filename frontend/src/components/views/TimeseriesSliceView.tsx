@@ -431,7 +431,7 @@ export function TimeseriesSliceView({
    * and spaces them 3 units apart.  We want the visible IQR (p25–p75) to
    * span about 60% of the 3-unit slot, so gain = target_range / actual_iqr.
    */
-  const computeAutoGain = (seriesData: { values: number[] }[]): number => {
+  const computeAutoGain = (seriesData: { values: Float32Array }[]): number => {
     const TARGET_FILL = 1.8; // how many units of the 3-unit slot we want the IQR to fill
     const iqrs: number[] = [];
     for (const s of seriesData) {
@@ -457,7 +457,7 @@ export function TimeseriesSliceView({
 
   const buildScaledData = (
     timesArr: Float64Array,
-    seriesData: { values: number[] }[],
+    seriesData: { values: Float32Array }[],
     gain: number,
   ): [Float64Array, ...Float32Array[]] => {
     const result: [Float64Array, ...Float32Array[]] = [timesArr];
@@ -484,8 +484,11 @@ export function TimeseriesSliceView({
     }
 
     rawDataRef.current = {
+      // values is already a freshly-decoded Float32Array owned by this view
+      // (transferred from the worker, never mutated elsewhere), so hold it
+      // directly instead of re-copying.
       times: timesArr,
-      seriesArrays: seriesData.map((s) => new Float32Array(s.values)),
+      seriesArrays: seriesData.map((s) => s.values),
       offsets,
     };
 
