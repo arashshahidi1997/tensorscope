@@ -991,9 +991,22 @@ def apply_slice_request(
         # Floor at 1e-20 to keep log finite when ghostipy returns zeros at
         # the spectrum edges. nanmedian so masked channels don't drag the
         # baseline of unmasked ones.
-        if spec_params.normalize_per_freq_median:
+        #
+        # Skip baseline subtraction when there's only one time segment —
+        # `nanmedian(axis=-1)` over a length-1 axis returns that single
+        # value, so the subtraction wipes the spectrogram to all-zeros
+        # and the frontend renders a uniform color (viridis at 0 = purple).
+        # This fires on narrow windows (≤ nperseg_s seconds, common
+        # during event drill-down in focus mode). Fall through to raw
+        # log10 power instead.
+        if spec_params.normalize_per_freq_median and mtspec.shape[-1] > 1:
             log_s = np.log10(np.maximum(mtspec, 1e-20))
             mtspec = log_s - np.nanmedian(log_s, axis=-1, keepdims=True)
+        elif spec_params.normalize_per_freq_median:
+            # Single-segment fallback: emit log10 power so the reviewer
+            # at least sees the spectrum shape, even without baseline
+            # normalisation.
+            mtspec = np.log10(np.maximum(mtspec, 1e-20))
 
         # Reshape (n_ch, n_freq, n_t) → (*orig_shape, n_freq, n_t) →
         # (n_t, n_freq, *orig_shape). The frontend's extractSpectrogram

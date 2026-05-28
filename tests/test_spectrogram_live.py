@@ -171,6 +171,37 @@ def test_spectrogram_live_normalize_off_keeps_log_power_scale() -> None:
     assert float(np.abs(median_per_freq).max()) > 1e-6
 
 
+def test_spectrogram_live_single_segment_window_does_not_collapse_to_zero() -> None:
+    """Regression: when the visible window is narrow enough that nperseg
+    consumes all samples and only one time segment fits, the per-time-axis
+    median subtraction must NOT wipe the spectrogram to all-zeros (which
+    would render as a uniform purple viridis-min on the canvas). The
+    fix falls back to raw log10 power on length-1 time axes.
+
+    Trigger: 1 s window with the default nperseg_s=1.0 at fs=1000 → exactly
+    1 segment. Common scenario in event drill-down with focus mode.
+    """
+    signal = _make_signal()
+    from tensorscope.server.state import apply_slice_request
+    request = TensorSliceRequestDTO(
+        view_type="spectrogram_live",
+        selection=SelectionDTO(time=1.5, freq=10.0, ap=0, ml=0),
+        time_range=(1.0, 2.0),
+        spectrogram_live_params=SpectrogramLiveParamsDTO(
+            nperseg_s=1.0,
+            normalize_per_freq_median=True,
+        ),
+    )
+    da = apply_slice_request(signal, request)
+    # The output must span a meaningful range; previously every cell
+    # collapsed to 0 and the canvas painted uniform colormap-min.
+    span = float(np.nanmax(da.values) - np.nanmin(da.values))
+    assert span > 0.5, (
+        f"single-segment spectrogram collapsed to constant (span={span:.3e}) — "
+        "the canvas would render as uniform purple"
+    )
+
+
 # ── window / validator ───────────────────────────────────────────────────
 
 
