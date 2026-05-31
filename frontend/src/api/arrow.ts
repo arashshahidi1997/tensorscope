@@ -265,6 +265,39 @@ export function extractSpatialCells(decoded: DecodedSlice): SpatialCell[] {
  * unique time, then within each frame normalized to 0-based AP/ML rank
  * indices (consistent with extractSpatialCells).
  */
+/**
+ * Depth profile for a linear probe (e.g. Neuropixels DV approximation).
+ *
+ * The `depth_map` slice is a `(channel,)` frame carrying a per-channel `depth`
+ * coord (see docs/design/neuropixels-multiprobe.md). We lay it out as a
+ * single-column grid (`ml = 0`) ordered dorsal→ventral by `depth`, reusing the
+ * spatial `SpatialCell` shape so the existing `ChannelGridRenderer` can paint
+ * it as an N×1 strip. Falls back to channel order when no `depth` column is
+ * present. `ap` is the 0-based depth rank.
+ */
+export function extractDepthProfile(decoded: DecodedSlice): SpatialCell[] {
+  if (!decoded.columns.includes("value") || !decoded.columns.includes("channel")) {
+    return [];
+  }
+  const hasDepth = decoded.columns.includes("depth");
+  const grouped = new Map<number, { sort: number; values: number[] }>();
+  for (const row of decoded.rows) {
+    const channel = toNumber(row.channel);
+    const value = toNumber(row.value);
+    if (channel === null || value === null) continue;
+    const sortKey = hasDepth ? toNumber(row.depth) ?? channel : channel;
+    if (!grouped.has(channel)) grouped.set(channel, { sort: sortKey, values: [] });
+    grouped.get(channel)!.values.push(value);
+  }
+  return Array.from(grouped.values())
+    .sort((a, b) => a.sort - b.sort)
+    .map((cell, i) => ({
+      ap: i,
+      ml: 0,
+      value: cell.values.reduce((sum, v) => sum + v, 0) / cell.values.length,
+    }));
+}
+
 export function extractSpatialFrames(decoded: DecodedSlice): SpatialMovie {
   const empty: SpatialMovie = { frames: [], nAP: 0, nML: 0, min: 0, max: 1 };
   if (

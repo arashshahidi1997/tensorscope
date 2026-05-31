@@ -21,4 +21,12 @@ export type TensorSchema = {
   dims: string[];
   shape: number[];
   dtype: string;
+  /**
+   * Optional server-computed list of applicable view ids (`available_views`
+   * from TensorMetaDTO). When present, `getAvailableViews` trusts it over the
+   * dim-subset predicate — it encodes gating that dims alone can't express
+   * (e.g. `depth_map` depends on a per-channel `depth` coord, not a dim).
+   * See docs/design/neuropixels-multiprobe.md.
+   */
+  available_views?: string[];
 };

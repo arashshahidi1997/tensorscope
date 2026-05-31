@@ -245,12 +245,27 @@ class ServerState:
         """
         node = self.get_node(name)
         data = node.data
+        import numpy as np
+        # Linear probe (e.g. Neuropixels DV approximation): a per-channel
+        # ``depth`` coord stands in for AP/ML. Report a 1×N strip so the
+        # frontend renders a depth-ordered column. See
+        # docs/design/neuropixels-multiprobe.md.
+        if "depth" in data.coords and ("AP" not in data.coords or "ML" not in data.coords):
+            depth_vals = np.asarray(data.coords["depth"].values, dtype=float)
+            depth_sorted = sorted(depth_vals.tolist())
+            return ElectrodeLayoutDTO(
+                n_ap=max(1, len(depth_sorted)),
+                n_ml=1,
+                geometry="linear",
+                ap_coords=depth_sorted,
+                ml_coords=[0.0],
+                n_electrodes=int(depth_vals.size),
+            )
         if "AP" not in data.coords or "ML" not in data.coords:
             raise ValueError(
                 f"Tensor '{name}' has no AP/ML coordinates — "
                 "electrode layout is only available for spatial tensors."
             )
-        import numpy as np
         ap_vals = np.asarray(data.coords["AP"].values, dtype=float)
         ml_vals = np.asarray(data.coords["ML"].values, dtype=float)
         # These may be per-electrode (1D indexed by AP/ML dim) or grid coords.
@@ -642,7 +657,16 @@ def event_stream_meta(stream: EventStream) -> EventStreamMetaDTO:
 
 def available_views(data: xr.DataArray) -> list[str]:
     dims = frozenset(str(dim) for dim in data.dims)
-    return list(_VIEW_REGISTRY.get(dims, ["table"]))
+    views = list(_VIEW_REGISTRY.get(dims, ["table"]))
+    # Linear-probe geometry (e.g. Neuropixels DV approximation): a
+    # (time, channel) tensor carrying a per-channel ``depth`` coord earns the
+    # 1-D ``depth_map`` spatial view. Grid tensors keep their AP/ML views; the
+    # geometry rides on the DataArray coord so multi-probe sessions work
+    # per-tensor with no session-wide probe binding. See
+    # docs/design/neuropixels-multiprobe.md.
+    if dims == frozenset({"time", "channel"}) and "depth" in data.coords:
+        views = [*views, "depth_map"]
+    return views
 
 
 def coord_summary(data: xr.DataArray, coord_name: str) -> CoordSummaryDTO:
@@ -1070,6 +1094,23 @@ def apply_slice_request(
                 {
                     **dict(sliced.attrs),
                     "selected_time": _scalar_or_none(sliced.coords["time"].values),
+                }
+            )
+
+    # depth_map: the linear-probe analogue of spatial_map. Collapse time to the
+    # selected instant → (channel,) profile; the per-channel ``depth`` coord
+    # rides along so the frontend orders the strip dorsal→ventral. Channels are
+    # NOT reordered here (keeps channel ids / masks stable). See
+    # docs/design/neuropixels-multiprobe.md.
+    if request.view_type == "depth_map" and "time" in sliced.dims:
+        target_time = float(request.selection.time)
+        sliced = sliced.sel(time=target_time, method="nearest")
+        if "time" in sliced.coords:
+            sliced = sliced.assign_attrs(
+                {
+                    **dict(sliced.attrs),
+                    "selected_time": _scalar_or_none(sliced.coords["time"].values),
+                    "view_type": "depth_map",
                 }
             )
 

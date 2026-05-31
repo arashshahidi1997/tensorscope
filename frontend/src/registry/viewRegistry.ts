@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { PlaceholderSliceView } from "../components/views/PlaceholderSliceView";
 import { PSDSliceView } from "../components/views/PSDSliceView";
+import { DepthMapSliceView } from "../components/views/DepthMapSliceView";
 import { SpatialMapSliceView } from "../components/views/SpatialMapSliceView";
 import { SpectrogramView } from "../components/views/SpectrogramView";
 import { TimeseriesSliceView } from "../components/views/TimeseriesSliceView";
@@ -27,6 +28,12 @@ export const VIEW_DESCRIPTORS: ViewDescriptor[] = [
   { id: "spectrogram_live", label: "Spectrogram",  requiredDims: ["time"],              priority: 3 },
   { id: "hypnogram",        label: "Hypnogram",    requiredDims: [],                    priority: 12 },
   { id: "event_average",    label: "Event Average", requiredDims: ["time"],             priority: 13 },
+  // Linear-probe (Neuropixels DV) depth strip. Gated on a per-channel `depth`
+  // coord, which `requiredDims` can't express — availability is resolved from
+  // the server's `available_views` in getAvailableViews below. The dims here
+  // are the minimum so the descriptor never appears for non-(time,channel)
+  // tensors via the fallback path. See docs/design/neuropixels-multiprobe.md.
+  { id: "depth_map",        label: "Depth Map",    requiredDims: ["time", "channel"],  priority: 2 },
 ];
 
 /**
@@ -34,6 +41,15 @@ export const VIEW_DESCRIPTORS: ViewDescriptor[] = [
  * Mirrors the server-side `available_views(data)` function.
  */
 export function getAvailableViews(schema: TensorSchema): ViewDescriptor[] {
+  // When the server has told us exactly which views apply (`available_views`),
+  // trust it — it encodes gating that `requiredDims` can't, e.g. `depth_map`
+  // depends on a per-channel `depth` coord, not on a dim. Fall back to the
+  // dim-subset predicate for schemas without server-provided availability
+  // (e.g. synthetic test schemas). See docs/design/neuropixels-multiprobe.md.
+  if (schema.available_views && schema.available_views.length > 0) {
+    const allowed = new Set(schema.available_views);
+    return VIEW_DESCRIPTORS.filter((d) => allowed.has(d.id));
+  }
   return VIEW_DESCRIPTORS.filter((d) =>
     d.requiredDims.every((dim) => schema.dims.includes(dim)),
   );
@@ -71,6 +87,7 @@ export const viewRegistry: Record<string, (props: SliceViewProps) => ReactElemen
   psd_heatmap: PlaceholderSliceView,  // PSD panel views rendered directly in WorkspaceMain
   psd_curve: PlaceholderSliceView,    // PSD panel views rendered directly in WorkspaceMain
   propagation_frame: SpatialMapSliceView,
+  depth_map: DepthMapSliceView,
   table: PlaceholderSliceView,
   event_average: PlaceholderSliceView,  // rendered directly in WorkspaceMain
 };
