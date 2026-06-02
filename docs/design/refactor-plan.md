@@ -163,7 +163,9 @@ item. Honor every constraint in the "Operating constraints" section:
 - Run all JS tooling via `pixi run` (bare node is v12).
 - Do NOT modify the listed in-flight WIP files.
 - Verify each item with the gate commands; an item is done only when green.
-- Commit per item. Do NOT merge or push — leave it on refactor/ultracode-batch.
+- Commit per item, staging EXPLICIT paths only — NEVER `git add -A` / `git add .`
+  (uncommitted WIP — pixi.lock, pyproject.toml, scratch/ — must stay untouched).
+  Do NOT merge or push — leave it on refactor/ultracode-batch.
 - You cannot run the live app or see canvas output; for HUMAN-VALIDATE items,
   make the change and flag it for human visual confirmation in your report.
 
