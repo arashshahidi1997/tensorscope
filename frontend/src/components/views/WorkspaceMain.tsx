@@ -65,6 +65,7 @@ import { OrthoSlicerView } from "./OrthoSlicerView";
 import { TensorChooser } from "./TensorChooser";
 import { TensorOverview } from "./TensorOverview";
 import { ViewGrid } from "./ViewGrid";
+import { buildViewQueryStatusMaps } from "./viewQueryStatus";
 import { ProcessingPanel } from "../controls/ProcessingPanel";
 
 /** Debounce (ms) between a window gesture settling and the slice refetch.
@@ -611,24 +612,26 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     navigatorRef.current?.(navigatorElement);
   }, [navigatorElement]);
 
-  // Per-view in-flight flag. `useSliceQuery` uses `placeholderData:
-  // keepPreviousData`, so on a tensor switch / time scroll each panel keeps
-  // showing the PREVIOUS slice (no blank), but that means a slow refetch is
-  // otherwise invisible. We surface `isFetching` as a per-panel overlay so the
-  // user sees that data is loading instead of a frozen view. Keyed by view id.
-  const fetchingByView: Record<string, boolean> = {
-    timeseries: timeseriesSliceQuery.isFetching,
-    spatial_map: spatialSliceQuery.isFetching,
-    depth_map: depthMapSliceQuery.isFetching,
-    raster: rasterSliceQuery.isFetching,
-    psd_average: psdSliceQuery.isFetching,
-    spectrogram: spectrogramSliceQuery.isFetching,
-    spectrogram_live: spectrogramLiveQuery.isFetching,
-    navigator: navigatorSliceQuery.isFetching,
-    psd_heatmap: psdLiveQuery.isFetching,
-    psd_curve: psdLiveQuery.isFetching,
-    psd_spatial: psdLiveQuery.isFetching,
-  };
+  // Per-view query status. `useSliceQuery` uses `placeholderData:
+  // keepPreviousData` + `retry: false`, so each panel keeps painting the
+  // PREVIOUS slice through a refetch or error — without a signal the user
+  // can't tell the panel is showing the wrong window. We surface three
+  // flags per view (refactor-plan N2): isFetching (in flight), isError
+  // (last fetch failed → showing stale-and-known-bad data), isPlaceholderData
+  // (showing previous-window data while the new fetch is in flight).
+  const { fetchingByView, erroredByView, staleByView } = buildViewQueryStatusMaps({
+    timeseries: timeseriesSliceQuery,
+    spatial_map: spatialSliceQuery,
+    depth_map: depthMapSliceQuery,
+    raster: rasterSliceQuery,
+    psd_average: psdSliceQuery,
+    spectrogram: spectrogramSliceQuery,
+    spectrogram_live: spectrogramLiveQuery,
+    navigator: navigatorSliceQuery,
+    psd_heatmap: psdLiveQuery,
+    psd_curve: psdLiveQuery,
+    psd_spatial: psdLiveQuery,
+  });
 
   // ── Build view elements map ────────────────────────────────────────────
   const viewElements: Record<string, ReactNode> = {};
@@ -1012,6 +1015,8 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       <ViewGrid
         viewElements={viewElements}
         fetchingByView={fetchingByView}
+        erroredByView={erroredByView}
+        staleByView={staleByView}
         activeViewIds={effectiveActiveViews}
         availableViews={availableViews}
         globalTensor={activeTensorName ?? ""}

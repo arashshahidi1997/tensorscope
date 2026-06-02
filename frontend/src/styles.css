@@ -1537,6 +1537,29 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
   animation: activity-spin 0.7s linear infinite;
 }
 
+/* refactor-plan N2: per-view staleness/error badges. */
+.view-panel-header .panel-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.view-panel-header .panel-badge--error {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+}
+.view-panel-header .panel-badge--stale {
+  background: rgba(234, 179, 8, 0.15);
+  color: #facc15;
+  border: 1px solid rgba(234, 179, 8, 0.4);
+}
+
 .view-panel-body {
   flex: 1;
   min-height: 0;

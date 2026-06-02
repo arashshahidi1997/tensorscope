@@ -16,6 +16,11 @@ type ViewGridProps = {
   viewElements: Record<string, ReactNode>;
   /** Per-view in-flight flag; drives the panel loading overlay. */
   fetchingByView?: Record<string, boolean>;
+  /** Per-view last-fetch-failed flag; drives the error badge. */
+  erroredByView?: Record<string, boolean>;
+  /** Per-view "showing previous-window placeholder data" flag; drives the
+   *  stale badge. */
+  staleByView?: Record<string, boolean>;
   activeViewIds: string[];
   availableViews: string[];
   /** Global tensor name (used when no per-panel override is set). */
@@ -32,6 +37,8 @@ function getViewLabel(viewId: string): string {
 export function ViewGrid({
   viewElements,
   fetchingByView,
+  erroredByView,
+  staleByView,
   activeViewIds,
   availableViews,
   globalTensor,
@@ -118,6 +125,8 @@ export function ViewGrid({
                         onSetTensor={(name) => setPanelTensor(slot.viewId, name)}
                         onClearTensor={() => clearPanelTensor(slot.viewId)}
                         isFetching={fetchingByView?.[slot.viewId] ?? false}
+                        isError={erroredByView?.[slot.viewId] ?? false}
+                        isStale={staleByView?.[slot.viewId] ?? false}
                       >
                         {el}
                       </ViewPanel>
@@ -156,6 +165,8 @@ export function ViewGrid({
                   onSetTensor={(name) => setPanelTensor(viewId, name)}
                   onClearTensor={() => clearPanelTensor(viewId)}
                   isFetching={fetchingByView?.[viewId] ?? false}
+                  isError={erroredByView?.[viewId] ?? false}
+                  isStale={staleByView?.[viewId] ?? false}
                 >
                   {el}
                 </ViewPanel>
