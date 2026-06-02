@@ -126,22 +126,15 @@ type TimeScaleBarProps = {
 };
 
 export function TimeScaleBar({ timeCursor, onViewportDurationChange, onTimeWindowChange, onJumpToTime, onImmediateZoom, viewportDuration }: TimeScaleBarProps) {
-  const [draft, setDraft] = useState("");
-  const lastCursor = useRef(timeCursor);
+  const [draft, setDraft] = useState(() => formatSeconds(timeCursor));
+  const focusedRef = useRef(false);
 
-  // Sync display when cursor moves externally
+  // Focus-aware sync: refresh the field from the external cursor only while the
+  // user is NOT typing in it, so an animation tick or paired-agent commit can't
+  // wipe an in-progress edit. See docs/design/time-transport.md (Phase B).
   useEffect(() => {
-    if (timeCursor !== lastCursor.current) {
-      lastCursor.current = timeCursor;
-      setDraft(formatSeconds(timeCursor));
-    }
+    if (!focusedRef.current) setDraft(formatSeconds(timeCursor));
   }, [timeCursor]);
-
-  // Initialize on mount
-  useEffect(() => {
-    setDraft(formatSeconds(timeCursor));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const handleTimeScale = (seconds: number) => {
     if (!Number.isFinite(timeCursor)) return;
@@ -171,8 +164,10 @@ export function TimeScaleBar({ timeCursor, onViewportDurationChange, onTimeWindo
         value={draft}
         title="Jump to time (seconds)"
         onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter") handleSubmit(); }}
-        onBlur={handleSubmit}
+        onFocus={() => { focusedRef.current = true; }}
+        // Commit once, on blur. Enter blurs → single onJumpToTime (no double-fire).
+        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+        onBlur={() => { focusedRef.current = false; handleSubmit(); }}
       />
       <span className="ts-time-unit">s</span>
       <div className="ts-toolbar-sep" />
@@ -180,7 +175,7 @@ export function TimeScaleBar({ timeCursor, onViewportDurationChange, onTimeWindo
         <button
           key={ts.label}
           type="button"
-          className={`ts-timescale-pill${viewportDuration === ts.seconds ? " active" : ""}`}
+          className={`ts-timescale-pill${viewportDuration != null && Math.abs(viewportDuration - ts.seconds) < 1e-6 ? " active" : ""}`}
           title={`Set window to ${ts.label}`}
           onClick={() => handleTimeScale(ts.seconds)}
         >

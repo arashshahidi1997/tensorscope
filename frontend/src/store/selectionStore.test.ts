@@ -6,8 +6,8 @@ import type { SelectionDTO } from "../api/types";
 beforeEach(() => {
   useSelectionStore.setState({
     timeCursor: 0,
-    timeWindow: [0, 2],
-    viewportDuration: 1,
+    timeWindow: [0, 1], // 1 s default scale; width is the single source of truth
+    hasInitialized: false,
     spatial: { ap: 0, ml: 0, channel: null, hoveredId: null, selectedIds: [] },
     freq: { freq: 0 },
     event: { eventId: null, streamName: null },
@@ -28,19 +28,34 @@ describe("setTimeCursor", () => {
     expect(getStore().timeWindow).toEqual([0, 5]);
   });
 
-  it("re-centers window when cursor jumps outside", () => {
-    useSelectionStore.setState({ timeWindow: [0, 2], viewportDuration: 2 });
+  it("re-centers window when cursor jumps outside (preserving current width)", () => {
+    useSelectionStore.setState({ timeWindow: [0, 2] }); // width 2
     getStore().setTimeCursor(10);
     expect(getStore().timeWindow[0]).toBeCloseTo(9);
     expect(getStore().timeWindow[1]).toBeCloseTo(11);
   });
 
-  it("clamps window start to 0 for very early times", () => {
-    // Start with a window that won't contain 0.3; viewportDuration=2 → window [-0.7, 1.3] → clamped [0, 1.3]
-    useSelectionStore.setState({ timeWindow: [5, 10], viewportDuration: 2 });
+  it("recenter preserves the current window width (single source of truth)", () => {
+    useSelectionStore.setState({ timeWindow: [10, 16] }); // width 6
+    getStore().setTimeCursor(100);
+    expect(getStore().timeWindow[1] - getStore().timeWindow[0]).toBeCloseTo(6);
+    expect(getStore().timeWindow[0]).toBeCloseTo(97);
+    expect(getStore().timeWindow[1]).toBeCloseTo(103);
+  });
+
+  it("clamps window start to 0 for very early times, keeping width exact", () => {
+    useSelectionStore.setState({ timeWindow: [10, 12] }); // width 2, far from 0
     getStore().setTimeCursor(0.3);
     expect(getStore().timeWindow[0]).toBe(0);
-    expect(getStore().timeWindow[1]).toBeCloseTo(1.3);
+    expect(getStore().timeWindow[1]).toBeCloseTo(2); // width preserved at the t=0 edge
+  });
+});
+
+describe("setDuration", () => {
+  it("sets the window width centered on the current cursor", () => {
+    useSelectionStore.setState({ timeCursor: 50, timeWindow: [0, 1] });
+    getStore().setDuration(10);
+    expect(getStore().timeWindow).toEqual([45, 55]);
   });
 });
 
@@ -69,16 +84,31 @@ describe("initFromDTO", () => {
     expect(getStore().spatial).toEqual({ ap: 2, ml: 3, channel: null, hoveredId: null, selectedIds: [] });
   });
 
-  it("re-centers window when time changes", () => {
+  it("re-centers window (preserving width) when the committed time is outside it", () => {
+    useSelectionStore.setState({ timeCursor: 1, timeWindow: [0, 2], hasInitialized: true }); // width 2
     getStore().initFromDTO({ time: 10, freq: 0, ap: 0, ml: 0, channel: null });
-    expect(getStore().timeWindow[0]).toBe(9.5);
-    expect(getStore().timeWindow[1]).toBe(10.5);
+    expect(getStore().timeWindow).toEqual([9, 11]);
   });
 
   it("preserves window when time is unchanged", () => {
-    useSelectionStore.setState({ timeCursor: 5, timeWindow: [3, 9] });
+    useSelectionStore.setState({ timeCursor: 5, timeWindow: [3, 9], hasInitialized: true });
     getStore().initFromDTO({ time: 5, freq: 30, ap: 1, ml: 1, channel: null });
     expect(getStore().timeWindow).toEqual([3, 9]);
+  });
+
+  it("first-load is gated by hasInitialized, not a window-value sentinel", () => {
+    // Window equals the OLD [0,2] first-load sentinel, but we're already
+    // initialized and the cursor is inside → the window must be preserved.
+    useSelectionStore.setState({ timeCursor: 1, timeWindow: [0, 2], hasInitialized: true });
+    getStore().initFromDTO({ time: 1, freq: 0, ap: 0, ml: 0, channel: null });
+    expect(getStore().timeWindow).toEqual([0, 2]);
+  });
+
+  it("first load (not yet initialized) recenters at the default width", () => {
+    // hasInitialized=false from beforeEach; default width is 1 s.
+    getStore().initFromDTO({ time: 10, freq: 0, ap: 0, ml: 0, channel: null });
+    expect(getStore().timeWindow).toEqual([9.5, 10.5]);
+    expect(getStore().hasInitialized).toBe(true);
   });
 
   it("uses explicit timeWindow argument when provided", () => {
@@ -137,14 +167,14 @@ describe("linked update semantics", () => {
     expect(getStore().spatial.ml).toBe(7);
   });
 
-  it("event navigation updates timeCursor and re-centers window using viewportDuration", () => {
-    useSelectionStore.setState({ timeWindow: [0, 2], viewportDuration: 1 });
+  it("event navigation updates timeCursor and re-centers window using current width", () => {
+    useSelectionStore.setState({ timeWindow: [0, 2] }); // width 2
     // Simulate event table committing a new time outside the visible window
     getStore().setTimeCursor(15);
     const s = getStore();
     expect(s.timeCursor).toBe(15);
-    // Re-centers at viewportDuration=1: [14.5, 15.5]
-    expect(s.timeWindow).toEqual([14.5, 15.5]);
+    // Re-centers preserving the current window width (2): [14, 16]
+    expect(s.timeWindow).toEqual([14, 16]);
   });
 });
 
@@ -171,17 +201,18 @@ describe("overview↔detail contract", () => {
   });
 
   it("cursor commit (initFromDTO) re-centers window only when time changes", () => {
-    useSelectionStore.setState({ timeCursor: 5, timeWindow: [3, 9] });
+    useSelectionStore.setState({ timeCursor: 5, timeWindow: [3, 9], hasInitialized: true });
     // Server responds with the same time → window should be preserved
     getStore().initFromDTO({ time: 5, freq: 0, ap: 0, ml: 0, channel: null });
     expect(getStore().timeWindow).toEqual([3, 9]);
   });
 
-  it("cursor commit with new time re-centers window", () => {
-    useSelectionStore.setState({ timeCursor: 5, timeWindow: [3, 9] });
+  it("cursor commit with new time re-centers window (preserving width)", () => {
+    useSelectionStore.setState({ timeCursor: 5, timeWindow: [3, 9], hasInitialized: true }); // width 6
     getStore().initFromDTO({ time: 20, freq: 0, ap: 0, ml: 0, channel: null });
     expect(getStore().timeCursor).toBe(20);
-    expect(getStore().timeWindow).toEqual([19.5, 20.5]);
+    // width preserved (6), centered on 20
+    expect(getStore().timeWindow).toEqual([17, 23]);
   });
 
   it("multiple views publishing window converge on last write", () => {
@@ -192,6 +223,29 @@ describe("overview↔detail contract", () => {
     // Navigator user drag zooms to [3, 5]
     getStore().setTimeWindow([3, 5]);
     expect(getStore().timeWindow).toEqual([3, 5]);
+  });
+});
+
+describe("optimistic cursor commit contract (Phase C)", () => {
+  // App.commitSelection does: patchFromDTO(payload) [optimistic, instant]
+  // then mutate → onSuccess: initFromDTO(serverEcho, currentWindow) [reconcile].
+  it("optimistic patch moves the cursor immediately, before any server echo", () => {
+    useSelectionStore.setState({ timeCursor: 5, timeWindow: [3, 9], hasInitialized: true });
+    getStore().patchFromDTO({ time: 6, freq: 0, ap: 0, ml: 0, channel: null });
+    expect(getStore().timeCursor).toBe(6); // moved now, no round-trip
+    expect(getStore().timeWindow).toEqual([3, 9]); // still inside → window kept
+  });
+
+  it("reconcile with the current window preserves a pan made while the PUT was in flight", () => {
+    // Optimistic move to t=6 inside [3,9]...
+    useSelectionStore.setState({ timeCursor: 6, timeWindow: [3, 9], hasInitialized: true });
+    // ...user pans to [20, 26] while the PUT is in flight (cursor now outside it)...
+    getStore().setTimeWindow([20, 26]);
+    // ...the late server echo reconciles cursor but must NOT re-center the window.
+    const currentWindow = getStore().timeWindow;
+    getStore().initFromDTO({ time: 6, freq: 0, ap: 0, ml: 0, channel: null }, currentWindow);
+    expect(getStore().timeWindow).toEqual([20, 26]); // pan survives
+    expect(getStore().timeCursor).toBe(6);
   });
 });
 

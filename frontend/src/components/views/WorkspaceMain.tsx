@@ -45,6 +45,7 @@ import {
 import type { SelectionDTO, TensorSliceRequestDTO } from "../../api/types";
 import { resolveBand, useAppStore } from "../../store/appStore";
 import { useSelectionStore, toSelectionDTO } from "../../store/selectionStore";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { getAvailableViews, getOrthoPair, viewRegistry } from "../../registry/viewRegistry";
 import { EventAverageView } from "./EventAverageView";
 import { HypnogramView } from "./HypnogramView";
@@ -65,6 +66,10 @@ import { TensorChooser } from "./TensorChooser";
 import { TensorOverview } from "./TensorOverview";
 import { ViewGrid } from "./ViewGrid";
 import { ProcessingPanel } from "../controls/ProcessingPanel";
+
+/** Debounce (ms) between a window gesture settling and the slice refetch.
+ * HiGlass uses ~100 ms; the live window still drives the chart x-scale. */
+const WINDOW_FETCH_DEBOUNCE_MS = 100;
 
 const PSD_LIVE_EXPANSION = ["psd_heatmap", "psd_curve", "psd_spatial"];
 
@@ -137,7 +142,10 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     setObjectLayoutMode,
   } = useAppStore();
   const selectionState = useSelectionStore();
-  const { timeWindow, setTimeWindow, setFreq, setHoveredElectrode, viewportDuration, setViewportDuration } = selectionState;
+  const { timeWindow, setTimeWindow, setFreq, setHoveredElectrode, setDuration } = selectionState;
+  // Visible-window width (s) — DERIVED from the window, not stored. Highlights
+  // the matching TimeScaleBar preset; the single source of truth for duration.
+  const viewportDuration = timeWindow[1] - timeWindow[0];
 
   // Store-local freq update — no server round-trip; spectrogram and PSD already
   // render the full freq range and project the cursor client-side.
@@ -253,9 +261,16 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
 
   const timeCoord = tensorQuery.data?.coords.find((c) => c.name === "time");
 
-  // Clamp the time window to data bounds so panning outside the recording
+  // Debounce the window that feeds slice FETCHES (~100 ms) so a pan/zoom drag
+  // fires one request after it settles, not one per frame. The live `timeWindow`
+  // still drives the chart x-scale instantly (TimeseriesSliceView reads it
+  // directly), so the pan stays smooth while the data trails — the HiGlass
+  // "optimistic transform + debounced fetch" pattern. See time-transport.md (D).
+  const fetchWindow = useDebouncedValue(timeWindow, WINDOW_FETCH_DEBOUNCE_MS);
+
+  // Clamp the (debounced) window to data bounds so panning outside the recording
   // never triggers a "slice returned no data" 400 from the server.
-  const safeWindow = clampWindow(timeWindow, timeCoord);
+  const safeWindow = clampWindow(fetchWindow, timeCoord);
 
   // G8: PSD-lock-to-event derivation.
   //
@@ -552,7 +567,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         <TimeScaleBar
           timeCursor={selectionDraft.time}
           viewportDuration={viewportDuration}
-          onViewportDurationChange={setViewportDuration}
+          onViewportDurationChange={setDuration}
           onJumpToTime={(t) => commitSelectionRef.current({ ...selectionDraft, time: t })}
         />
         {showHypnogram && brainstateAvailable && brainstateIntervals.length > 0 && (
@@ -577,7 +592,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     brainstateOverlay,
     brainstateAvailable,
     viewportDuration,
-    setViewportDuration,
+    setDuration,
     showHypnogram,
     brainstateT0,
     brainstateT1,
@@ -910,7 +925,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
           <TimeScaleBar
             timeCursor={selectionDraft.time}
             viewportDuration={viewportDuration}
-            onViewportDurationChange={setViewportDuration}
+            onViewportDurationChange={setDuration}
             onJumpToTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
           />
           {showHypnogram && brainstateAvailable && brainstateIntervals.length > 0 && (

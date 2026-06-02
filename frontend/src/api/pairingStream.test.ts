@@ -7,7 +7,7 @@ beforeEach(() => {
   useSelectionStore.setState({
     timeCursor: 0,
     timeWindow: [0, 2],
-    viewportDuration: 1,
+    hasInitialized: false,
     spatial: { ap: 0, ml: 0, channel: null, hoveredId: null, selectedIds: [] },
     freq: { freq: 0 },
     event: { eventId: null, streamName: null },
@@ -74,7 +74,7 @@ describe("handlePairingMessage", () => {
     // store→prop→chart.setScale wiring in TimeseriesSliceView is verified
     // by manual smoke against the live --pair server. Pixecog orchestrator
     // exercises this on every release of the pairing API.
-    useSelectionStore.setState({ timeCursor: 0, timeWindow: [0, 10], viewportDuration: 1 });
+    useSelectionStore.setState({ timeCursor: 0, timeWindow: [0, 10], hasInitialized: true });
     const qc = freshClient();
     handlePairingMessage(
       JSON.stringify({
@@ -85,9 +85,9 @@ describe("handlePairingMessage", () => {
     );
     const s = useSelectionStore.getState();
     expect(s.timeCursor).toBe(120);
-    // timeWindow re-centered around 120 with viewportDuration=1 → [119.5, 120.5]
-    expect(s.timeWindow[0]).toBeCloseTo(119.5);
-    expect(s.timeWindow[1]).toBeCloseTo(120.5);
+    // timeWindow re-centered around 120, preserving the current width (10) → [115, 125]
+    expect(s.timeWindow[0]).toBeCloseTo(115);
+    expect(s.timeWindow[1]).toBeCloseTo(125);
   });
 
   it("ignores malformed JSON", () => {

@@ -41,9 +41,9 @@ function App() {
 
   // Navigation state
   const selectionState = useSelectionStore();
-  const { initFromDTO } = selectionState;
+  const { initFromDTO, patchFromDTO } = selectionState;
   const selectionDraft: SelectionDTO = toSelectionDTO(selectionState);
-  const initialized = selectionState.timeCursor !== 0 || selectionState.spatial.ap !== 0;
+  const initialized = selectionState.hasInitialized;
 
   // Event-centric navigation — updates selectionStore.event on row/marker click
   const eventNav = useEventNavigation();
@@ -70,12 +70,23 @@ function App() {
   const selectionMutation = useMutation({
     mutationFn: (payload: SelectionDTO) => api.updateSelection(payload),
     onSuccess: (selection) => {
-      initFromDTO(selection);
+      // The cursor was already moved optimistically in commitSelection.
+      // Reconcile to the server's canonical selection but PRESERVE the user's
+      // current window (pass it explicitly) — a late response must not re-center
+      // and stomp a pan the user made while the PUT was in flight. See
+      // docs/design/time-transport.md (Phase C).
+      initFromDTO(selection, useSelectionStore.getState().timeWindow);
       queryClient.invalidateQueries({ queryKey: ["state"] });
     },
   });
 
-  const commitSelection = (payload: SelectionDTO) => selectionMutation.mutate(payload);
+  const commitSelection = (payload: SelectionDTO) => {
+    // Optimistic: move the cursor (and re-center the window if it left the
+    // visible range) locally NOW, so the crosshair tracks the click without
+    // waiting a full server round-trip. The PUT persists + reconciles.
+    patchFromDTO(payload);
+    selectionMutation.mutate(payload);
+  };
 
   // Multi-stream event panel state (G5). The first detected stream is
   // auto-pinned on first load; everything else (pin more, switch active

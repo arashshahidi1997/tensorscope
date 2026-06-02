@@ -44,8 +44,18 @@ export function TimeseriesNavStrip({
 
   const [timeInput, setTimeInput] = useState(cursor.toFixed(3));
   const [windowInput, setWindowInput] = useState(winSec.toFixed(3));
-  useEffect(() => setTimeInput(cursor.toFixed(3)), [cursor]);
-  useEffect(() => setWindowInput(winSec.toFixed(3)), [winSec]);
+  // Focus-aware sync: only overwrite the field from external state when the
+  // user is NOT editing it. Without this guard, a cursor tick from animation
+  // or a paired-agent commit wipes a half-typed value (ephyviewer's seek()
+  // disconnects the widget signal for the same reason). See time-transport.md.
+  const timeFocused = useRef(false);
+  const windowFocused = useRef(false);
+  useEffect(() => {
+    if (!timeFocused.current) setTimeInput(cursor.toFixed(3));
+  }, [cursor]);
+  useEffect(() => {
+    if (!windowFocused.current) setWindowInput(winSec.toFixed(3));
+  }, [winSec]);
 
   const trackRef = useRef<HTMLDivElement | null>(null);
 
@@ -165,7 +175,8 @@ export function TimeseriesNavStrip({
           step={Math.max(0.001, winSec / 100)}
           value={timeInput}
           onChange={(e) => setTimeInput(e.target.value)}
-          onBlur={(e) => commitTime(e.target.value)}
+          onFocus={() => { timeFocused.current = true; }}
+          onBlur={(e) => { timeFocused.current = false; commitTime(e.target.value); }}
           onKeyDown={(e) => {
             if (e.key === "Enter") (e.target as HTMLInputElement).blur();
           }}
@@ -179,7 +190,8 @@ export function TimeseriesNavStrip({
           min={0.001}
           value={windowInput}
           onChange={(e) => setWindowInput(e.target.value)}
-          onBlur={(e) => commitWindow(e.target.value)}
+          onFocus={() => { windowFocused.current = true; }}
+          onBlur={(e) => { windowFocused.current = false; commitWindow(e.target.value); }}
           onKeyDown={(e) => {
             if (e.key === "Enter") (e.target as HTMLInputElement).blur();
           }}

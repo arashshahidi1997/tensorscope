@@ -18,11 +18,16 @@ export function AnimationController({
   const rafRef = useRef<number | null>(null);
   const lastTickRef = useRef<number>(0);
 
-  // Expose speed and fps to the rAF loop without re-creating the effect.
+  // Expose speed/fps/timeRange to the rAF loop without re-creating the effect.
+  // timeRange MUST go through a ref: the parent often passes a fresh [t0,t1]
+  // literal each render, and listing it in the effect deps would tear down and
+  // rebuild the loop (resetting lastTick → stutter). See time-transport.md.
   const speedRef = useRef(speed);
   const fpsRef = useRef(fps);
+  const timeRangeRef = useRef(timeRange);
   useEffect(() => { speedRef.current = speed; }, [speed]);
   useEffect(() => { fpsRef.current = fps; }, [fps]);
+  useEffect(() => { timeRangeRef.current = timeRange; }, [timeRange]);
 
   // rAF animation loop — starts when playing becomes true, stops otherwise.
   useEffect(() => {
@@ -41,9 +46,13 @@ export function AnimationController({
       const frameInterval = 1000 / (fpsRef.current * speedRef.current);
 
       if (elapsed >= frameInterval) {
+        // Wall-clock advance (like ephyviewer's on_timer_play_interval): the
+        // step is the real elapsed time × speed, so playback tracks real time
+        // regardless of frame jitter.
+        const [lo, hi] = timeRangeRef.current;
         const advance = (elapsed / 1000) * speedRef.current;
         const t = useSelectionStore.getState().timeCursor;
-        const next = t + advance > timeRange[1] ? timeRange[0] : t + advance;
+        const next = t + advance > hi ? lo : t + advance;
         useSelectionStore.getState().setTimeCursor(next);
         lastTickRef.current = now;
       }
@@ -59,27 +68,25 @@ export function AnimationController({
         rafRef.current = null;
       }
     };
-  }, [playing, timeRange]);
+  }, [playing]);
 
+  // A "step" is one frame (1/fps) regardless of playback speed — speed scales
+  // continuous playback, not discrete steps.
   const stepForward = () => {
-    const advance = speed / fps;
+    const [, hi] = timeRangeRef.current;
     const t = useSelectionStore.getState().timeCursor;
-    useSelectionStore.getState().setTimeCursor(
-      Math.min(timeRange[1], t + advance),
-    );
+    useSelectionStore.getState().setTimeCursor(Math.min(hi, t + 1 / fps));
   };
 
   const stepBack = () => {
-    const retreat = speed / fps;
+    const [lo] = timeRangeRef.current;
     const t = useSelectionStore.getState().timeCursor;
-    useSelectionStore.getState().setTimeCursor(
-      Math.max(timeRange[0], t - retreat),
-    );
+    useSelectionStore.getState().setTimeCursor(Math.max(lo, t - 1 / fps));
   };
 
   const handleStop = () => {
     setPlaying(false);
-    useSelectionStore.getState().setTimeCursor(timeRange[0]);
+    useSelectionStore.getState().setTimeCursor(timeRangeRef.current[0]);
   };
 
   // Zustand subscription — causes a re-render on every cursor change for the
@@ -105,7 +112,11 @@ export function AnimationController({
       </button>
       <select
         value={speed}
-        onChange={(e) => setSpeed(Number(e.target.value))}
+        onChange={(e) => {
+          const v = Number(e.target.value);
+          // Guard against 0 / NaN → frameInterval = Infinity would freeze play.
+          if (Number.isFinite(v) && v > 0) setSpeed(v);
+        }}
       >
         <option value={0.25}>0.25×</option>
         <option value={0.5}>0.5×</option>

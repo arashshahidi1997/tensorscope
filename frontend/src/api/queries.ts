@@ -51,7 +51,7 @@ export function useTensorQuery(name: string | null) {
 export function useSliceQuery(name: string | null, request: TensorSliceRequestDTO | null) {
   return useQuery({
     queryKey: ["slice", name, request],
-    queryFn: () => api.getTensorSlice(name!, request!),
+    queryFn: ({ signal }) => api.getTensorSlice(name!, request!, signal),
     enabled: Boolean(name && request),
     placeholderData: keepPreviousData,
     // 400/422 errors from /slice are definitional (wrong params), not transient.

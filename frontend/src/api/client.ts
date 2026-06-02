@@ -71,10 +71,15 @@ export const api = {
     return request<TensorMetaDTO>(`/api/v1/tensors/${name}`);
   },
 
-  getTensorSlice(name: string, body: TensorSliceRequestDTO): Promise<TensorSliceDTO> {
+  getTensorSlice(
+    name: string,
+    body: TensorSliceRequestDTO,
+    signal?: AbortSignal,
+  ): Promise<TensorSliceDTO> {
     return request<TensorSliceDTO>(`/api/v1/tensors/${name}/slice`, {
       method: "POST",
       body: JSON.stringify(body),
+      signal,
     });
   },
 

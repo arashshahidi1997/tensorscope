@@ -23,6 +23,9 @@ frontend/*.tsbuildinfo
 # Misc local OS/editor artifacts
 .DS_Store
 
+# Reference repos — read-only clones for source study, not tracked
+resources/
+
 # >>> projio >>>
 *.ipynb
 .claude/commands/

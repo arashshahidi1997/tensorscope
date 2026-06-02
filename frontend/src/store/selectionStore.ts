@@ -10,8 +10,10 @@ import type {
 import type { SelectionDTO } from "../api/types";
 
 type SelectionStore = SelectionState & {
-  viewportDuration: number;
-  setViewportDuration: (d: number) => void;
+  /** True once the store has been bootstrapped from a server selection DTO. */
+  hasInitialized: boolean;
+  /** Set the visible-window width (s), centered on the current cursor. */
+  setDuration: (seconds: number) => void;
   setTimeCursor: (t: number) => void;
   setTimeWindow: (w: TimeWindow) => void;
   setSpatial: (s: SpatialSelection) => void;
@@ -52,34 +54,47 @@ type SelectionStore = SelectionState & {
 
 const DEFAULT_STATE: SelectionState = {
   timeCursor: 0,
-  timeWindow: [0, 2],
+  // 1 s initial scale. The window's WIDTH is the single source of truth for
+  // "duration" — there is no separate viewportDuration field to drift from it.
+  timeWindow: [0, 1],
   spatial: { ap: 0, ml: 0, channel: null, hoveredId: null, selectedIds: [] },
   freq: { freq: 0 },
   event: { eventId: null, streamName: null },
 };
 
+/** Visible-window width in seconds — the single source of truth for "duration". */
+export const windowDuration = (w: TimeWindow): number => w[1] - w[0];
+
+/** True when `t` falls within the visible window (inclusive). */
+const within = (t: number, w: TimeWindow): boolean => t >= w[0] && t <= w[1];
+
+/**
+ * A window of the given width centered on `t`, clamped so it never starts
+ * before 0. Width is preserved exactly even at the t=0 edge.
+ */
+function centeredWindow(t: number, width: number): TimeWindow {
+  const lo = Math.max(0, t - width / 2);
+  return [lo, lo + width];
+}
+
 export const useSelectionStore = create<SelectionStore>((set) => ({
   ...DEFAULT_STATE,
-  viewportDuration: 1,
+  hasInitialized: false,
 
-  setViewportDuration: (d) =>
-    set((s) => ({
-      viewportDuration: d,
-      timeWindow: [Math.max(0, s.timeCursor - d / 2), s.timeCursor + d / 2],
-    })),
+  // Width is the single source of truth: setting a duration recenters the
+  // window on the current cursor; nothing stores a second "viewportDuration".
+  setDuration: (seconds) =>
+    set((s) => ({ timeWindow: centeredWindow(s.timeCursor, seconds) })),
 
   setTimeCursor: (t) =>
-    set((s) => {
-      const half = s.viewportDuration / 2;
-      return {
-        timeCursor: t,
-        // Re-center window when cursor jumps outside the visible range.
-        timeWindow:
-          t < s.timeWindow[0] || t > s.timeWindow[1]
-            ? [Math.max(0, t - half), t + half]
-            : s.timeWindow,
-      };
-    }),
+    set((s) => ({
+      timeCursor: t,
+      // Re-center (preserving the current window WIDTH) only when the cursor
+      // leaves the visible range.
+      timeWindow: within(t, s.timeWindow)
+        ? s.timeWindow
+        : centeredWindow(t, windowDuration(s.timeWindow)),
+    })),
 
   setTimeWindow: (timeWindow) => set({ timeWindow }),
 
@@ -134,9 +149,8 @@ export const useSelectionStore = create<SelectionStore>((set) => ({
       const next: Partial<SelectionState> = {};
       if (p.time !== undefined) {
         next.timeCursor = p.time;
-        if (p.time < s.timeWindow[0] || p.time > s.timeWindow[1]) {
-          const half = s.viewportDuration / 2;
-          next.timeWindow = [Math.max(0, p.time - half), p.time + half];
+        if (!within(p.time, s.timeWindow)) {
+          next.timeWindow = centeredWindow(p.time, windowDuration(s.timeWindow));
         }
       }
       if (p.freq !== undefined) {
@@ -156,27 +170,24 @@ export const useSelectionStore = create<SelectionStore>((set) => ({
 
   initFromDTO: (dto, timeWindow) =>
     set((s) => {
-      // Compute the desired time window:
-      // 1. If an explicit timeWindow argument was provided, use it.
-      // 2. If this is the first load (window is still DEFAULT_STATE [0,2]),
-      //    apply a 1s default centered on the cursor.
-      // 3. If cursor jumps outside the visible range, re-center with 1s window.
-      // 4. Otherwise preserve the current window.
-      const half = s.viewportDuration / 2;
+      // Desired window:
+      // 1. an explicit argument wins;
+      // 2. first load (not yet initialized) OR cursor outside the visible
+      //    range → recenter, preserving the current window WIDTH (the single
+      //    source of truth — no separate viewportDuration to drift from it);
+      // 3. otherwise preserve the current window.
       let nextWindow: TimeWindow;
       if (timeWindow) {
         nextWindow = timeWindow;
-      } else if (s.timeWindow[0] === 0 && s.timeWindow[1] === 2) {
-        // First load — apply viewportDuration initial scale
-        nextWindow = [Math.max(0, dto.time - half), dto.time + half];
-      } else if (dto.time < s.timeWindow[0] || dto.time > s.timeWindow[1]) {
-        nextWindow = [Math.max(0, dto.time - half), dto.time + half];
+      } else if (!s.hasInitialized || !within(dto.time, s.timeWindow)) {
+        nextWindow = centeredWindow(dto.time, windowDuration(s.timeWindow));
       } else {
         nextWindow = s.timeWindow;
       }
       return {
         timeCursor: dto.time,
         timeWindow: nextWindow,
+        hasInitialized: true,
         spatial: { ap: dto.ap, ml: dto.ml, channel: dto.channel, hoveredId: null, selectedIds: [] },
         freq: { freq: dto.freq },
         event: s.event, // preserve existing event selection across API round-trips
