@@ -45,8 +45,8 @@ from tensorscope.server.models import (
 
 _INLINE_COORD_LIMIT = 32
 _VIEW_REGISTRY: dict[frozenset[str], list[str]] = {
-    frozenset({"time", "AP", "ML"}): ["timeseries", "spatial_map", "propagation_frame", "propagation_movie", "navigator", "psd_live", "spectrogram_live", "event_average"],
-    frozenset({"time", "channel"}): ["timeseries", "navigator", "psd_live", "spectrogram_live", "event_average"],
+    frozenset({"time", "AP", "ML"}): ["timeseries", "spatial_map", "raster", "propagation_frame", "propagation_movie", "navigator", "psd_live", "spectrogram_live", "event_average"],
+    frozenset({"time", "channel"}): ["timeseries", "raster", "navigator", "psd_live", "spectrogram_live", "event_average"],
     frozenset({"time", "freq", "AP", "ML"}): ["spectrogram", "psd_spatial"],
     frozenset({"time", "freq", "channel"}): ["spectrogram", "psd_average"],
 }
@@ -1085,6 +1085,28 @@ def apply_slice_request(
     if request.ml_range is not None and "ML" in sliced.dims:
         lo, hi = request.ml_range
         sliced = sliced.isel(ML=slice(int(lo), int(hi) + 1))
+
+    # raster: channel × time amplitude heatmap (channels as rows, time as cols).
+    # Works for both linear (time, channel) and grid (time, AP, ML) tensors —
+    # grid is flattened row-major to a (channel,) axis so the view is geometry-
+    # agnostic. Output is (channel, time); the trailing downsample step thins the
+    # time axis to max_points. A `depth` coord (linear probes) rides along so the
+    # frontend can order rows by depth. See docs/design/neuropixels-multiprobe.md.
+    if request.view_type == "raster" and "time" in sliced.dims:
+        if "AP" in sliced.dims and "ML" in sliced.dims:
+            # Row-major flatten to a plain (channel,) axis. `.stack` makes a
+            # MultiIndex channel coord which doesn't serialize cleanly, so drop
+            # it and re-key channel to a 0..N integer index (channel = ap*n_ml+ml).
+            stacked = sliced.transpose("time", "AP", "ML").stack(channel=("AP", "ML"))
+            stacked = stacked.drop_vars(["channel", "AP", "ML"], errors="ignore")
+            sliced = stacked.assign_coords(channel=np.arange(stacked.sizes["channel"]))
+        if "channel" not in sliced.dims:
+            raise ValueError(
+                "raster requires a (time, channel) or (time, AP, ML) tensor; "
+                f"got dims {tuple(sliced.dims)}"
+            )
+        sliced = sliced.transpose("channel", "time")
+        sliced = sliced.assign_attrs({**dict(sliced.attrs), "view_type": "raster"})
 
     if request.view_type == "spatial_map" and "time" in sliced.dims:
         target_time = float(request.selection.time)

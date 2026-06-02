@@ -50,6 +50,18 @@ export type Spectrogram = {
   values: number[][];
 };
 
+export type Raster = {
+  /** Channel ids (rows), sorted by depth when a depth coord is present. */
+  channels: number[];
+  times: number[];
+  /** Per-channel depth (µm) aligned to `channels`, or null if absent. */
+  depths: number[] | null;
+  /** Flat row-major [channelRow * nTime + timeCol] amplitude. */
+  values: Float64Array;
+  nChannels: number;
+  nTime: number;
+};
+
 function base64ToUint8Array(encoded: string): Uint8Array {
   const binary = atob(encoded);
   return Uint8Array.from(binary, (c) => c.charCodeAt(0));
@@ -726,4 +738,64 @@ export function extractSpectrogram(decoded: DecodedSlice): Spectrogram {
   }
 
   return { times, freqs, values };
+}
+
+/**
+ * Decode a `raster` payload — channel × time amplitude (long-format columns
+ * `channel`, `time`, `value`, optional per-channel `depth`). Returns a flat
+ * row-major Float64Array [channelRow * nTime + timeCol]. Rows are ordered by
+ * `depth` when present (dorsal→ventral), else by channel id. See
+ * docs/design/neuropixels-multiprobe.md.
+ */
+export function extractRaster(decoded: DecodedSlice): Raster {
+  const empty: Raster = {
+    channels: [], times: [], depths: null, values: new Float64Array(0), nChannels: 0, nTime: 0,
+  };
+  if (
+    !decoded.columns.includes("channel") ||
+    !decoded.columns.includes("time") ||
+    !decoded.columns.includes("value")
+  ) {
+    return empty;
+  }
+  const hasDepth = decoded.columns.includes("depth");
+
+  // Collect unique channels (with depth) and times.
+  const depthByChannel = new Map<number, number>();
+  const timeSet = new Set<number>();
+  for (const row of decoded.rows) {
+    const ch = toNumber(row.channel);
+    const t = toNumber(row.time);
+    if (ch === null || t === null) continue;
+    timeSet.add(t);
+    if (!depthByChannel.has(ch)) {
+      depthByChannel.set(ch, hasDepth ? toNumber(row.depth) ?? ch : ch);
+    }
+  }
+  if (depthByChannel.size === 0 || timeSet.size === 0) return empty;
+
+  // Channel rows ordered by depth (then id); time columns ascending.
+  const channels = Array.from(depthByChannel.keys()).sort(
+    (a, b) => depthByChannel.get(a)! - depthByChannel.get(b)! || a - b,
+  );
+  const times = Array.from(timeSet).sort((a, b) => a - b);
+  const chRow = new Map(channels.map((c, i) => [c, i]));
+  const tCol = new Map(times.map((t, i) => [t, i]));
+
+  const nChannels = channels.length;
+  const nTime = times.length;
+  const values = new Float64Array(nChannels * nTime).fill(NaN);
+  for (const row of decoded.rows) {
+    const ch = toNumber(row.channel);
+    const t = toNumber(row.time);
+    const v = toNumber(row.value);
+    if (ch === null || t === null || v === null) continue;
+    const r = chRow.get(ch);
+    const c = tCol.get(t);
+    if (r === undefined || c === undefined) continue;
+    values[r * nTime + c] = v;
+  }
+
+  const depths = hasDepth ? channels.map((c) => depthByChannel.get(c)!) : null;
+  return { channels, times, depths, values, nChannels, nTime };
 }

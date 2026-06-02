@@ -52,6 +52,15 @@ export const DEFAULT_SLOT_LAYOUT: ViewSlotLayout = {
       minHeight: 220,
     },
     {
+      id: "raster",
+      label: "Raster",
+      slots: [
+        // channel × time amplitude heatmap — full width, its own row.
+        { viewId: "raster", region: "left", widthFraction: 1.0 },
+      ],
+      minHeight: 220,
+    },
+    {
       id: "event",
       label: "Event",
       slots: [

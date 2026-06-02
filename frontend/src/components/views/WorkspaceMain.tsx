@@ -55,6 +55,7 @@ import { PSDCurveView } from "./PSDCurveView";
 import { PSDSpatialView } from "./PSDSpatialView";
 import { PropagationController } from "./PropagationController";
 import { DepthMapSliceView } from "./DepthMapSliceView";
+import { RasterView } from "./RasterView";
 import { SpatialMapSliceView } from "./SpatialMapSliceView";
 import { SpatialEventView } from "./SpatialEventView";
 import { SpectrogramView } from "./SpectrogramView";
@@ -67,11 +68,22 @@ import { ProcessingPanel } from "../controls/ProcessingPanel";
 
 const PSD_LIVE_EXPANSION = ["psd_heatmap", "psd_curve", "psd_spatial"];
 
-/** Replace server's "psd_live" with the three frontend sub-view IDs. */
+/**
+ * Replace server's "psd_live" with the frontend sub-view IDs.
+ *
+ * For a linear probe (signalled by `depth_map` being available) psd_spatial is
+ * dropped: on a 1-D channel axis it collapses to a single freq column of the
+ * heatmap — redundant. Grid tensors keep all three (psd_spatial is a real 2-D
+ * AP×ML map there). See docs/design/neuropixels-multiprobe.md §3.
+ */
 function expandPSDLive(views: string[]): string[] {
   if (!views.includes("psd_live")) return views;
+  const isLinear = views.includes("depth_map");
+  const expansion = isLinear
+    ? ["psd_heatmap", "psd_curve"]
+    : PSD_LIVE_EXPANSION;
   const result = views.filter((v) => v !== "psd_live");
-  for (const id of PSD_LIVE_EXPANSION) {
+  for (const id of expansion) {
     if (!result.includes(id)) result.push(id);
   }
   return result;
@@ -224,6 +236,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const hasTimeseries = effectiveActiveViews.includes("timeseries");
   const hasSpatial = effectiveActiveViews.includes("spatial_map");
   const hasDepthMap = effectiveActiveViews.includes("depth_map");
+  const hasRaster = effectiveActiveViews.includes("raster");
   const hasPropagation = effectiveActiveViews.includes("propagation_frame");
   const hasPSD = effectiveActiveViews.includes("psd_average");
   const hasSpectrogram = effectiveActiveViews.includes("spectrogram");
@@ -316,6 +329,12 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const depthMapSliceQuery = useSliceQuery(
     selectedTensor,
     hasDepthMap ? makeDefaultSliceRequest("depth_map", selectionDraft, safeWindow) : null,
+  );
+  // raster: channel × time amplitude heatmap over the visible window. Reuses
+  // the timeseries window + downsample budget (server returns (channel, time)).
+  const rasterSliceQuery = useSliceQuery(
+    selectedTensor,
+    hasRaster ? makeDefaultSliceRequest("raster", selectionDraft, safeWindow) : null,
   );
   const psdSliceQuery = useSliceQuery(
     selectedTensor,
@@ -581,6 +600,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     timeseries: timeseriesSliceQuery.isFetching,
     spatial_map: spatialSliceQuery.isFetching,
     depth_map: depthMapSliceQuery.isFetching,
+    raster: rasterSliceQuery.isFetching,
     psd_average: psdSliceQuery.isFetching,
     spectrogram: spectrogramSliceQuery.isFetching,
     spectrogram_live: spectrogramLiveQuery.isFetching,
@@ -654,6 +674,14 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
           onCommitSelection({ ...selectionDraft, ap, ml: 0, channel: null });
         }}
       />
+    ) : (
+      <div className="placeholder">Loading…</div>
+    );
+  }
+
+  if (hasRaster) {
+    viewElements["raster"] = rasterSliceQuery.data ? (
+      <RasterView slice={rasterSliceQuery.data} selection={selectionDraft} />
     ) : (
       <div className="placeholder">Loading…</div>
     );
