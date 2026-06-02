@@ -1499,6 +1499,26 @@ def encode_arrow_payload(data: xr.DataArray) -> str:
             col = coord_vals[ax_idx.ravel()]
             arrays.append(pa.array(col))
             fields.append(pa.field(str(dim), arrays[-1].type))
+
+        # Non-dimension 1-D coords (e.g. a per-channel ``depth`` on the
+        # ``channel`` dim, or per-channel ``region``). These index BY a dim but
+        # aren't dims themselves, so the per-axis grid above misses them and
+        # they'd silently drop off the wire — breaking depth-ordered views like
+        # depth_map / raster. Broadcast each along its single dim's axis and
+        # emit as an extra column named after the coord.
+        dim_set = set(data.dims)
+        for coord_name, coord in data.coords.items():
+            cname = str(coord_name)
+            if cname in dim_set or coord.ndim != 1:
+                continue
+            cdim = str(coord.dims[0])
+            if cdim not in dim_set:
+                continue
+            ax_idx = idx[list(data.dims).index(cdim)]
+            col = np.asarray(coord.values)[ax_idx.ravel()]
+            arrays.append(pa.array(col))
+            fields.append(pa.field(cname, arrays[-1].type))
+
         arrays.append(pa.array(np.asarray(data.values).ravel()))
         fields.append(pa.field("value", arrays[-1].type))
 
