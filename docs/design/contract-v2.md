@@ -1,6 +1,6 @@
 # TensorScope contract v2 — wire format, selection, view registry
 
-**Status:** proposal — for review; revised 2026-05-11 with survey findings
+**Status:** Phase 1 shipped (committed in `dec0bc1`, 2026-05-12); Phases 1.5–5 still proposed. Revised 2026-05-11 with survey findings.
 **Author:** agent (drafted 2026-05-10, revised 2026-05-11)
 **Driving review:** [`docs/log/issue/issue-arash-20260510-111746-938324.md`](../log/issue/issue-arash-20260510-111746-938324.md) — the structural-debt audit
 **Transport survey:** [`docs/research/transport-survey.md`](../research/transport-survey.md) — Perspective + Neuroglancer + HiGlass converge on the direction below
@@ -512,10 +512,17 @@ docs.
 
 **Open questions.**
 
-1. **Channel mask in v2.** The mask is currently a per-tensor flat-id
-   list. Under the dim-generic model it should be either (a) a list of
-   masked coord values per dim, or (b) a generic boolean mask aligned
-   to the spatial dims. Pick before Phase 2.
+1. **Channel mask in v2.** *Resolved (post-Phase-1, commits `567654a` +
+   `ee7b4fd`).* Kept as a flat `masked_ids` list, but as **per-tensor
+   session state** (`ServerState.channel_masks`) rather than on selection
+   or the slice request — managed via its own `/masks` router
+   (`MaskStateDTO` / `MaskUpdateDTO`) and applied server-side inside
+   `apply_slice_request` (`_apply_channel_mask_nan`), then surfaced in
+   `slice_provenance.masked_ids`. It now applies across all views (incl.
+   PSD-spatial and propagation) via v2 query invalidation. The
+   dim-generic reshape (masked coord values per dim, or a boolean mask
+   aligned to the spatial dims) is deferred to Phase 2 alongside
+   `SelectionDTOv2`.
 2. **Versioning policy.** If v2 lands, what's the deprecation horizon
    for v1? My default: v1 stays available for one minor-version cycle
    after every view has migrated; deletion in the version after that.

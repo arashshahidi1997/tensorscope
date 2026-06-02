@@ -1,6 +1,11 @@
 # Event review — keyboard navigation + decision storage
 
-**Status:** spec
+**Status:** shipped (v0, commit `2b9e605`). Several v0 deferrals have since
+landed in follow-ups: notes/tags + inline annotation editing in **G6**
+(`AnnotationPopover.tsx`, `updateTags`/`replaceScope` on the store), and
+server-side decision persistence in **G9** (`event_review` router,
+parquet/csv export). The "Out of scope (v0)" list below is historical —
+those items are done.
 **Created:** 2026-05-11
 **Tracks:** [issue-arash-20260511-182119-502518](../log/issue/issue-arash-20260511-182119-502518.md) G3
 

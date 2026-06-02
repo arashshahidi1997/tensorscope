@@ -1,6 +1,11 @@
 # Design proposal: declarative pipeline spec + persistent cache
 
-**Status:** proposal — no code changes here.
+**Status:** proposal. A *minimal* slice of §3.3 (yaml/JSON round-trip)
+shipped 2026-05-07 — `core/pipeline/replay.py` plus
+`POST /api/v1/pipeline/{serialize,import}` — but the load-bearing parts of
+this design (persistent `.tensorscope-cache/`, stale-cache visibility,
+cache_key-derived stable IDs, batch CLI, caption renderer) are **not**
+implemented.
 **Author:** agent (`task-pipeline-spec-design-20260502-140000-002`).
 **Companion:** `docs/log/idea/idea-arash-20260502-130000-expert-review.md` (snakemake lens).
 

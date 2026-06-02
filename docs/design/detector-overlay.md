@@ -1,6 +1,6 @@
 # Detector comparison overlay — multi-stream event panel
 
-**Status:** spec (v0)
+**Status:** shipped (v0, commit `dec0bc1`)
 **Created:** 2026-05-12
 **Tracks:** [task-g5-detector-overlay](../log/issue/task-g5-detector-overlay-20260512-012738-202424.md)
 (issue context: [issue-arash-20260511-182119-502518](../log/issue/issue-arash-20260511-182119-502518.md) G5)

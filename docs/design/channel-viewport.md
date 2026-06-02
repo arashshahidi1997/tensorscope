@@ -1,6 +1,6 @@
 # Channel viewport — scroll through > 32 channels in the timeseries view
 
-**Status:** spec (v0)
+**Status:** shipped (v0, commit `80652ba`)
 **Created:** 2026-05-11
 **Tracks:** [issue-arash-20260511-182119-502518](../log/issue/issue-arash-20260511-182119-502518.md) G2
 
