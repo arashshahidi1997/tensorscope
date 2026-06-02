@@ -17,14 +17,36 @@ pixi run pytest tests/test_foo.py::test_bar -q  # single test
 
 # Frontend
 pixi run frontend-test                          # full frontend suite (vitest)
-cd frontend && npx vitest run src/store/selectionStore.test.ts  # single test file
-pixi run frontend-build                         # typecheck + build
+pixi run bash -c "cd frontend && npx vitest run src/store/selectionStore.test.ts"  # single file (MUST go through pixi)
+pixi run bash -c "cd frontend && npx tsc -b"    # typecheck only (no static-dir overwrite)
+pixi run frontend-build                         # typecheck + build (overwrites src/tensorscope/static — see gotchas)
 
 # Full stack dev
 pixi run serve                                  # FastAPI backend (demo dataset)
 pixi run frontend-dev                           # Vite dev server
 # or: make dev-ui — runs both in screen sessions (uses `python` from current env)
 ```
+
+## Agent / automation gotchas (read before autonomous / ultracode runs)
+
+- **Bare `node` is v12 on this host** → `npx vitest`/`tsc` outside the env fail
+  with `ERR_UNKNOWN_BUILTIN_MODULE`. ALWAYS run JS tooling via `pixi run` (env
+  has node 22). This includes single-file test runs.
+- **`src/tensorscope/static/` shadows `frontend/dist/`** when the backend serves
+  on `:8000` — stale static silently masks a fresh build. Check the bundle hash
+  before chasing frontend bugs. `pixi run frontend-build` overwrites `static/`;
+  use `npx tsc -b` (via pixi) for a typecheck that doesn't touch it.
+- **jsdom can't render canvas** (`getContext` unimplemented) → uPlot/Canvas views
+  can't be visually verified in tests. "Tests pass" ≠ "renders correctly";
+  extract pure logic for real coverage.
+- **The live server launcher is SIGTERM-killed under the harness** (exit 144) —
+  agents CANNOT run the live app for validation; a human must launch it. So
+  interactive/visual correctness is not auto-verifiable.
+- **git worktree isolation breaks frontend tests**: `frontend/node_modules`
+  (gitignored) is absent in a fresh worktree → `frontend-test` fails. Don't use
+  worktree isolation for frontend agents.
+- **Backend tests need `PYTHONPATH=src`** (the `pixi run test` task sets it).
+- See `docs/design/refactor-plan.md` for the scoped, budgeted ultracode brief.
 
 ## Architecture
 
