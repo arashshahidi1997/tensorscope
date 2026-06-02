@@ -19,6 +19,9 @@ frontend/dist/
 src/tensorscope/static/
 frontend/coverage/
 frontend/*.tsbuildinfo
+# Emitted from vite.config.ts by the composite tsconfig.node — never source
+frontend/vite.config.js
+frontend/vite.config.d.ts
 
 # Misc local OS/editor artifacts
 .DS_Store
