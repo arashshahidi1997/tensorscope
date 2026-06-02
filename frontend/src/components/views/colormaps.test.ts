@@ -69,3 +69,38 @@ describe("colormaps", () => {
     expect(fallback).toEqual(seq);
   });
 });
+
+// ── refactor-plan N3 — golden values ───────────────────────────────────────
+// Lock down a handful of byte-exact LUT samples so future tweaks to the
+// anchor interpolation can't drift the rendered ramps unnoticed (canvas
+// views can't be visually verified under jsdom).
+describe("colormaps — golden LUT samples (N3)", () => {
+  it("viridis endpoints are the matplotlib-anchor values rounded to bytes", () => {
+    // anchors[0] = (0.267004, 0.004874, 0.329415) → (68, 1, 84)
+    // anchors[4] = (0.993248, 0.906157, 0.143936) → (253, 231, 37)
+    expect(colormapAt("viridis", 0)).toEqual([68, 1, 84, 255]);
+    expect(colormapAt("viridis", 1)).toEqual([253, 231, 37, 255]);
+  });
+
+  it("inferno endpoints are the matplotlib-anchor values rounded to bytes", () => {
+    // (0.001462, 0.000466, 0.013866) → (0, 0, 4)
+    // (0.988362, 0.998364, 0.644924) → (252, 255, 164)
+    expect(colormapAt("inferno", 0)).toEqual([0, 0, 4, 255]);
+    expect(colormapAt("inferno", 1)).toEqual([252, 255, 164, 255]);
+  });
+
+  it("jet anchor at t=0 is the dark-blue point (0, 0, 0.5)", () => {
+    expect(colormapAt("jet", 0)).toEqual([0, 0, 128, 255]);
+  });
+
+  it("cividis endpoints stay byte-stable", () => {
+    expect(colormapAt("cividis", 0)).toEqual([0, 34, 78, 255]);
+    expect(colormapAt("cividis", 1)).toEqual([255, 237, 86, 255]);
+  });
+
+  it("colormapAt(0) and lut[0..3] agree (LUT is the underlying table)", () => {
+    const lut = getColormapLUT("viridis");
+    const [r, g, b, a] = colormapAt("viridis", 0);
+    expect([lut[0], lut[1], lut[2], lut[3]]).toEqual([r, g, b, a]);
+  });
+});

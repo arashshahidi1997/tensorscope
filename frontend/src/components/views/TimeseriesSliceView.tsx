@@ -15,6 +15,7 @@ import type { GestureTool, YMode } from "./useChartTools";
 import { makeBrainstateDrawHook } from "./brainstateOverlay";
 import { TimeseriesNavStrip } from "./TimeseriesNavStrip";
 import { COINCIDENCE_COLOR } from "./eventStreamColors";
+import { restackBandpassToRawMean } from "./timeseriesBandpass";
 
 const COLORS = ["#d3ff68", "#73d2de", "#ff9770", "#c492ff", "#f4d35e", "#8bd450", "#ff6b9d", "#a8e6cf"];
 
@@ -358,16 +359,9 @@ export function TimeseriesSliceView({
         const fvals = filteredByKey.get(s.key);
         if (!fvals) return s;
         // Re-add raw's mean so the filtered trace lands at the same
-        // vertical slot as the unfiltered one (otherwise filtered traces
-        // collapse to zero and stack on top of each other).
-        let sum = 0, n = 0;
-        for (const v of s.values) {
-          if (Number.isFinite(v)) { sum += v; n += 1; }
-        }
-        const offset = n > 0 ? sum / n : 0;
-        const out = fvals.slice();
-        for (let i = 0; i < out.length; i++) out[i] = fvals[i] + offset;
-        return { ...s, values: out };
+        // vertical slot as the unfiltered one. Pure helper extracted for
+        // testing (jsdom can't render the canvas this feeds).
+        return { ...s, values: restackBandpassToRawMean(s.values, fvals) };
       });
       return {
         times: new Float64Array(raw.times),

@@ -105,3 +105,102 @@ def test_minmax_grid_spike_placed_at_real_time() -> None:
     spike_idx = np.where(np.isclose(out_vals[:, 1, 0], 5.0))[0]
     assert spike_idx.size > 0
     assert np.allclose(out_times[spike_idx], 0.742, atol=1e-9)
+
+
+# ── refactor-plan N3 — envelope edge-case coverage ────────────────────────
+
+
+def test_minmax_returns_input_unchanged_when_under_budget() -> None:
+    """A short input below max_points must be returned as-is — no envelope
+    pairs, no bucket reshape. (Frontend caches identity-keyed on the slice
+    payload; an unnecessary round-trip through the envelope path would
+    silently re-key the same data.)"""
+    n = 50
+    sig = _flat_signal_with_spike_at(spike_index=10, n=n)
+    out = downsample_time_axis(sig, max_points=200, method=DownsampleMethod.MINMAX)
+    # Identity-returned (no copy required for fidelity, but the size must match).
+    assert int(out.sizes["time"]) == n
+    np.testing.assert_array_equal(
+        np.asarray(out.values), np.asarray(sig.values)
+    )
+    np.testing.assert_array_equal(
+        np.asarray(out.coords["time"].values),
+        np.asarray(sig.coords["time"].values),
+    )
+
+
+def test_minmax_preserves_negative_trough() -> None:
+    """The envelope must keep BOTH the per-bucket min and max — not just the
+    largest |value|. A pure negative trough on an otherwise-zero signal must
+    survive."""
+    n = 1000
+    fs = 1000.0
+    t = np.arange(n) / fs
+    arr = np.zeros((n, 1), dtype=np.float64)
+    arr[412, 0] = -3.0  # negative trough, no positive peak
+    da = xr.DataArray(
+        arr, dims=("time", "channel"),
+        coords={"time": t, "channel": [0]},
+    )
+    out = downsample_time_axis(da, max_points=20, method=DownsampleMethod.MINMAX)
+    out_vals = np.asarray(out.values).flatten()
+    out_times = np.asarray(out.coords["time"].values, dtype=float)
+    trough_idx = np.where(np.isclose(out_vals, -3.0))[0]
+    assert trough_idx.size > 0, "negative trough lost in envelope"
+    assert np.allclose(out_times[trough_idx], 0.412, atol=1e-9)
+
+
+def test_minmax_emits_at_most_2x_buckets_points() -> None:
+    """Envelope path emits up to 2 points per bucket — the result must stay
+    within the requested budget (modulo single-sample bucket de-duplication
+    making it slightly smaller)."""
+    n = 5000
+    fs = 1000.0
+    t = np.arange(n) / fs
+    rng = np.random.default_rng(7)
+    da = xr.DataArray(
+        rng.normal(size=(n, 3)),
+        dims=("time", "channel"),
+        coords={"time": t, "channel": np.arange(3)},
+    )
+    for budget in (10, 50, 200, 1000):
+        out = downsample_time_axis(da, max_points=budget, method=DownsampleMethod.MINMAX)
+        assert int(out.sizes["time"]) <= budget, (
+            f"envelope output exceeded max_points={budget}: {out.sizes['time']}"
+        )
+
+
+def test_lttb_path_subsamples_to_budget_and_preserves_times() -> None:
+    """The LTTB branch (currently a uniform-stride downsampler in this
+    implementation) must respect max_points and only emit real sample
+    times."""
+    n = 1000
+    fs = 500.0
+    t = np.arange(n) / fs
+    rng = np.random.default_rng(11)
+    da = xr.DataArray(
+        rng.normal(size=(n, 2)),
+        dims=("time", "channel"),
+        coords={"time": t, "channel": np.arange(2)},
+    )
+    out = downsample_time_axis(da, max_points=64, method=DownsampleMethod.LTTB)
+    assert int(out.sizes["time"]) <= 64
+    out_times = np.asarray(out.coords["time"].values, dtype=float)
+    src_set = set(np.round(t * 1e9).astype(np.int64).tolist())
+    for ts in out_times:
+        assert int(round(float(ts) * 1e9)) in src_set
+
+
+def test_none_method_returns_input_unchanged_even_over_budget() -> None:
+    """NONE must be a true pass-through regardless of length."""
+    n = 1000
+    fs = 1000.0
+    t = np.arange(n) / fs
+    da = xr.DataArray(
+        np.arange(n, dtype=np.float64).reshape(n, 1),
+        dims=("time", "channel"),
+        coords={"time": t, "channel": [0]},
+    )
+    out = downsample_time_axis(da, max_points=20, method=DownsampleMethod.NONE)
+    assert int(out.sizes["time"]) == n
+    np.testing.assert_array_equal(np.asarray(out.values), np.asarray(da.values))

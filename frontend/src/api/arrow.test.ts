@@ -389,3 +389,66 @@ describe("toNumber", () => {
     expect(toNumber("")).toBeNull();
   });
 });
+
+// ── refactor-plan N3 — extractor edge cases ────────────────────────────────
+// jsdom can't render the canvas these extractors feed, so correctness has to
+// land in tests. The asserts below cover edge cases that the happy-path
+// tests above leave open (empty payloads, NaN time keys, missing column
+// combinations, single-channel fallback).
+
+describe("extractTimeseriesColumnarFast — edge cases (N3)", () => {
+  it("returns empty arrays on an empty payload", () => {
+    const result = extractTimeseriesColumnarFast(
+      buildSlice({ time: [], value: [] }),
+    );
+    expect(result.times).toEqual([]);
+    expect(result.series).toEqual([]);
+  });
+
+  it("returns empty when required columns are missing", () => {
+    // Same contract as the slow path: no time/value columns → empty.
+    const result = extractTimeseriesColumnarFast(buildSlice({ freq: [1, 2] }));
+    expect(result.times).toEqual([]);
+    expect(result.series).toEqual([]);
+  });
+
+  it("falls back to a single 'signal' series when neither channel nor AP/ML is present", () => {
+    const result = extractTimeseriesColumnarFast(
+      buildSlice({ time: [0, 1, 2], value: [10, 20, 30] }),
+    );
+    expect(result.series).toHaveLength(1);
+    expect(result.series[0].key).toBe("signal");
+    expect(result.series[0].label).toBe("Signal");
+    expect(Array.from(result.series[0].values)).toEqual([10, 20, 30]);
+  });
+
+  it("emits Float32Array values (zero-copy contract for the worker pool)", () => {
+    const result = extractTimeseriesColumnarFast(
+      buildSlice({
+        time: [0, 1, 0, 1],
+        channel: [0, 0, 1, 1],
+        value: [1, 2, 3, 4],
+      }),
+    );
+    for (const s of result.series) {
+      expect(s.values).toBeInstanceOf(Float32Array);
+    }
+  });
+});
+
+describe("extractPSDAverage — edge cases (N3)", () => {
+  it("returns empty curves on an empty payload", () => {
+    const decoded = decodeArrowSlice(buildSlice({ freq: [], value: [] }));
+    const avg = extractPSDAverage(decoded);
+    expect(avg.freqs).toEqual([]);
+    expect(avg.mean).toEqual([]);
+    expect(avg.std).toEqual([]);
+  });
+});
+
+describe("extractSpatialCells — edge cases (N3)", () => {
+  it("returns empty cells on an empty payload (no AP/ML rows)", () => {
+    const decoded = decodeArrowSlice(buildSlice({ AP: [], ML: [], value: [] }));
+    expect(extractSpatialCells(decoded)).toEqual([]);
+  });
+});
