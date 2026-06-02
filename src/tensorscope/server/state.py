@@ -1197,7 +1197,11 @@ def apply_slice_request(
     # full-rate windowed data (before downsampling) so the optional bandpass
     # overlay below filters on the same per-channel scale, and so the std is
     # estimated from every sample rather than the decimated subset. Audit F3.
-    if request.view_type in ("timeseries", "navigator") and "time" in sliced.dims:
+    # Navigator is excluded: the frontend collapses channels to a single mean
+    # trace, so per-channel z-score+offset is computed then averaged away.
+    # Running it on the navigator's full-session, full-rate slice was the
+    # first-load lag (refactor-plan N1).
+    if request.view_type == "timeseries" and "time" in sliced.dims:
         sliced = zscore_offset(sliced, offset_scale=3.0)
         prior = list(sliced.attrs.get("display_transforms", []) or [])
         sliced = sliced.assign_attrs(

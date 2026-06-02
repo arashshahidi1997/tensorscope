@@ -42,7 +42,12 @@ def test_timeseries_slice_advertises_zscore_offset_in_meta() -> None:
     assert "zscore_offset(scale=3.0)" in result.meta["display_transforms"]
 
 
-def test_navigator_slice_advertises_zscore_offset_in_meta() -> None:
+def test_navigator_slice_does_not_apply_zscore_offset() -> None:
+    """N1 (refactor-plan): the navigator collapses channels to a mean trace, so
+    the per-channel zscore_offset display transform is pure waste — and worse,
+    it forces a full-session, full-rate compute before downsampling. Assert
+    the navigator slice does not advertise zscore_offset, and returns finite
+    data."""
     state = create_server_state(_grid(), tensor_name="lfp")
     request = TensorSliceRequestDTO(
         view_type="navigator",
@@ -51,7 +56,17 @@ def test_navigator_slice_advertises_zscore_offset_in_meta() -> None:
         max_points=200,
     )
     result = state.tensor_slice("lfp", request)
-    assert result.meta["display_transforms"] == ["zscore_offset(scale=3.0)"]
+    assert result.meta["display_transforms"] == []
+    # Decode the v1 long-format Arrow envelope and assert finite data made it
+    # through (regression guard: a bug in the navigator path must not silently
+    # return NaNs / empty data).
+    import base64
+    import pyarrow.ipc as pa_ipc
+
+    table = pa_ipc.open_stream(base64.b64decode(result.payload)).read_all().to_pandas()
+    values = table["value"].to_numpy()
+    assert values.size > 0
+    assert np.all(np.isfinite(values))
 
 
 def test_spatial_map_slice_has_no_display_transforms() -> None:

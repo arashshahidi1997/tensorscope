@@ -403,9 +403,14 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       ? withFocus(makeSpectrogramLiveRequest(selectionDraft, safeWindow))
       : null,
   );
+  // v2 mode has its own `navigatorV2Query` below — when v2 is on, gate the
+  // v1 query off so the navigator does not double-fetch the full session
+  // (refactor-plan N1).
   const navigatorSliceQuery = useSliceQuery(
     selectedTensor,
-    hasNavigator && timeCoord ? makeNavigatorRequest(selectionDraft, timeCoord) : null,
+    hasNavigator && timeCoord && !v2Enabled
+      ? makeNavigatorRequest(selectionDraft, timeCoord)
+      : null,
   );
 
   // Contract-v2 parallel queries for timeseries / spectrogram_live / navigator.
