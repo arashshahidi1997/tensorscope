@@ -23,6 +23,8 @@ type ViewPanelProps = {
   onSetTensor: (tensorName: string) => void;
   /** Clear the per-panel tensor override (revert to global). */
   onClearTensor: () => void;
+  /** True while this view's slice is (re)fetching — shows a loading indicator. */
+  isFetching?: boolean;
   children: ReactNode;
 };
 
@@ -36,12 +38,23 @@ export function ViewPanel({
   tensorNames,
   onSetTensor,
   onClearTensor,
+  isFetching = false,
   children,
 }: ViewPanelProps) {
   return (
     <div className="view-panel">
       <div className="view-panel-header">
         <span className="panel-title">{label}</span>
+        {isFetching && (
+          <span
+            className="panel-loading"
+            role="status"
+            aria-label="Loading"
+            title="Loading…"
+          >
+            <span className="spinner" aria-hidden="true" /> loading…
+          </span>
+        )}
         {tensorNames.length > 1 && (
           <div className="panel-tensor-selector">
             {isPinned && (

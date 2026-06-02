@@ -20,6 +20,9 @@ export const DEFAULT_SLOT_LAYOUT: ViewSlotLayout = {
       slots: [
         { viewId: "timeseries", region: "left", widthFraction: 0.75 },
         { viewId: "spatial_map", region: "right", widthFraction: 0.25 },
+        // depth_map is the linear-probe (Neuropixels) analogue of spatial_map;
+        // a tensor is grid OR linear, so they never both appear — share the slot.
+        { viewId: "depth_map", region: "right", widthFraction: 0.25 },
       ],
       minHeight: 260,
     },

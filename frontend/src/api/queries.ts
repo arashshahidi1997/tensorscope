@@ -364,6 +364,10 @@ export function makeDefaultSliceRequest(
   switch (viewType) {
     case "spatial_map":
     case "psd_spatial":
+    case "depth_map":
+      // depth_map is the linear-probe analogue of spatial_map: an instantaneous
+      // per-channel profile at the cursor time. Same narrow window + no time
+      // downsample (the server collapses time → (channel,)).
       return {
         view_type: viewType,
         selection,

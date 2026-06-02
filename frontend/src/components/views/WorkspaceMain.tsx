@@ -54,6 +54,7 @@ import { PSDHeatmapView } from "./PSDHeatmapView";
 import { PSDCurveView } from "./PSDCurveView";
 import { PSDSpatialView } from "./PSDSpatialView";
 import { PropagationController } from "./PropagationController";
+import { DepthMapSliceView } from "./DepthMapSliceView";
 import { SpatialMapSliceView } from "./SpatialMapSliceView";
 import { SpatialEventView } from "./SpatialEventView";
 import { SpectrogramView } from "./SpectrogramView";
@@ -222,6 +223,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const effectiveActiveViews = activeViews.length === 0 ? availableViews : activeViews;
   const hasTimeseries = effectiveActiveViews.includes("timeseries");
   const hasSpatial = effectiveActiveViews.includes("spatial_map");
+  const hasDepthMap = effectiveActiveViews.includes("depth_map");
   const hasPropagation = effectiveActiveViews.includes("propagation_frame");
   const hasPSD = effectiveActiveViews.includes("psd_average");
   const hasSpectrogram = effectiveActiveViews.includes("spectrogram");
@@ -307,6 +309,13 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const spatialSliceQuery = useSliceQuery(
     selectedTensor,
     hasSpatial ? makeDefaultSliceRequest("spatial_map", selectionDraft, safeWindow) : null,
+  );
+  // depth_map: linear-probe analogue of spatial_map (Neuropixels DV). Same
+  // ±0.25 s instantaneous slice shape; server collapses time → (channel,)
+  // profile with the depth coord. See docs/design/neuropixels-multiprobe.md.
+  const depthMapSliceQuery = useSliceQuery(
+    selectedTensor,
+    hasDepthMap ? makeDefaultSliceRequest("depth_map", selectionDraft, safeWindow) : null,
   );
   const psdSliceQuery = useSliceQuery(
     selectedTensor,
@@ -563,6 +572,24 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     navigatorRef.current?.(navigatorElement);
   }, [navigatorElement]);
 
+  // Per-view in-flight flag. `useSliceQuery` uses `placeholderData:
+  // keepPreviousData`, so on a tensor switch / time scroll each panel keeps
+  // showing the PREVIOUS slice (no blank), but that means a slow refetch is
+  // otherwise invisible. We surface `isFetching` as a per-panel overlay so the
+  // user sees that data is loading instead of a frozen view. Keyed by view id.
+  const fetchingByView: Record<string, boolean> = {
+    timeseries: timeseriesSliceQuery.isFetching,
+    spatial_map: spatialSliceQuery.isFetching,
+    depth_map: depthMapSliceQuery.isFetching,
+    psd_average: psdSliceQuery.isFetching,
+    spectrogram: spectrogramSliceQuery.isFetching,
+    spectrogram_live: spectrogramLiveQuery.isFetching,
+    navigator: navigatorSliceQuery.isFetching,
+    psd_heatmap: psdLiveQuery.isFetching,
+    psd_curve: psdLiveQuery.isFetching,
+    psd_spatial: psdLiveQuery.isFetching,
+  };
+
   // ── Build view elements map ────────────────────────────────────────────
   const viewElements: Record<string, ReactNode> = {};
 
@@ -610,6 +637,22 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
           onCommitSelection({ ...selectionDraft, ap, ml, channel: null });
         }}
         onHoverElectrode={setHoveredElectrode}
+      />
+    ) : (
+      <div className="placeholder">Loading…</div>
+    );
+  }
+
+  if (hasDepthMap) {
+    viewElements["depth_map"] = depthMapSliceQuery.data ? (
+      <DepthMapSliceView
+        slice={depthMapSliceQuery.data}
+        selection={selectionDraft}
+        onSelectCell={(ap) => {
+          // ap is the depth rank == channel index for a single-column strip.
+          setFocusChannel({ ap, ml: 0 });
+          onCommitSelection({ ...selectionDraft, ap, ml: 0, channel: null });
+        }}
       />
     ) : (
       <div className="placeholder">Loading…</div>
@@ -929,6 +972,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       {/* View grid replaces the old hardcoded layout */}
       <ViewGrid
         viewElements={viewElements}
+        fetchingByView={fetchingByView}
         activeViewIds={effectiveActiveViews}
         availableViews={availableViews}
         globalTensor={activeTensorName ?? ""}

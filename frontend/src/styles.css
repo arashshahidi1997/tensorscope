@@ -1516,6 +1516,27 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
   line-height: 24px;
 }
 
+/* Per-panel loading indicator — shown while the view's slice (re)fetches.
+   Sits between the title (flex:1) and the panel buttons. */
+.view-panel-header .panel-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: #73d2de;
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+.view-panel-header .panel-loading .spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(115, 210, 222, 0.25);
+  border-top-color: #73d2de;
+  border-radius: 50%;
+  animation: activity-spin 0.7s linear infinite;
+}
+
 .view-panel-body {
   flex: 1;
   min-height: 0;
