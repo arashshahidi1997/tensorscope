@@ -173,5 +173,5 @@ Final report: per item — what changed, tests added, green/red, HUMAN-VALIDATE 
 ```
 
 Suggested staging: run **Tier 1 only first** (change the prompt to "items N1→N3")
-at a smaller budget (`+500000`), review the diff, then run Tier 2 separately.
-Cheaper, and you confirm the swarm's judgment before the big diffs.
+at a smaller budget (`+300000`), review the diff, then run Tier 2 separately
+(`+1500000`). Cheaper, and you confirm the swarm's judgment before the big diffs.
