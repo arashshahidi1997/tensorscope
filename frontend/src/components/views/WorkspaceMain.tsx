@@ -55,7 +55,7 @@ import { PSDCurveView } from "./PSDCurveView";
 import { PSDSpatialView } from "./PSDSpatialView";
 import { PropagationController } from "./PropagationController";
 import { DepthMapSliceView } from "./DepthMapSliceView";
-import { RasterView } from "./RasterView";
+import { HeatmapView } from "./HeatmapView";
 import { SpatialMapSliceView } from "./SpatialMapSliceView";
 import { SpatialEventView } from "./SpatialEventView";
 import { SpectrogramView } from "./SpectrogramView";
@@ -681,7 +681,12 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
 
   if (hasRaster) {
     viewElements["raster"] = rasterSliceQuery.data ? (
-      <RasterView slice={rasterSliceQuery.data} selection={selectionDraft} />
+      <HeatmapView
+        slice={rasterSliceQuery.data}
+        viewId="raster"
+        defaultEncoding={{ x: "time", y: "channel" }}
+        colormap="viridis"
+      />
     ) : (
       <div className="placeholder">Loading…</div>
     );
@@ -779,39 +784,25 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
 
     if (psdLiveQuery.data) {
       const decoded = decodeArrowSlice(psdLiveQuery.data);
-      const v1Heatmap = extractPSDHeatmap(decoded);
-      const heatmapData = heatmapFromV2 ?? v1Heatmap;
       const avgData = extractPSDAverage(decoded);
 
-      // Map selection.ap/ml indices → coord values so PSDHeatmapView can
-      // mark the column corresponding to the spatial cursor (channel
-      // labels in the heatmap payload are `AP{val}_ML{val}` from the
-      // tensor's coord arrays). Without this the heatmap was a static
-      // overview that ignored AP/ML changes.
-      const apCoordVals = (tensorQuery.data?.coords.find((c) => c.name === "AP")?.values ?? null) as number[] | null;
-      const mlCoordVals = (tensorQuery.data?.coords.find((c) => c.name === "ML")?.values ?? null) as number[] | null;
-      const selAPVal = apCoordVals?.[selectionDraft.ap];
-      const selMLVal = mlCoordVals?.[selectionDraft.ml];
-      const indexFromCoord = (coords: number[] | null, target: number): number | null => {
-        if (!coords) return null;
-        for (let i = 0; i < coords.length; i++) if (coords[i] === target) return i;
-        return null;
-      };
-
+      // Encoding-driven heatmap: freq on X, channel/spatial dim on Y so
+      // depth/channel reads vertically. The y-dim defaults to whichever
+      // channel-like dim the PSD cube carries (`channel` for linear probes,
+      // else `AP`). Remaining dims (e.g. ML) are mean-reduced; the user can
+      // reassign axes live. See docs/design/encoding-heatmap.md.
+      const psdYDim = decoded.columns.includes("channel")
+        ? "channel"
+        : decoded.columns.includes("AP")
+          ? "AP"
+          : decoded.columns.find((c) => c !== "freq" && c !== "value") ?? "channel";
       viewElements["psd_heatmap"] = (
-        <PSDHeatmapView
-          data={heatmapData}
-          selectedFreq={selectionDraft.freq}
-          onSelectFreq={handleSelectFreq}
-          freqLogScale={freqLogScale}
-          selectedAPVal={typeof selAPVal === "number" ? selAPVal : undefined}
-          selectedMLVal={typeof selMLVal === "number" ? selMLVal : undefined}
-          onSelectChannel={(apVal, mlVal) => {
-            const apIdx = indexFromCoord(apCoordVals, apVal);
-            const mlIdx = indexFromCoord(mlCoordVals, mlVal);
-            if (apIdx == null || mlIdx == null) return;
-            onCommitSelection({ ...selectionDraft, ap: apIdx, ml: mlIdx, channel: null });
-          }}
+        <HeatmapView
+          slice={psdLiveQuery.data}
+          viewId="psd_heatmap"
+          defaultEncoding={{ x: "freq", y: psdYDim }}
+          colormap="inferno"
+          logColor
         />
       );
       viewElements["psd_curve"] = (

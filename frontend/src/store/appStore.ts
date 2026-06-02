@@ -31,6 +31,13 @@ type AppStore = {
   showHypnogram: boolean;
   /** Per-panel tensor overrides: slotId → tensorName */
   panelTensorOverrides: Record<string, string>;
+  /**
+   * Per-view heatmap axis encoding: viewId → {x, y} dim names. When unset a
+   * view uses its default encoding (see HEATMAP_DEFAULT_ENCODING). Lets the
+   * user reassign which data dim is on which axis, live. See
+   * docs/design/encoding-heatmap.md.
+   */
+  heatmapEncodings: Record<string, { x: string; y: string }>;
   /** PSD settings */
   psdFmax: number;
   psdNW: number;
@@ -73,6 +80,8 @@ type AppStore = {
   setSelectedTensor: (value: string) => void;
   setPanelTensor: (slotId: string, tensorName: string) => void;
   clearPanelTensor: (slotId: string) => void;
+  /** Set the heatmap axis encoding for a view (viewId → {x, y}). */
+  setHeatmapAxes: (viewId: string, x: string, y: string) => void;
   toggleView: (view: string, availableViews: string[]) => void;
   setActiveViews: (views: string[]) => void;
   setLayoutDraft: (value: LayoutDTO) => void;
@@ -120,6 +129,7 @@ export const useAppStore = create<AppStore>((set) => ({
   selectedTensor: null,
   activeViews: [],
   panelTensorOverrides: {},
+  heatmapEncodings: {},
   layoutDraft: null,
   theme: getInitialTheme(),
   brainstateOverlay: true,
@@ -132,6 +142,8 @@ export const useAppStore = create<AppStore>((set) => ({
       const { [slotId]: _, ...rest } = s.panelTensorOverrides;
       return { panelTensorOverrides: rest };
     }),
+  setHeatmapAxes: (viewId, x, y) =>
+    set((s) => ({ heatmapEncodings: { ...s.heatmapEncodings, [viewId]: { x, y } } })),
   toggleView: (view, availableViews) =>
     set((state) => {
       // If activeViews is empty it means "all on"; clicking a pill switches to explicit mode
