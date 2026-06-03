@@ -58,6 +58,32 @@ pixi run frontend-dev                           # Vite dev server
 - **Backend tests need `PYTHONPATH=src`** (the `pixi run test` task sets it).
 - See `docs/design/refactor-plan.md` for the scoped, budgeted ultracode brief.
 
+## Development tooling (MCP + skills)
+
+The harness surfaces a large, flat list of MCP tools and skills. The subset that
+actually matters for developing this repo:
+
+- **playwright MCP** — headless browser to *prove a view paints* (the jsdom-can't-render-canvas
+  gotcha above): `browser_navigate` to `http://127.0.0.1:5173`, `browser_take_screenshot`,
+  `browser_console_messages`, `browser_evaluate` (drawn-pixel check / read the live uPlot via
+  the React fiber). Pinned to `--browser chromium` in `.mcp.json` (the branded `chrome` channel
+  isn't installed). Flaky on heavy ops → the `/verify-ui` Bash fallback (`/tmp/pwdbg/*.mjs` via
+  `pixi run node`) is the reliable path.
+- **context7 MCP** — version-correct docs for React / TanStack Query / Zustand / uPlot / Vite /
+  FastAPI. Prefer it over training-data recall for library APIs (`resolve-library-id` → `query-docs`).
+- **projio MCP** — project knowledge: `note_create(note_type="handoff"|"idea"|"issue")` +
+  `note_list`/`note_search` (**handoffs live here** — `note_list(note_type="handoff")`),
+  `rag_query` (search code/docs/papers), `project_context`, `codio_discover` (find existing
+  library implementations before writing new code). Prefer these over hand-editing notes/configs.
+- **Skills** (`/<name>`): **/verify-ui** (browser-verify a render change), **/session-wrap**
+  (commit + verify + handoff note + memory at session end), **/audit** + **/smoke**
+  (milestone-readiness / smoke test); global **/code-review**, **/simplify**, **/verify**, **/run**.
+
+Despite the SIGTERM gotcha above (the *foreground* launcher is killed), visual correctness IS
+verifiable headlessly: `make audit-ui` (real iEEG) / `make dev-ui` (demo) launch API+Vite in
+screen, then drive them via the playwright MCP or `/verify-ui` on **:5173** (never :8000 — static
+shadow). `.mcp.json` is gitignored and loads at session start — restart to pick up MCP changes.
+
 ## Architecture
 
 TensorScope is a web viewer for multidimensional neuroscience tensors (xarray DataArrays). The backend slices/transforms data and serves it as Arrow IPC; the frontend renders interactive views.
