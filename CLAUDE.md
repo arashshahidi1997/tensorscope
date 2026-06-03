@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Documentation map (start here)
+
+A fresh session should orient via these, in order:
+
+- **[docs/index.md](docs/index.md)** — docs hub (Diátaxis: tutorials / how-to / reference / explanation).
+- **[docs/architecture/tensorscope.md](docs/architecture/tensorscope.md)** + [invariants](docs/architecture/invariants.md) — system design & guardrails. (Written for the M1–M8 era; recent architectural work lives in the design docs + ADRs below.)
+- **[docs/adr/index.md](docs/adr/index.md)** — architecture decisions; do not silently re-litigate these (e.g. ADR-0004 shared SelectionState, ADR-0007 unified time-transport).
+- **In-flight work & current state:** the newest `docs/log/handoff-*.md`, plus [docs/design/refactor-plan.md](docs/design/refactor-plan.md). Recent big changes: [contract-v2](docs/design/contract-v2.md) (wire format), [time-transport](docs/design/time-transport.md) (navigation), [neuropixels-multiprobe](docs/design/neuropixels-multiprobe.md); surveys in `docs/research/`.
+- This file is the canonical quick-reference for commands, gotchas, and conventions (below).
+
 ## Environment
 
 - **Pixi env (project-local)** — prefix Python commands with `pixi run`. First run: `pixi install`.
