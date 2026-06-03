@@ -2,6 +2,7 @@
 
 ## Contents
 
+- [Handoff](handoff/index.md)
 - [Idea](idea/index.md)
 - [Issue](issue/index.md)
 - [Meeting](meeting/index.md)

@@ -34,8 +34,14 @@ paste**. Follow in order; use judgment — this is not fully mechanical.
   the `Co-Authored-By:` trailer. Commit on the feature branch (not `main`); don't push
   unless asked.
 
-## 4. Write the handoff — `docs/log/handoff-YYYYMMDD.md`
-Use the previous handoff as the template. Required sections:
+## 4. Write the handoff — projio MCP note (`note_type="handoff"`)
+Create it via the **projio MCP**, not a hand-written file:
+`note_create(note_type="handoff", title=…, owner="arash", frontmatter='{"branch":…,"status":"hold|mergeable","series":…}', body=…)`.
+It lands in `docs/log/handoff/` and auto-builds the TOC index. (Type is defined in
+the project-root `notio.toml` + template `.projio/notio/templates/handoff.md`.) The
+next session finds it with `note_list(note_type="handoff")` → `note_read`. If the projio
+MCP is unavailable, fall back to a flat `docs/log/handoff-YYYYMMDD.md`.
+Use the previous handoff note as the template. Required sections:
 - **Branch + how to resume** (and whether a restart is needed to load new MCPs/tools).
 - **What shipped this session** — commit list (newest first) + the test/tsc state.
 - **⚠️ Uncommitted in the tree** — owner WIP (don't touch) and any other-session feature
@@ -44,7 +50,8 @@ Use the previous handoff as the template. Required sections:
   drawnPixels:0 with good data → lifecycle bug, not data"), not just "it's broken".
 - **New tooling/capabilities** (MCPs, skills) + any restart needed.
 - **Prioritized next steps.**
-- **A ready-to-paste kickoff prompt** that names the handoff file + branch + first task.
+- **A ready-to-paste kickoff prompt** that tells the next session to read the latest
+  handoff via `note_list(note_type="handoff")` → `note_read`, + branch + first task.
 
 ## 5. Update cross-session memory
 - Append a dated update to the relevant `…/memory/project_*.md` (current state + a pointer
@@ -57,7 +64,8 @@ Use the previous handoff as the template. Required sections:
   "hold; merge after X" and name the target branch (usually the parent, not `main`).
 
 ## Done
-Report: the commits made, the handoff path, that memory was updated, and the one-line
+Report: the commits made, the handoff note path (from `note_create`), that memory was
+updated, and the one-line
 resume ("open a fresh session, confirm `/mcp`, paste the kickoff prompt").
 
 Complements `workflow-advisor` (was the right MCP/tool used?) and `retro` (lessons

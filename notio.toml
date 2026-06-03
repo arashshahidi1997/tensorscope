@@ -1,0 +1,15 @@
+# Project-local notio overrides. Types defined here are MERGED into notio's
+# built-in defaults (idea/issue/task/meeting/result) — see notio config.load_config.
+version = 1
+notes_root = "docs/log"
+template_root = ".projio/notio/templates"
+
+# Session handoffs as a first-class note type, so the projio MCP can create them
+# (note_create("handoff", ...)) with consistent frontmatter + TOC indexing,
+# instead of hand-writing docs/log/handoff-*.md. See the session-wrap skill.
+[types.handoff]
+mode = "event"
+template = "handoff.md"
+filename = "handoff-{owner}-{timestamp}.md"
+toc_keys = ["title", "status", "branch"]
+toc_groupby = "series"
