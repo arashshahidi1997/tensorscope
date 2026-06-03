@@ -10,7 +10,7 @@ RESOURCE_NAME ?=
 RESOURCE_URL ?=
 DATALAD ?= datalad
 
-.PHONY: help dev demo-data dev-ui kill-ui dev-api dev-web logs-api logs-web ui-status add-resource frontend-install frontend-dev frontend-build test build check publish-test publish clean
+.PHONY: help dev demo-data dev-ui audit-ui audit-api kill-ui dev-api dev-web logs-api logs-web ui-status add-resource frontend-install frontend-dev frontend-build test build check publish-test publish clean
 
 WEB_PORT ?= 5173
 
@@ -18,7 +18,8 @@ help:
 	@printf '%s\n' \
 		'make dev               # install editable package with dev extras' \
 		'make demo-data         # generate a deterministic local demo dataset' \
-		'make dev-ui            # start API + Vite in screen (kills stale first)' \
+		'make dev-ui            # start demo API + Vite in screen (kills stale first)' \
+		'make audit-ui          # start REAL iEEG (spindle-audit) + Vite in screen' \
 		'make kill-ui           # stop API + Vite and free ports' \
 		'make logs-api          # attach to API screen session' \
 		'make logs-web          # attach to frontend screen session' \
@@ -53,6 +54,15 @@ dev-web:
 	@screen -dmS tensorscope-web pixi run bash -c \
 		'cd $(FRONTEND_DIR) && $(NPM) run dev -- --host "$(HOST)" --port "$(WEB_PORT)" --strictPort'
 	@echo "Web: http://$(HOST):$(WEB_PORT)"
+
+audit-api:
+	@screen -dmS tensorscope-api pixi run spindle-audit
+	@echo "API (real iEEG / spindle-audit): http://$(HOST):$(PORT)"
+
+# Real iEEG audit bundle + Vite, both detached in screen (reuses kill-ui /
+# logs-api / logs-web / ui-status). Use instead of dev-ui to load real data.
+audit-ui: kill-ui audit-api dev-web
+	@echo "Real iEEG + Vite in screen — 'make logs-api' / 'make logs-web' to watch, 'make kill-ui' to stop"
 
 dev-ui: kill-ui dev-api dev-web
 	@sleep 2 && curl -sf http://$(HOST):$(PORT)/health >/dev/null 2>&1 || true
