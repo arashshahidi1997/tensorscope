@@ -259,9 +259,13 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
 /* ── Bottom panel ────────────────────────────────────── */
 .bottom-panel {
   border-top: 1px solid var(--border);
-  overflow: auto;
+  overflow: hidden;
   background: var(--surface);
   transition: height 150ms ease;
+  /* Column flex so the navigator fills the panel and the time-scale bar /
+   * hypnogram stay pinned — no fixed-height strip leaving dead space. */
+  display: flex;
+  flex-direction: column;
 }
 
 /* Timeseries nav-strip (under the X axis): neuroscope-style scrubber +
@@ -716,6 +720,15 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
   border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
   overflow: hidden;
+  /* Grow to fill the bottom panel; the time-scale bar below stays its
+   * natural height. min-height:0 lets the uPlot canvas shrink with the panel. */
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.bottom-panel .ts-timescale-bar,
+.bottom-panel .hypnogram-bar {
+  flex: 0 0 auto;
 }
 
 

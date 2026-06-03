@@ -27,7 +27,7 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
       activeSidebarTab: "explore",
       inspectorWidth: 260,
       inspectorCollapsed: true,
-      bottomPanelHeight: 200,
+      bottomPanelHeight: 120,
       bottomPanelCollapsed: false,
       viewGridLayout: {
         columns: 1,
@@ -48,7 +48,7 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
       activeSidebarTab: "explore",
       inspectorWidth: 260,
       inspectorCollapsed: false,
-      bottomPanelHeight: 200,
+      bottomPanelHeight: 120,
       bottomPanelCollapsed: false,
       viewGridLayout: {
         columns: 2,
@@ -72,7 +72,7 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
       activeSidebarTab: "explore",
       inspectorWidth: 260,
       inspectorCollapsed: true,
-      bottomPanelHeight: 200,
+      bottomPanelHeight: 120,
       bottomPanelCollapsed: false,
       viewGridLayout: {
         columns: 1,
@@ -96,7 +96,7 @@ export const LAYOUT_PRESETS: LayoutPreset[] = [
       activeSidebarTab: "explore",
       inspectorWidth: 260,
       inspectorCollapsed: false,
-      bottomPanelHeight: 200,
+      bottomPanelHeight: 120,
       bottomPanelCollapsed: false,
       viewGridLayout: null,
     },

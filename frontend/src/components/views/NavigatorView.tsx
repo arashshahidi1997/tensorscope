@@ -82,6 +82,10 @@ export function NavigatorView({
   const brainstateIntervalsRef = useRef(brainstateIntervals);
   const brainstateEnabledRef = useRef(brainstateOverlayEnabled);
   const selectionTimeRef = useRef<number | null>(null);
+  // Current x-scale range. uPlot's setSize() re-stages the x scale as AUTOSCALE,
+  // which (for an x scale) ranges to [null,null] — so it must be re-asserted
+  // after every resize or the strip goes blank. Tracks drag-zoom too.
+  const xRangeRef = useRef<[number, number] | null>(null);
   useEffect(() => { onSelectTimeRef.current = onSelectTime; });
   useEffect(() => { onWindowRef.current = onTimeWindowChange; });
   useEffect(() => { brainstateIntervalsRef.current = brainstateIntervals; });
@@ -113,7 +117,16 @@ export function NavigatorView({
     chartRef.current?.destroy();
     chartRef.current = null;
 
-    const width = el.clientWidth || el.getBoundingClientRect().width || 900;
+    // The navigator fills its bottom-panel slot (flex:1), so size to the live
+    // container rather than a fixed strip height. Floor the height so a
+    // momentarily-unlaid-out panel (e.g. mid height-transition) can't create a
+    // degenerate 0-px chart.
+    const measure = () => {
+      const w = el.clientWidth || el.getBoundingClientRect().width || 900;
+      const h = el.clientHeight || el.getBoundingClientRect().height || 80;
+      return { width: Math.round(w), height: Math.max(40, Math.round(h)) };
+    };
+    const initialSize = measure();
 
     // Guard: suppress setScale during chart initialization so that creating or
     // recreating the navigator (e.g. when new query data arrives) does not fire
@@ -123,8 +136,8 @@ export function NavigatorView({
 
     const chart = new uPlot(
       {
-        width,
-        height: 80,
+        width: initialSize.width,
+        height: initialSize.height,
         legend: { show: false },
         cursor: {
           // uPlot's built-in drag updates the x scale, which fires onWindowRef via the setScale hook
@@ -135,7 +148,7 @@ export function NavigatorView({
           { stroke: "#888", size: 24, grid: { stroke: "#222" } },
           { show: false },
         ],
-        select: { show: true, left: 0, width: 0, top: 0, height: 80 },
+        select: { show: true, left: 0, width: 0, top: 0, height: initialSize.height },
         series: [
           {},
           { stroke: "#73d2de", width: 1, spanGaps: false, fill: "rgba(115,210,222,0.08)" },
@@ -143,9 +156,14 @@ export function NavigatorView({
         hooks: {
           setScale: [
             (u, key) => {
-              if (!initialized || key !== "x") return;
+              if (key !== "x") return;
               const { min, max } = u.scales.x;
-              if (min != null && max != null) onWindowRef.current?.([min, max]);
+              if (min == null || max == null) return;
+              // Remember the live range so resize re-assertions (and recreation)
+              // restore the user's current zoom, not just the full extent.
+              xRangeRef.current = [min, max];
+              if (!initialized) return; // don't publish a window during creation
+              onWindowRef.current?.([min, max]);
             },
           ],
           drawClear: [
@@ -176,11 +194,34 @@ export function NavigatorView({
 
     chartRef.current = chart;
 
+    // uPlot's constructor runs setData(data, /*resetScales=*/false), so it never
+    // auto-ranges the x scale — it stays {min:null,max:null}, no data point maps
+    // to a pixel, and NOTHING paints (the empty-strip bug on real iEEG: a
+    // correctly-sized canvas with drawnPixels:0). Range x explicitly from the
+    // data extent. `initialized` is still false, so the setScale hook records
+    // the range into xRangeRef without publishing a spurious window. The range
+    // is re-asserted after every setSize below, because setSize re-stages x as
+    // AUTOSCALE → [null,null] and would otherwise re-blank the strip.
+    const assertXRange = () => {
+      const r = xRangeRef.current;
+      if (r && chartRef.current) chartRef.current.setScale("x", { min: r[0], max: r[1] });
+    };
+    xRangeRef.current = [times[0], times[times.length - 1]];
+    assertXRange();
+
     const detachGestures = attachNavigatorGestures(chart, { onSelectTimeRef, onWindowRef });
 
     const ro = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect.width;
-      if (w && chartRef.current) chartRef.current.setSize({ width: w, height: 80 });
+      const cr = entries[0]?.contentRect;
+      if (!cr || !chartRef.current) return;
+      const w = Math.round(cr.width);
+      const h = Math.max(40, Math.round(cr.height));
+      if (w && (w !== chartRef.current.width || h !== chartRef.current.height)) {
+        chartRef.current.setSize({ width: w, height: h });
+      }
+      // setSize nulls the x range (AUTOSCALE) — re-assert it in the same tick so
+      // the re-assertion wins the pendScales race and the strip stays painted.
+      assertXRange();
     });
     ro.observe(el);
 
@@ -188,9 +229,12 @@ export function NavigatorView({
     // setSize (in ResizeObserver or rAF) also fires setScale — keep initialized=false
     // until after that call so the resize correction doesn't publish a spurious window.
     const rafId = requestAnimationFrame(() => {
-      const w = el.clientWidth || el.getBoundingClientRect().width;
-      if (w && chartRef.current && w !== chartRef.current.width) {
-        chartRef.current.setSize({ width: w, height: 80 });
+      if (chartRef.current) {
+        const { width, height } = measure();
+        if (width && (width !== chartRef.current.width || height !== chartRef.current.height)) {
+          chartRef.current.setSize({ width, height });
+        }
+        assertXRange();
       }
       initialized = true;
     });
@@ -228,7 +272,7 @@ export function NavigatorView({
     <div className="navigator-bar">
       <div
         ref={containerRef}
-        style={{ cursor: "crosshair", width: "100%" }}
+        style={{ cursor: "crosshair", width: "100%", height: "100%" }}
       />
     </div>
   );

@@ -139,7 +139,18 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
     }),
     {
       name: "tensorscope:layout",
-      version: 1,
+      version: 2,
+      // v1→v2: the bottom navigator panel used to reserve a fixed 120–200px
+      // strip while the navigator chart was a fixed 80px — leaving dead space.
+      // The navigator now fills its panel, so cap any oversized persisted
+      // height down to the thin default instead of carrying the old reservation.
+      migrate: (persisted, version) => {
+        const s = persisted as LayoutState;
+        if (s && version < 2 && typeof s.bottomPanelHeight === "number" && s.bottomPanelHeight > 140) {
+          s.bottomPanelHeight = 120;
+        }
+        return s;
+      },
       partialize: (state) => ({
         sidebarWidth: state.sidebarWidth,
         sidebarCollapsed: state.sidebarCollapsed,

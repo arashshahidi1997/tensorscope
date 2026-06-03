@@ -177,8 +177,9 @@ export function HypnogramView({
       className="hypnogram-bar"
       style={{
         width: "100%",
-        height: "100%",
-        minHeight: 40,
+        // Fixed-height strip: the navigator above grows to fill the panel, the
+        // hypnogram stays a thin band pinned beneath the time-scale bar.
+        height: 44,
         cursor: "crosshair",
       }}
     >
