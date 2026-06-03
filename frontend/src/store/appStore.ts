@@ -27,8 +27,12 @@ type AppStore = {
   theme: ThemeId;
   /** Whether to show brainstate color overlay on timeseries/navigator. */
   brainstateOverlay: boolean;
-  /** Whether to show the hypnogram view. */
-  showHypnogram: boolean;
+  /**
+   * Per-track lane visibility in the context-track stack (brainstate band,
+   * speed lane, …). Keyed by track name; a missing key means visible (lanes
+   * show by default for a multimodal session). See TrackStack.
+   */
+  trackVisibility: Record<string, boolean>;
   /** Per-panel tensor overrides: slotId → tensorName */
   panelTensorOverrides: Record<string, string>;
   /**
@@ -87,7 +91,8 @@ type AppStore = {
   setLayoutDraft: (value: LayoutDTO) => void;
   setTheme: (value: ThemeId) => void;
   toggleBrainstateOverlay: () => void;
-  toggleHypnogram: () => void;
+  /** Flip a context-track lane's visibility (defaults to visible). */
+  toggleTrackVisible: (name: string) => void;
   setPsdFmax: (value: number) => void;
   setPsdNW: (value: number) => void;
   setPsdWindowS: (value: number) => void;
@@ -133,7 +138,7 @@ export const useAppStore = create<AppStore>((set) => ({
   layoutDraft: null,
   theme: getInitialTheme(),
   brainstateOverlay: true,
-  showHypnogram: false,
+  trackVisibility: {},
   setSelectedTensor: (value) => set({ selectedTensor: value, activeViews: [], panelTensorOverrides: {} }),
   setPanelTensor: (slotId, tensorName) =>
     set((s) => ({ panelTensorOverrides: { ...s.panelTensorOverrides, [slotId]: tensorName } })),
@@ -163,7 +168,11 @@ export const useAppStore = create<AppStore>((set) => ({
     set({ theme: value });
   },
   toggleBrainstateOverlay: () => set((s) => ({ brainstateOverlay: !s.brainstateOverlay })),
-  toggleHypnogram: () => set((s) => ({ showHypnogram: !s.showHypnogram })),
+  toggleTrackVisible: (name) =>
+    set((s) => ({
+      // Missing key = visible, so the first toggle hides it.
+      trackVisibility: { ...s.trackVisibility, [name]: !(s.trackVisibility[name] ?? true) },
+    })),
   workspaceObjects: [],
   setWorkspaceObjects: (objs) => set({ workspaceObjects: objs }),
   setObjectVisible: (id, visible) =>

@@ -14,12 +14,14 @@ import type {
   MaskStateDTO,
   ProbeLayoutDTO,
   ProcessingParamsDTO,
+  ScalarSeriesDTO,
   SelectionDTO,
   StateDTO,
   TensorMetaDTO,
   TensorSliceDTO,
   TensorSliceRequestDTO,
   TensorSummaryDTO,
+  TrackMetaDTO,
 } from "./types";
 import type {
   TransformDefinitionDTO,
@@ -240,6 +242,32 @@ export const api = {
     if (t1 != null) params.set("t1", String(t1));
     const qs = params.toString();
     return request<BrainstateIntervalDTO[]>(`/api/v1/brainstates/intervals${qs ? `?${qs}` : ""}`);
+  },
+
+  // Context tracks API (generic categorical bands + scalar traces)
+  getTracks(): Promise<TrackMetaDTO[]> {
+    return request<TrackMetaDTO[]>("/api/v1/tracks");
+  },
+
+  getTrackIntervals(name: string, t0?: number, t1?: number): Promise<BrainstateIntervalDTO[]> {
+    const params = new URLSearchParams();
+    if (t0 != null) params.set("t0", String(t0));
+    if (t1 != null) params.set("t1", String(t1));
+    const qs = params.toString();
+    return request<BrainstateIntervalDTO[]>(
+      `/api/v1/tracks/${encodeURIComponent(name)}/intervals${qs ? `?${qs}` : ""}`,
+    );
+  },
+
+  getTrackSeries(name: string, t0?: number, t1?: number, maxPoints?: number): Promise<ScalarSeriesDTO> {
+    const params = new URLSearchParams();
+    if (t0 != null) params.set("t0", String(t0));
+    if (t1 != null) params.set("t1", String(t1));
+    if (maxPoints != null) params.set("max_points", String(maxPoints));
+    const qs = params.toString();
+    return request<ScalarSeriesDTO>(
+      `/api/v1/tracks/${encodeURIComponent(name)}/series${qs ? `?${qs}` : ""}`,
+    );
   },
 
   // Detector API

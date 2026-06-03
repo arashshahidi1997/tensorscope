@@ -12,6 +12,7 @@ import {
   extractPSDAverage,
   extractPSDSpatialAtFreq,
   extractSpectrogram,
+  extractTrajectory,
   toNumber,
 } from "./arrow";
 import type { TensorSliceDTO } from "./types";
@@ -450,5 +451,39 @@ describe("extractSpatialCells — edge cases (N3)", () => {
   it("returns empty cells on an empty payload (no AP/ML rows)", () => {
     const decoded = decodeArrowSlice(buildSlice({ AP: [], ML: [], value: [] }));
     expect(extractSpatialCells(decoded)).toEqual([]);
+  });
+});
+
+describe("extractTrajectory", () => {
+  // Long-format (time, axis, value) with a string axis column — pivot to per-axis.
+  function buildTrajectorySlice(): TensorSliceDTO {
+    const table = tableFromArrays({
+      time: [0, 0, 1, 1],
+      axis: ["x", "y", "x", "y"],
+      value: [10, 100, 20, 200],
+    } as Record<string, number[] | string[]>);
+    const payload = Buffer.from(tableToIPC(table)).toString("base64");
+    return {
+      name: "position",
+      view_type: "trajectory",
+      dims: ["time", "axis"],
+      shape: [2, 2],
+      encoding: "arrow_ipc",
+      payload,
+      meta: {},
+    };
+  }
+
+  it("pivots long-format rows into per-axis arrays aligned to time", () => {
+    const traj = extractTrajectory(decodeArrowSlice(buildTrajectorySlice()));
+    expect(traj.times).toEqual([0, 1]);
+    expect(traj.axes.sort()).toEqual(["x", "y"]);
+    expect(traj.byAxis.x).toEqual([10, 20]);
+    expect(traj.byAxis.y).toEqual([100, 200]);
+  });
+
+  it("returns empty for a payload missing the axis column", () => {
+    const traj = extractTrajectory(decodeArrowSlice(buildSlice({ time: [0, 1], value: [1, 2] })));
+    expect(traj).toEqual({ times: [], byAxis: {}, axes: [] });
   });
 });

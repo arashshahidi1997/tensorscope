@@ -19,6 +19,7 @@ import {
   makeNavigatorRequest,
   makePSDLiveRequest,
   makeSpectrogramLiveRequest,
+  makeTrajectoryRequest,
   PSD_EVENT_LOCK_MARGIN_S,
   useBrainstateIntervalsQuery,
   useBrainstateMetaQuery,
@@ -48,7 +49,8 @@ import { useSelectionStore, toSelectionDTO } from "../../store/selectionStore";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { getAvailableViews, getOrthoPair, viewRegistry } from "../../registry/viewRegistry";
 import { EventAverageView } from "./EventAverageView";
-import { HypnogramView } from "./HypnogramView";
+import { TrackStack } from "./TrackStack";
+import { TrajectoryView } from "./TrajectoryView";
 import { NavigatorView } from "./NavigatorView";
 import { TimeScaleBar } from "./ChartToolbar";
 import { PSDHeatmapView } from "./PSDHeatmapView";
@@ -126,7 +128,6 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     setSelectedTensor,
     toggleView,
     brainstateOverlay,
-    showHypnogram,
     psdFmax,
     psdNW,
     psdWindowS,
@@ -246,6 +247,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const hasSpatial = effectiveActiveViews.includes("spatial_map");
   const hasDepthMap = effectiveActiveViews.includes("depth_map");
   const hasRaster = effectiveActiveViews.includes("raster");
+  const hasTrajectory = effectiveActiveViews.includes("trajectory");
   const hasPropagation = effectiveActiveViews.includes("propagation_frame");
   const hasPSD = effectiveActiveViews.includes("psd_average");
   const hasSpectrogram = effectiveActiveViews.includes("spectrogram");
@@ -351,6 +353,13 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const rasterSliceQuery = useSliceQuery(
     selectedTensor,
     hasRaster ? makeDefaultSliceRequest("raster", selectionDraft, safeWindow) : null,
+  );
+  // trajectory: full-session position path (time, axis). Pinned full-range
+  // request (like the navigator) so the whole arena is visible and the query
+  // key doesn't churn on cursor moves — the marker tracks selection.time.
+  const trajectorySliceQuery = useSliceQuery(
+    selectedTensor,
+    hasTrajectory && timeCoord ? makeTrajectoryRequest(selectionDraft, timeCoord) : null,
   );
   const psdSliceQuery = useSliceQuery(
     selectedTensor,
@@ -553,8 +562,6 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const navigatorRef = useRef(renderNavigator);
   navigatorRef.current = renderNavigator;
 
-  const brainstateT0 = brainstateTimeRange[0];
-  const brainstateT1 = brainstateTimeRange[1];
   const timeWindowLo = timeWindow[0];
   const timeWindowHi = timeWindow[1];
 
@@ -577,18 +584,11 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
           onViewportDurationChange={setDuration}
           onJumpToTime={(t) => commitSelectionRef.current({ ...selectionDraft, time: t })}
         />
-        {showHypnogram && brainstateAvailable && brainstateIntervals.length > 0 && (
-          <HypnogramView
-            intervals={brainstateIntervals}
-            timeRange={[
-              typeof brainstateT0 === "number" ? brainstateT0 : 0,
-              typeof brainstateT1 === "number" ? brainstateT1 : 10,
-            ]}
-            timeWindow={[timeWindowLo, timeWindowHi]}
-            timeCursor={selectionDraft.time}
-            onSelectTime={(t) => commitSelectionRef.current({ ...selectionDraft, time: t })}
-          />
-        )}
+        <TrackStack
+          timeWindow={[timeWindowLo, timeWindowHi]}
+          timeCursor={selectionDraft.time}
+          onSelectTime={(t) => commitSelectionRef.current({ ...selectionDraft, time: t })}
+        />
       </>
     );
   }, [
@@ -600,9 +600,6 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     brainstateAvailable,
     viewportDuration,
     setDuration,
-    showHypnogram,
-    brainstateT0,
-    brainstateT1,
     timeWindowLo,
     timeWindowHi,
     v2Enabled,
@@ -625,6 +622,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     spatial_map: spatialSliceQuery,
     depth_map: depthMapSliceQuery,
     raster: rasterSliceQuery,
+    trajectory: trajectorySliceQuery,
     psd_average: psdSliceQuery,
     spectrogram: spectrogramSliceQuery,
     spectrogram_live: spectrogramLiveQuery,
@@ -710,6 +708,18 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         viewId="raster"
         defaultEncoding={{ x: "time", y: "channel" }}
         colormap="viridis"
+      />
+    ) : (
+      <div className="placeholder">Loading…</div>
+    );
+  }
+
+  if (hasTrajectory) {
+    viewElements["trajectory"] = trajectorySliceQuery.data ? (
+      <TrajectoryView
+        slice={trajectorySliceQuery.data}
+        selection={selectionDraft}
+        onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
       />
     ) : (
       <div className="placeholder">Loading…</div>
@@ -937,18 +947,11 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
             onViewportDurationChange={setDuration}
             onJumpToTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
           />
-          {showHypnogram && brainstateAvailable && brainstateIntervals.length > 0 && (
-            <HypnogramView
-              intervals={brainstateIntervals}
-              timeRange={[
-                typeof brainstateTimeRange[0] === "number" ? brainstateTimeRange[0] : 0,
-                typeof brainstateTimeRange[1] === "number" ? brainstateTimeRange[1] : 10,
-              ]}
-              timeWindow={timeWindow}
-              timeCursor={selectionDraft.time}
-              onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
-            />
-          )}
+          <TrackStack
+            timeWindow={timeWindow}
+            timeCursor={selectionDraft.time}
+            onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
+          />
         </>
       )}
 

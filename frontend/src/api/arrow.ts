@@ -799,3 +799,49 @@ export function extractRaster(decoded: DecodedSlice): Raster {
   const depths = hasDepth ? channels.map((c) => depthByChannel.get(c)!) : null;
   return { channels, times, depths, values, nChannels, nTime };
 }
+
+export type Trajectory = {
+  /** Time samples, ascending. */
+  times: number[];
+  /** Per-axis value arrays aligned to `times` (keys are axis labels: x, y, z). */
+  byAxis: Record<string, number[]>;
+  /** Axis labels present, in first-seen order. */
+  axes: string[];
+};
+
+/**
+ * Pivot a long-format (time, axis) position slice into per-axis arrays. The
+ * server emits one row per (time, axis) cell with an `axis` string column
+ * (x/y/z) and a numeric `value`; the trajectory view plots any two axes.
+ */
+export function extractTrajectory(decoded: DecodedSlice): Trajectory {
+  const empty: Trajectory = { times: [], byAxis: {}, axes: [] };
+  if (
+    !decoded.columns.includes("time") ||
+    !decoded.columns.includes("axis") ||
+    !decoded.columns.includes("value")
+  ) {
+    return empty;
+  }
+
+  const axes: string[] = [];
+  const byTime = new Map<number, Record<string, number>>();
+  for (const row of decoded.rows) {
+    const t = toNumber(row.time);
+    const axis = row.axis == null ? null : String(row.axis);
+    const v = toNumber(row.value);
+    if (t === null || axis === null || v === null) continue;
+    if (!axes.includes(axis)) axes.push(axis);
+    let rec = byTime.get(t);
+    if (!rec) {
+      rec = {};
+      byTime.set(t, rec);
+    }
+    rec[axis] = v;
+  }
+
+  const times = Array.from(byTime.keys()).sort((a, b) => a - b);
+  const byAxis: Record<string, number[]> = {};
+  for (const axis of axes) byAxis[axis] = times.map((t) => byTime.get(t)![axis] ?? NaN);
+  return { times, byAxis, axes };
+}

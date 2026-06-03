@@ -6,7 +6,7 @@
  *   - SelectionPanel (time, spatial, freq controls) — bottom, collapsed by default
  */
 import { useMemo } from "react";
-import { useBrainstateMetaQuery, useProcessingQuery, useSetProcessing, useTensorQuery } from "../../api/queries";
+import { useProcessingQuery, useSetProcessing, useTensorQuery, useTracksQuery } from "../../api/queries";
 import type { SelectionDTO } from "../../api/types";
 import { useAppStore } from "../../store/appStore";
 import { useSelectionStore, toSelectionDTO } from "../../store/selectionStore";
@@ -41,14 +41,15 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
   const processingQuery = useProcessingQuery();
   const setProcessingMutation = useSetProcessing();
 
-  const brainstateMetaQuery = useBrainstateMetaQuery();
-  const brainstateAvailable = brainstateMetaQuery.data?.available ?? false;
+  const tracksQuery = useTracksQuery();
+  const tracks = tracksQuery.data ?? [];
+  const hasCategoricalTrack = tracks.some((t) => t.kind === "categorical");
   const {
     selectedTensor,
     brainstateOverlay,
-    showHypnogram,
+    trackVisibility,
     toggleBrainstateOverlay,
-    toggleHypnogram,
+    toggleTrackVisible,
     psdFmax,
     psdNW,
     psdWindowS,
@@ -95,28 +96,40 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
         )}
       </CollapsibleSection>
 
-      {brainstateAvailable && (
-        <CollapsibleSection title="Brainstates" defaultOpen={true}>
+      {tracks.length > 0 && (
+        <CollapsibleSection title="Context Tracks" defaultOpen={true}>
           <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "4px 0" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={brainstateOverlay}
-                onChange={toggleBrainstateOverlay}
-              />
-              Color overlay on traces
-            </label>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={showHypnogram}
-                onChange={toggleHypnogram}
-              />
-              Hypnogram strip
-            </label>
-            <div style={{ fontSize: 11, color: "#8b949e", marginTop: 2 }}>
-              States: {brainstateMetaQuery.data?.state_names.join(", ")}
-            </div>
+            {tracks.map((t) => (
+              <label
+                key={t.name}
+                style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}
+                title={
+                  t.kind === "categorical"
+                    ? `states: ${t.state_names.join(", ")}`
+                    : t.units
+                      ? `units: ${t.units}`
+                      : undefined
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={trackVisibility[t.name] ?? true}
+                  onChange={() => toggleTrackVisible(t.name)}
+                />
+                {t.name}
+                {t.units ? <span style={{ color: "#8b949e" }}> ({t.units})</span> : null}
+              </label>
+            ))}
+            {hasCategoricalTrack && (
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={brainstateOverlay}
+                  onChange={toggleBrainstateOverlay}
+                />
+                Color overlay on traces
+              </label>
+            )}
           </div>
         </CollapsibleSection>
       )}

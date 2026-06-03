@@ -18,7 +18,7 @@
  */
 import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import type { BrainstateIntervalDTO, BrainstateMetaDTO, CoordSummary, EventAverageParamsDTO, EventRecordDTO, MaskStateDTO, ProbeLayoutDTO, ProcessingParamsDTO, SelectionDTO, TensorSliceRequestDTO } from "./types";
+import type { BrainstateIntervalDTO, BrainstateMetaDTO, CoordSummary, EventAverageParamsDTO, EventRecordDTO, MaskStateDTO, ProbeLayoutDTO, ProcessingParamsDTO, ScalarSeriesDTO, SelectionDTO, TensorSliceRequestDTO, TrackMetaDTO } from "./types";
 import type { WorkspaceDAGDTO } from "../types/dag";
 import type { ColumnarTimeseries, PSDHeatmapData, Spectrogram } from "./arrow";
 import { getArrowWorkerPool } from "./workerPool";
@@ -270,6 +270,41 @@ export function useBrainstateIntervalsQuery(t0?: number, t1?: number) {
   });
 }
 
+// Generic context tracks (categorical bands + scalar traces).
+export function useTracksQuery() {
+  return useQuery<TrackMetaDTO[]>({
+    queryKey: ["tracks"],
+    queryFn: api.getTracks,
+    staleTime: 60_000,
+  });
+}
+
+export function useTrackIntervalsQuery(name: string, enabled: boolean, t0?: number, t1?: number) {
+  return useQuery<BrainstateIntervalDTO[]>({
+    queryKey: ["track-intervals", name, t0, t1],
+    queryFn: () => api.getTrackIntervals(name, t0, t1),
+    enabled,
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useTrackSeriesQuery(
+  name: string,
+  enabled: boolean,
+  t0?: number,
+  t1?: number,
+  maxPoints?: number,
+) {
+  return useQuery<ScalarSeriesDTO>({
+    queryKey: ["track-series", name, t0, t1, maxPoints],
+    queryFn: () => api.getTrackSeries(name, t0, t1, maxPoints),
+    enabled,
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+  });
+}
+
 export function useDAGQuery() {
   return useQuery<WorkspaceDAGDTO>({
     queryKey: ["dag"],
@@ -398,16 +433,25 @@ export function makeDefaultSliceRequest(
     case "spectrogram":
       return {
         view_type: viewType,
-        selection,
+        // Window-bound view: the server slices by time_range and ignores
+        // selection.time (verified — state.py reads selection.time only for
+        // spatial_map/depth_map). Pin time to the window start so a pure cursor
+        // move (e.g. animation playhead, event jump) doesn't re-key this query.
+        // The crosshair reads the live cursor from its own prop. See
+        // docs/design/propagation-playback.md §5 / ADR-0008.
+        selection: { ...selection, time: timeWindow[0] },
         time_range: timeWindow,
         max_points: 200,
         downsample: "minmax",
       };
 
-    default: // timeseries, and anything else time-based
+    default: // timeseries / raster, and anything else purely window-based
       return {
         view_type: viewType,
-        selection,
+        // Pin time to the window start — same window-bound invariant as the
+        // spectrogram branch above (timeseries/raster data depend on the
+        // window, not the cursor). Keeps the key stable under cursor moves.
+        selection: { ...selection, time: timeWindow[0] },
         time_range: timeWindow,
         max_points: 2000,
         downsample: "minmax",
@@ -452,6 +496,28 @@ export function makeNavigatorRequest(
     selection: { time: 0, freq: 0, ap: 0, ml: 0, channel: null },
     time_range: [t0, t1],
     max_points: 800,
+    downsample: "minmax",
+  };
+}
+
+/**
+ * Full-session trajectory slice — the whole behavioral path at once, so the
+ * arena is always visible with the cursor dot moving along it. Like the
+ * navigator, it ignores selection.time server-side; pin selection to a constant
+ * so the React Query key stays invariant under cursor moves (no re-fetch on
+ * every scrub).
+ */
+export function makeTrajectoryRequest(
+  selection: SelectionDTO,
+  timeCoord: CoordSummary | undefined,
+): TensorSliceRequestDTO {
+  const t0 = typeof timeCoord?.min === "number" ? timeCoord.min : 0;
+  const t1 = typeof timeCoord?.max === "number" ? timeCoord.max : selection.time + 10;
+  return {
+    view_type: "trajectory",
+    selection: { time: 0, freq: 0, ap: 0, ml: 0, channel: null },
+    time_range: [t0, t1],
+    max_points: 5000,
     downsample: "minmax",
   };
 }
@@ -566,7 +632,10 @@ export function makeSpectrogramLiveRequest(
 ): TensorSliceRequestDTO {
   return {
     view_type: "spectrogram_live",
-    selection,
+    // Window-bound: pin time to the window start so a pure cursor move doesn't
+    // re-key this query (same invariant as makeDefaultSliceRequest's spectrogram
+    // branch). See docs/design/propagation-playback.md §5 / ADR-0008.
+    selection: { ...selection, time: timeWindow[0] },
     time_range: timeWindow,
     spectrogram_live_params: params,
   };

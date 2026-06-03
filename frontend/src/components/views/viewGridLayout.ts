@@ -68,6 +68,15 @@ export const DEFAULT_SLOT_LAYOUT: ViewSlotLayout = {
       ],
       minHeight: 220,
     },
+    {
+      id: "trajectory",
+      label: "Trajectory",
+      slots: [
+        // 2-D behavioral position path (time, axis) — its own row.
+        { viewId: "trajectory", region: "left", widthFraction: 1.0 },
+      ],
+      minHeight: 260,
+    },
   ],
 };
 

@@ -12,6 +12,8 @@ export const BRAINSTATE_OVERLAY_COLORS: Record<string, string> = {
   beta: "rgba(255, 80, 80, 0.12)",
   NREM: "rgba(50, 150, 255, 0.12)",
   REM: "rgba(255, 80, 80, 0.12)",
+  MA: "rgba(255, 140, 40, 0.15)",
+  none: "rgba(128, 128, 128, 0.06)",
   unknown: "rgba(128, 128, 128, 0.08)",
 };
 
@@ -22,11 +24,13 @@ export const BRAINSTATE_SOLID_COLORS: Record<string, string> = {
   beta: "#ff5050",
   NREM: "#3296ff",
   REM: "#ff5050",
+  MA: "#ff8c28",
+  none: "#3a3f47",
   unknown: "#808080",
 };
 
 /** Standard ordering of states for the Y axis of the hypnogram (top to bottom). */
-export const HYPNOGRAM_STATE_ORDER = ["wake", "beta", "alpha", "theta", "NREM", "REM", "unknown"];
+export const HYPNOGRAM_STATE_ORDER = ["wake", "MA", "beta", "alpha", "theta", "NREM", "REM", "none", "unknown"];
 
 export function getOverlayColor(state: string): string {
   return BRAINSTATE_OVERLAY_COLORS[state] ?? BRAINSTATE_OVERLAY_COLORS.unknown;

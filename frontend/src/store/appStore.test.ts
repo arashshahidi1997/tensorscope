@@ -13,7 +13,7 @@ beforeEach(() => {
     layoutDraft: null,
     theme: "plotly-dark",
     brainstateOverlay: true,
-    showHypnogram: false,
+    trackVisibility: {},
     workspaceObjects: [],
     objectLayoutMode: "single",
     psdFmax: 100,
@@ -90,11 +90,11 @@ describe("brainstate + hypnogram toggles", () => {
     expect(getStore().brainstateOverlay).toBe(true);
   });
 
-  it("toggleHypnogram flips the flag", () => {
-    getStore().toggleHypnogram();
-    expect(getStore().showHypnogram).toBe(true);
-    getStore().toggleHypnogram();
-    expect(getStore().showHypnogram).toBe(false);
+  it("toggleTrackVisible flips a lane (default visible → hidden → visible)", () => {
+    getStore().toggleTrackVisible("speed");
+    expect(getStore().trackVisibility.speed).toBe(false);
+    getStore().toggleTrackVisible("speed");
+    expect(getStore().trackVisibility.speed).toBe(true);
   });
 });
 

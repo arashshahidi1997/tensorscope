@@ -213,6 +213,26 @@ export type BrainstateIntervalDTO = {
   state: string;
 };
 
+// Generic context tracks (categorical bands + scalar traces). Brainstate is one
+// categorical track among them; motion (speed) is a scalar track.
+export type TrackMetaDTO = {
+  name: string;
+  kind: "categorical" | "scalar";
+  time_range: [number | null, number | null];
+  n_steps: number;
+  units: string | null;
+  state_names: string[];
+};
+
+export type ScalarSeriesDTO = {
+  name: string;
+  units: string | null;
+  t: number[];
+  v: number[];
+  n_total: number;
+  t_range: [number | null, number | null];
+};
+
 export type DetectorParamSpecDTO = {
   dtype: string;
   default: unknown;

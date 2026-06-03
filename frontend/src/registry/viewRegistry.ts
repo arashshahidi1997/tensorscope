@@ -6,6 +6,7 @@ import { RasterView } from "../components/views/RasterView";
 import { SpatialMapSliceView } from "../components/views/SpatialMapSliceView";
 import { SpectrogramView } from "../components/views/SpectrogramView";
 import { TimeseriesSliceView } from "../components/views/TimeseriesSliceView";
+import { TrajectoryView } from "../components/views/TrajectoryView";
 import type { SliceViewProps } from "../components/views/viewTypes";
 import type { TensorSchema, ViewDescriptor } from "../types";
 
@@ -39,6 +40,7 @@ export const VIEW_DESCRIPTORS: ViewDescriptor[] = [
   // server-side) and linear (channel) tensors — gating comes from the server's
   // available_views. See docs/design/neuropixels-multiprobe.md.
   { id: "raster",           label: "Raster",       requiredDims: ["time"],             priority: 14 },
+  { id: "trajectory",       label: "Trajectory",   requiredDims: ["time", "axis"],     priority: 15 },
 ];
 
 /**
@@ -94,6 +96,7 @@ export const viewRegistry: Record<string, (props: SliceViewProps) => ReactElemen
   propagation_frame: SpatialMapSliceView,
   depth_map: DepthMapSliceView,
   raster: RasterView,
+  trajectory: TrajectoryView,
   table: PlaceholderSliceView,
   event_average: PlaceholderSliceView,  // rendered directly in WorkspaceMain
 };
