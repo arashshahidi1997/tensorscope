@@ -404,14 +404,15 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       ? withFocus(makeSpectrogramLiveRequest(selectionDraft, safeWindow))
       : null,
   );
-  // v2 mode has its own `navigatorV2Query` below — when v2 is on, gate the
-  // v1 query off so the navigator does not double-fetch the full session
-  // (refactor-plan N1).
+  // The v1 navigator query stays ON even in v2 mode. Gating it off here (the
+  // original N1 attempt, to avoid the double full-session fetch) blanks the
+  // navigator: the render path guards on the v1 `navigatorData` and never falls
+  // back to v2 data. The proper de-dup belongs in the v2 cutover (N4), which
+  // unifies the navigator's data source. The real N1 win — skipping the
+  // full-session z-score on the server — is unaffected and stays.
   const navigatorSliceQuery = useSliceQuery(
     selectedTensor,
-    hasNavigator && timeCoord && !v2Enabled
-      ? makeNavigatorRequest(selectionDraft, timeCoord)
-      : null,
+    hasNavigator && timeCoord ? makeNavigatorRequest(selectionDraft, timeCoord) : null,
   );
 
   // Contract-v2 parallel queries for timeseries / spectrogram_live / navigator.
