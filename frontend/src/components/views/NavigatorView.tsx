@@ -5,6 +5,7 @@ import { decodeArrowSlice, extractTimeseriesColumnar, type ColumnarTimeseries } 
 import type { BrainstateIntervalDTO } from "../../api/types";
 import type { SliceViewProps } from "./viewTypes";
 import { makeBrainstateDrawHook } from "./brainstateOverlay";
+import { zscoredCrossChannelMean } from "./navigatorMean";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Gesture layer
@@ -96,15 +97,13 @@ export function NavigatorView({
     const columnar = v2Data ?? extractTimeseriesColumnar(decodeArrowSlice(slice));
     const ts = columnar.times;
     const series = columnar.series;
-    if (ts.length === 0 || series.length === 0) return { times: [], meanValues: [] };
-    const mean = ts.map((_, ti) => {
-      let sum = 0, count = 0;
-      for (const s of series) {
-        const v = s.values[ti];
-        if (Number.isFinite(v)) { sum += v; count++; }
-      }
-      return count > 0 ? sum / count : NaN;
-    });
+    if (ts.length === 0 || series.length === 0) {
+      return { times: [] as number[], meanValues: new Float64Array(0) };
+    }
+    // Per-channel z-score before averaging — see navigatorMean. Real iEEG
+    // channel std spans ~90x, so a raw cross-channel mean is dominated by a few
+    // loud channels and hides the structure in everything else.
+    const mean = zscoredCrossChannelMean(series, ts.length);
     return { times: ts, meanValues: mean };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [v2Data, slice.payload]);
