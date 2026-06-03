@@ -45,12 +45,12 @@ kill-ui:
 	-@fuser -k $(WEB_PORT)/tcp 2>/dev/null || true
 
 dev-api:
-	@screen -dmS tensorscope-api sh -c \
+	@screen -dmS tensorscope-api pixi run bash -c \
 		'PYTHONPATH=src $(PYTHON) -m tensorscope.cli serve "$(DATA_PATH)" --host "$(HOST)" --port "$(PORT)"'
 	@echo "API: http://$(HOST):$(PORT)"
 
 dev-web:
-	@screen -dmS tensorscope-web sh -c \
+	@screen -dmS tensorscope-web pixi run bash -c \
 		'cd $(FRONTEND_DIR) && $(NPM) run dev -- --host "$(HOST)" --port "$(WEB_PORT)" --strictPort'
 	@echo "Web: http://$(HOST):$(WEB_PORT)"
 
