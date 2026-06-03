@@ -18,7 +18,16 @@ import type { SelectionDTO, TensorSliceDTO } from "../../api/types";
 import { useMaskStore } from "../../store/maskStore";
 import { ChannelGridRenderer } from "./ChannelGridRenderer";
 import { ColorBar } from "./ColorBar";
+import type { ColormapName } from "./colormaps";
 import type { SpatialCellWithId } from "./SpatialRenderer";
+
+/**
+ * Max rate at which playback drives the global cursor (Hz). Decoupled from the
+ * playback fps so a high-fps movie doesn't refetch cursor-windowed views
+ * (spatial_map, …) every frame. Window-bound views (timeseries/spectrogram) are
+ * key-decoupled from the cursor entirely — see ADR-0008 §5.
+ */
+const CURSOR_SYNC_HZ = 15;
 
 type PropagationMoviePlayerProps = {
   tensorName: string;
@@ -26,9 +35,15 @@ type PropagationMoviePlayerProps = {
   selection: SelectionDTO;
   /** Optional override for n_frames; defaults to server-side window_s × 30. */
   nFrames?: number;
+  /** Colormap for the value tiles + ColorBar. Defaults to viridis (ADR-0008). */
+  colormap?: ColormapName;
   onSelectCell?: (ap: number, ml: number) => void;
   onHoverElectrode?: (id: number | null) => void;
-  /** Optional commit callback when scrubbing — pins the global cursor to the frame's timestamp. */
+  /**
+   * Commit the frame's timestamp to the global cursor. Called on scrub release
+   * and, when cursor-sync is on, on every played frame (throttled) so the
+   * timeseries/spectrogram playheads glide along with playback.
+   */
   onCommitTime?: (time: number) => void;
 };
 
@@ -37,6 +52,7 @@ export function PropagationMoviePlayer({
   timeWindow,
   selection,
   nFrames,
+  colormap = "viridis",
   onSelectCell,
   onHoverElectrode,
   onCommitTime,
@@ -47,6 +63,18 @@ export function PropagationMoviePlayer({
   const [frameIdx, setFrameIdx] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [fps, setFps] = useState(24);
+  // Drive the global cursor during playback so all views' playheads follow.
+  const [syncCursor, setSyncCursor] = useState(true);
+
+  // Refs so the frame-render effect can commit the cursor without listing the
+  // (often freshly-allocated) onCommitTime callback in its deps.
+  const onCommitTimeRef = useRef(onCommitTime);
+  onCommitTimeRef.current = onCommitTime;
+  const syncCursorRef = useRef(syncCursor);
+  syncCursorRef.current = syncCursor;
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
+  const lastCursorCommitRef = useRef(0);
 
   // Latest selection captured in a ref so the fetch effect doesn't re-run
   // when only the cursor moves — the movie window is bound to (tensor,
@@ -118,6 +146,14 @@ export function PropagationMoviePlayer({
     };
   }, [tensorName, timeWindow[0], timeWindow[1], nFrames]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Bumped on every canvas resize so the frame-render effect repaints the
+  // CURRENT frame at the new size. Without this, the first frame (idx 0, the
+  // paused default after preload) stays blank when the panel gets its real
+  // size *after* frame 0 was first drawn at the initial tiny size — the canvas
+  // is re-init'd here but nothing repaints until frameIdx changes (i.e. only on
+  // play). Mirrors PropagationView's ResizeObserver, which re-renders on resize.
+  const [sizeTick, setSizeTick] = useState(0);
+
   // Init canvas + ResizeObserver.
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
@@ -132,6 +168,7 @@ export function PropagationMoviePlayer({
       canvas.width = w;
       canvas.height = h;
       renderer.init(canvas, w, h);
+      setSizeTick((t) => t + 1);
     }
     syncSize();
     const ro = new ResizeObserver(syncSize);
@@ -157,16 +194,16 @@ export function PropagationMoviePlayer({
       selectedIds: [],
       minValue: m.min,
       maxValue: m.max,
-      colormap: "jet",
+      colormap,
       smoothing: false,
       maskedIds: maskedSet,
     });
+    const t = m.frames[idx]?.time;
     // Time overlay so the user can read the frame's timestamp during playback.
     const canvas = canvasRef.current;
     if (canvas) {
       const ctx = canvas.getContext("2d");
       if (ctx) {
-        const t = m.frames[idx]?.time;
         if (typeof t === "number" && Number.isFinite(t)) {
           ctx.fillStyle = "rgba(0,0,0,0.55)";
           ctx.fillRect(4, 4, 96, 20);
@@ -176,7 +213,17 @@ export function PropagationMoviePlayer({
         }
       }
     }
-  }, [movie, frameIdx, maskedSet]);
+    // Cursor-sync: glide the global cursor with playback so the timeseries /
+    // spectrogram playheads follow. Throttled to CURSOR_SYNC_HZ so the
+    // cursor-windowed spatial views don't refetch every frame (ADR-0008 §2).
+    if (isPlayingRef.current && syncCursorRef.current && typeof t === "number" && Number.isFinite(t)) {
+      const now = performance.now();
+      if (now - lastCursorCommitRef.current >= 1000 / CURSOR_SYNC_HZ) {
+        lastCursorCommitRef.current = now;
+        onCommitTimeRef.current?.(t);
+      }
+    }
+  }, [movie, frameIdx, maskedSet, colormap, sizeTick]);
 
   // RAF playback loop. fps determines the per-frame target dt; we advance
   // when wall-clock time has crossed that threshold so playback stays
@@ -265,6 +312,17 @@ export function PropagationMoviePlayer({
             }}
           />
         </label>
+        <label
+          className="propagation-setting"
+          title="Glide the global cursor (timeseries / spectrogram playheads) with playback"
+        >
+          <input
+            type="checkbox"
+            checked={syncCursor}
+            onChange={(e) => setSyncCursor(e.target.checked)}
+          />
+          <span>⌖ sync</span>
+        </label>
         <input
           type="range"
           className="propagation-movie-scrubber"
@@ -315,7 +373,7 @@ export function PropagationMoviePlayer({
         <div className="axis-x-label">ML</div>
       </div>
         {movie && (
-          <ColorBar colormap="jet" min={movie.min} max={movie.max} label="value" />
+          <ColorBar colormap={colormap} min={movie.min} max={movie.max} label="value" />
         )}
       </div>
     </div>

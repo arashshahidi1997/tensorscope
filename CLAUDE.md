@@ -117,6 +117,19 @@ Fixed slot-based rows defined in `viewGridLayout.ts` (`DEFAULT_SLOT_LAYOUT`):
 
 Views toggle visibility in-place without reflowing neighbors. `ViewPanel` provides maximize/close chrome.
 
+### Propagation playback (the "animation panel")
+
+`PropagationController` wraps the `propagation_frame` spatial view with five
+modes. **Movie is the default**: `PropagationMoviePlayer` fetches N frames over
+the window once (`propagation_movie` view → one (time, AP, ML) cube), decodes
+per-frame cells once, and RAF-plays them with zero per-frame network/decode. It
+drives the global cursor every frame (throttled to ~15 Hz, "⌖ sync" toggle) so
+the timeseries/spectrogram playheads glide along; the movie window defaults to
+the currently-visible window ("↺ win" re-snaps). `player` mode (fetch each
+frame, cursor-driven) and `event`/`strip`/`tiled` remain. Colormap is a panel
+selector defaulting to **viridis** (not hardcoded jet). See
+[ADR-0008](docs/adr/0008-propagation-playback.md) / [docs/design/propagation-playback.md](docs/design/propagation-playback.md).
+
 ### PSD live computation
 
 Server's `psd_live` view type computes on-the-fly multitaper PSD using `cogpy.spectral.psd.psd_multitaper` (cogpy v0.2.0 flat layout). The frontend's `expandPSDLive()` maps the server's single `psd_live` to three sub-view IDs (`psd_heatmap`, `psd_curve`, `psd_spatial`), all populated from one server round-trip.
@@ -168,7 +181,8 @@ All four return `EventStream`s built from the cogpy `EventCatalog.df`.
 - Vite dev server proxies `/api` to `localhost:8000`
 - All React hooks must precede any conditional `return null`; guards go last
 - Never cast server fields with `as number`; use `parseFloat` + `Number.isFinite` guard
-- For cursor-driven animations, use a sequential fetch queue of 1 (not React Query or AbortController)
+- For cursor-driven animations, use a sequential fetch queue of 1 (not React Query or AbortController). Prefer the preload-once + RAF model (`PropagationMoviePlayer`) over per-frame fetches for smooth playback; spatial views should never hardcode a colormap (default viridis, ADR-0008)
+- Window-bound slice requests (`timeseries`/`spectrogram`/`spectrogram_live`) pin `selection.time` to `time_range[0]` so a pure cursor move doesn't re-key them (ADR-0008 §5); cursor-windowed views (`spatial_map`/`depth_map`/`psd_spatial`) intentionally keep the live cursor
 - Slot-based layout: views have fixed home slots; toggling shows/hides in-place (no reflow)
 - FastAPI routers: declare specific paths (e.g. `/events/detectors`) before parameterized ones (`/events/{name}`); FastAPI matches in declaration order
 - cogpy detectors that bandpass (ripple/spindle/burst) require an `fs` attr on the input — `core/events/detectors.py` calls `_ensure_fs()` to infer it from the time coord before handing the array to cogpy

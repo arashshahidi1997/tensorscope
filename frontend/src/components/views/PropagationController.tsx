@@ -17,9 +17,15 @@ import { AnimationController } from "../controls/AnimationController";
 import { PropagationView } from "./PropagationView";
 import { PropagationMoviePlayer } from "./PropagationMoviePlayer";
 import { decodeArrowSlice, extractSpatialCells } from "../../api/arrow";
+import type { ColormapName } from "./colormaps";
 import type { CoordSummary, SelectionDTO, TensorSliceDTO } from "../../api/types";
 
 type PropagationMode = "player" | "movie" | "event" | "strip" | "tiled";
+
+/** Colormap choices for the panel. Default (first) is viridis — perceptually
+ *  uniform, honest for reading propagation gradients (ADR-0008). jet is kept
+ *  for the prior user preference but is no longer the default. */
+const COLORMAP_OPTIONS: ColormapName[] = ["viridis", "inferno", "cividis", "jet"];
 
 type PropagationControllerProps = {
   tensorName: string | null;
@@ -42,7 +48,9 @@ export function PropagationController({
   onSelectCell,
   onHoverElectrode,
 }: PropagationControllerProps) {
-  const [mode, setMode] = useState<PropagationMode>("player");
+  // Movie is the default: preloaded, smooth, cursor-synced playback (ADR-0008).
+  const [mode, setMode] = useState<PropagationMode>("movie");
+  const [colormap, setColormap] = useState<ColormapName>("viridis");
 
   const tMin = typeof timeCoord?.min === "number" ? timeCoord.min : parseFloat(String(timeCoord?.min ?? "0"));
   const tMax = typeof timeCoord?.max === "number" ? timeCoord.max : parseFloat(String(timeCoord?.max ?? "10"));
@@ -58,21 +66,43 @@ export function PropagationController({
   const [eventHalfWindowS, setEventHalfWindowS] = useState(0.5);
   const [eventFrameCount, setEventFrameCount] = useState(60);
 
-  // Sync t0/t1 when timeCoord changes (on first tensor load)
-  const prevMinRef = useRef<number | null>(null);
-  if (prevMinRef.current !== safeMin) {
-    prevMinRef.current = safeMin;
-    // Only update if they're still at the default (first load)
-  }
-  useEffect(() => {
-    setT0(safeMin);
-    setT1(safeMax);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [safeMin, safeMax]);
-
   // ── Player mode: sequential fetch queue ──────────────────────────────────
   // Same pattern as the original WorkspaceMain propagation logic.
   const timeCursor = useSelectionStore((s) => s.timeCursor);
+  // The currently-visible window — movie/event/strip/tiled seed their playback
+  // window from it ("play what you're looking at"). Held in a ref so seeding on
+  // tensor-change doesn't make the playback window track every live pan
+  // (snapshot semantics; the "↺ win" button re-snaps on demand).
+  const visibleWindow = useSelectionStore((s) => s.timeWindow);
+  const visibleWindowRef = useRef(visibleWindow);
+  visibleWindowRef.current = visibleWindow;
+
+  // Seed t0/t1 from the visible window on tensor change (extent change). Falls
+  // back to the full extent if the window looks unset.
+  useEffect(() => {
+    const [w0, w1] = visibleWindowRef.current;
+    if (Number.isFinite(w0) && Number.isFinite(w1) && w1 > w0) {
+      setT0(w0);
+      setT1(w1);
+    } else {
+      setT0(safeMin);
+      setT1(safeMax);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safeMin, safeMax]);
+
+  const snapToWindow = () => {
+    const [w0, w1] = visibleWindowRef.current;
+    if (Number.isFinite(w0) && Number.isFinite(w1) && w1 > w0) {
+      setT0(w0);
+      setT1(w1);
+    }
+  };
+  const expandToFull = () => {
+    setT0(safeMin);
+    setT1(safeMax);
+  };
+
   const [propagationFrame, setPropagationFrame] = useState<TensorSliceDTO | null>(null);
 
   const selectionRef = useRef(selectionDraft);
@@ -121,6 +151,33 @@ export function PropagationController({
       fetchPropFrame.current(tensorName, timeCursor);
     }
   }, [mode, tensorName, timeCursor]);
+
+  // Player color-lock: accumulate a global [min,max] over the frames played so
+  // the colormap doesn't rescale per frame (which hides amplitude propagation
+  // — ADR-0008 §4). Only widens; resets per (tensor, mode). The decode here is
+  // a single small AP×ML frame, so it's cheap relative to the round-trip.
+  const [playerRange, setPlayerRange] = useState<[number, number] | null>(null);
+  useEffect(() => {
+    setPlayerRange(null);
+  }, [mode, tensorName]);
+  useEffect(() => {
+    if (mode !== "player" || !colorScaleLock || !propagationFrame) return;
+    const cells = extractSpatialCells(decodeArrowSlice(propagationFrame));
+    if (cells.length === 0) return;
+    let min = Infinity;
+    let max = -Infinity;
+    for (const c of cells) {
+      if (c.value < min) min = c.value;
+      if (c.value > max) max = c.value;
+    }
+    if (!(min < max)) return;
+    setPlayerRange((prev) => {
+      if (!prev) return [min, max];
+      const lo = Math.min(prev[0], min);
+      const hi = Math.max(prev[1], max);
+      return lo === prev[0] && hi === prev[1] ? prev : [lo, hi];
+    });
+  }, [mode, colorScaleLock, propagationFrame]);
 
   // ── Strip/Tiled mode: parallel batch fetches ──────────────────────────────
   const [multiFrames, setMultiFrames] = useState<(TensorSliceDTO | null)[]>([]);
@@ -189,8 +246,8 @@ export function PropagationController({
               type="button"
               className={`ts-tool${mode === m ? " active" : ""}`}
               title={
-                m === "player" ? "Player (cursor-driven)"
-                  : m === "movie" ? "Movie (preload + RAF playback over visible window)"
+                m === "player" ? "Player (cursor-driven; fetches each frame)"
+                  : m === "movie" ? "Movie (preload window once + smooth playback, cursor-synced)"
                   : m === "event" ? "Event (RAF playback ±Δs around the current cursor)"
                   : m === "strip" ? "Strip"
                   : "Tiled"
@@ -201,6 +258,32 @@ export function PropagationController({
             </button>
           ))}
         </div>
+
+        {/* Colormap selector — applies to every propagation surface (ADR-0008). */}
+        <label className="propagation-setting" title="Colormap (viridis is perceptually uniform — honest for gradients)">
+          <span>cmap</span>
+          <select
+            value={colormap}
+            onChange={(e) => setColormap(e.target.value as ColormapName)}
+          >
+            {COLORMAP_OPTIONS.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </label>
+
+        {mode === "player" && (
+          <div className="propagation-settings">
+            <label className="propagation-setting propagation-lock" title="Lock the color scale across played frames so amplitude is comparable frame-to-frame">
+              <input
+                type="checkbox"
+                checked={colorScaleLock}
+                onChange={(e) => setColorScaleLock(e.target.checked)}
+              />
+              <span>lock scale</span>
+            </label>
+          </div>
+        )}
 
         {mode === "event" && (
           <div className="propagation-settings">
@@ -259,6 +342,22 @@ export function PropagationController({
                 }}
               />
             </label>
+            <button
+              type="button"
+              className="ts-tool"
+              title="Snap the playback window to the currently-visible timeseries window"
+              onClick={snapToWindow}
+            >
+              ↺ win
+            </button>
+            <button
+              type="button"
+              className="ts-tool"
+              title="Expand the playback window to the full recording"
+              onClick={expandToFull}
+            >
+              ⤢ all
+            </button>
             <label className="propagation-setting">
               <span>N</span>
               <input
@@ -287,14 +386,18 @@ export function PropagationController({
                 />
               </label>
             )}
-            <label className="propagation-setting propagation-lock">
-              <input
-                type="checkbox"
-                checked={colorScaleLock}
-                onChange={(e) => setColorScaleLock(e.target.checked)}
-              />
-              <span>lock scale</span>
-            </label>
+            {/* Movie locks to its cube's global min/max inherently, so the
+                checkbox only applies to the strip/tiled batch frames. */}
+            {(mode === "strip" || mode === "tiled") && (
+              <label className="propagation-setting propagation-lock">
+                <input
+                  type="checkbox"
+                  checked={colorScaleLock}
+                  onChange={(e) => setColorScaleLock(e.target.checked)}
+                />
+                <span>lock scale</span>
+              </label>
+            )}
             {multiLoading && <span className="propagation-loading">loading…</span>}
           </div>
         )}
@@ -310,6 +413,9 @@ export function PropagationController({
             <PropagationView
               slice={propagationFrame}
               selection={selectionDraft}
+              colormap={colormap}
+              globalMin={colorScaleLock ? playerRange?.[0] : undefined}
+              globalMax={colorScaleLock ? playerRange?.[1] : undefined}
               onSelectCell={onSelectCell}
               onHoverElectrode={onHoverElectrode}
             />
@@ -326,6 +432,7 @@ export function PropagationController({
           timeWindow={[t0, t1]}
           selection={selectionDraft}
           nFrames={frameCount}
+          colormap={colormap}
           onSelectCell={onSelectCell}
           onHoverElectrode={onHoverElectrode}
           onCommitTime={(t) => useSelectionStore.getState().setTimeCursor(t)}
@@ -352,6 +459,7 @@ export function PropagationController({
             timeWindow={[tMin, tMax]}
             selection={selectionDraft}
             nFrames={eventFrameCount}
+            colormap={colormap}
             onSelectCell={onSelectCell}
             onHoverElectrode={onHoverElectrode}
             onCommitTime={(t) => useSelectionStore.getState().setTimeCursor(t)}
@@ -373,6 +481,7 @@ export function PropagationController({
                 <PropagationView
                   slice={multiFrames[i]!}
                   selection={selectionDraft}
+                  colormap={colormap}
                   onSelectCell={onSelectCell}
                   globalMin={colorScaleLock ? (globalMinMax?.[0] ?? undefined) : undefined}
                   globalMax={colorScaleLock ? (globalMinMax?.[1] ?? undefined) : undefined}
@@ -398,6 +507,7 @@ export function PropagationController({
                 <PropagationView
                   slice={multiFrames[i]!}
                   selection={selectionDraft}
+                  colormap={colormap}
                   onSelectCell={onSelectCell}
                   globalMin={colorScaleLock ? (globalMinMax?.[0] ?? undefined) : undefined}
                   globalMax={colorScaleLock ? (globalMinMax?.[1] ?? undefined) : undefined}

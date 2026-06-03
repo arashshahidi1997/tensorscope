@@ -4,6 +4,7 @@ import { useAppStore } from "../../store/appStore";
 import { useMaskStore } from "../../store/maskStore";
 import { ChannelGridRenderer } from "./ChannelGridRenderer";
 import { ColorBar } from "./ColorBar";
+import type { ColormapName } from "./colormaps";
 import type { SpatialCellWithId } from "./SpatialRenderer";
 import type { SliceViewProps } from "./viewTypes";
 
@@ -14,6 +15,8 @@ type PropagationViewProps = SliceViewProps & {
   /** Override color scale min/max (for color-locked multi-frame views). */
   globalMin?: number;
   globalMax?: number;
+  /** Colormap for the value tiles + ColorBar. Defaults to viridis (ADR-0008). */
+  colormap?: ColormapName;
 };
 
 export function PropagationView({
@@ -25,6 +28,7 @@ export function PropagationView({
   selectedIds = [],
   globalMin,
   globalMax,
+  colormap = "viridis",
 }: PropagationViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -42,6 +46,11 @@ export function PropagationView({
   );
   const maskedSetRef = useRef<Set<number> | undefined>(maskedSet);
   maskedSetRef.current = maskedSet;
+
+  // Colormap held in a ref too so the once-created ResizeObserver closure
+  // repaints with the current map after a runtime colormap switch.
+  const colormapRef = useRef<ColormapName>(colormap);
+  colormapRef.current = colormap;
 
   // Decoded slice data cached in refs to avoid stale closure issues.
   const cellsRef = useRef<SpatialCellWithId[]>([]);
@@ -102,8 +111,9 @@ export function PropagationView({
         selectedIds,
         minValue: globalMin ?? minValueRef.current,
         maxValue: globalMax ?? maxValueRef.current,
-        colormap: "jet",
-        smoothing: true,
+        colormap: colormapRef.current,
+        // Match the data-change render below — crisp tiles (imshow default).
+        smoothing: false,
         maskedIds: maskedSetRef.current,
       });
     });
@@ -130,7 +140,7 @@ export function PropagationView({
       selectedIds,
       minValue: globalMin ?? minValueRef.current,
       maxValue: globalMax ?? maxValueRef.current,
-      colormap: "jet",
+      colormap,
       smoothing: false,
       maskedIds: maskedSetRef.current,
     });
@@ -150,7 +160,7 @@ export function PropagationView({
         }
       }
     }
-  }, [slice, hoveredId, selectedIds, globalMin, globalMax, maskedArray]);
+  }, [slice, hoveredId, selectedIds, globalMin, globalMax, maskedArray, colormap]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -228,7 +238,7 @@ export function PropagationView({
       <div className="axis-x-ticks" />
       <div className="axis-x-label">ML</div>
     </div>
-      <ColorBar colormap="jet" min={cMin} max={cMax} label="value" />
+      <ColorBar colormap={colormap} min={cMin} max={cMax} label="value" />
     </div>
   );
 }

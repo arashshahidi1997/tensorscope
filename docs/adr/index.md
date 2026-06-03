@@ -23,6 +23,7 @@ Related docs:
 - [ADR-0005: CPU-First Rendering With Optional GPU Acceleration](./0005-cpu-first-rendering.md)
 - [ADR-0006: Staged Prompt-Pack Development Model](./0006-staged-prompt-pack-development.md)
 - [ADR-0007: Unified Time-Transport (one cursor/window owner)](./0007-unified-time-transport.md)
+- [ADR-0008: Propagation Playback (preloaded movie, cursor-synced, perceptual colormap)](./0008-propagation-playback.md)
 
 ## Status guidance
 

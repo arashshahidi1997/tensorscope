@@ -74,6 +74,27 @@ describe("makeDefaultSliceRequest", () => {
     expect(req.max_points).toBe(200);
     expect(req.downsample).toBe("minmax");
   });
+
+  it("pins selection.time to the window start for window-bound views (key invariance)", () => {
+    // ADR-0008 §5: a pure cursor move within a fixed window must NOT re-key
+    // timeseries/spectrogram (they slice by time_range, not the cursor). Two
+    // cursor positions inside the same window produce identical requests.
+    const win: [number, number] = [9, 11];
+    for (const v of ["timeseries", "spectrogram"]) {
+      const a = makeDefaultSliceRequest(v, { ...SEL, time: 9.2 }, win);
+      const b = makeDefaultSliceRequest(v, { ...SEL, time: 10.8 }, win);
+      expect(a.selection.time).toBe(9); // pinned to time_range[0]
+      expect(a).toEqual(b); // same key for any cursor in the window
+    }
+  });
+
+  it("keeps the live cursor for cursor-windowed views (spatial_map)", () => {
+    // The instantaneous spatial views MUST still track the cursor.
+    const a = makeDefaultSliceRequest("spatial_map", { ...SEL, time: 9.2 });
+    const b = makeDefaultSliceRequest("spatial_map", { ...SEL, time: 10.8 });
+    expect(a.selection.time).toBe(9.2);
+    expect(a).not.toEqual(b);
+  });
 });
 
 describe("makeOrthoSpatialRequest", () => {
@@ -208,7 +229,16 @@ describe("makeSpectrogramLiveRequest", () => {
     const req = makeSpectrogramLiveRequest({ ...SEL, time: 215 }, [200, 240]);
     expect(req.view_type).toBe("spectrogram_live");
     expect(req.time_range).toEqual([200, 240]);
-    expect(req.selection.time).toBe(215);
+    // Window-bound: time is pinned to the window start so a pure cursor move
+    // doesn't re-key the query (ADR-0008 §5). The server slices by time_range.
+    expect(req.selection.time).toBe(200);
+  });
+
+  it("pins selection.time to the window start for key invariance", () => {
+    // Two cursor positions in the same window → identical request.
+    const a = makeSpectrogramLiveRequest({ ...SEL, time: 205 }, [200, 240]);
+    const b = makeSpectrogramLiveRequest({ ...SEL, time: 235 }, [200, 240]);
+    expect(a).toEqual(b);
   });
 
   it("passes the timeWindow through verbatim — caller is responsible for clamping", () => {
