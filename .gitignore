@@ -29,6 +29,9 @@ frontend/vite.config.d.ts
 # Reference repos — read-only clones for source study, not tracked
 resources/
 
+# Playwright MCP session artifacts (snapshots, console logs) from /verify-ui
+.playwright-mcp/
+
 # >>> projio >>>
 *.ipynb
 .claude/commands/
