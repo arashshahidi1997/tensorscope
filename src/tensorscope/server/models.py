@@ -193,6 +193,28 @@ class EventRecordDTO(BaseModel):
     record: dict[str, Any]
 
 
+class TrackMetaDTO(BaseModel):
+    """Metadata for one context track (categorical band or scalar trace)."""
+
+    name: str
+    kind: Literal["categorical", "scalar"]
+    time_range: tuple[float | None, float | None]
+    n_steps: int = Field(ge=0)
+    units: str | None = None
+    state_names: list[str] = Field(default_factory=list)
+
+
+class ScalarSeriesDTO(BaseModel):
+    """A decimated scalar-track series for lane rendering."""
+
+    name: str
+    units: str | None = None
+    t: list[float]
+    v: list[float]
+    n_total: int = Field(ge=0)
+    t_range: tuple[float | None, float | None]
+
+
 class LayoutDTO(BaseModel):
     """Current layout descriptor."""
 

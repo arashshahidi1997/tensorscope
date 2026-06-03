@@ -49,6 +49,11 @@ _VIEW_REGISTRY: dict[frozenset[str], list[str]] = {
     frozenset({"time", "channel"}): ["timeseries", "raster", "navigator", "psd_live", "spectrogram_live", "event_average"],
     frozenset({"time", "freq", "AP", "ML"}): ["spectrogram", "psd_spatial"],
     frozenset({"time", "freq", "channel"}): ["spectrogram", "psd_average"],
+    # Behavioral position: (time, axis) where axis ∈ {x,y,z}. The trajectory
+    # view pivots the long-format slice into a 2-D path; timeseries plots the
+    # per-axis traces. No special slice branch — the default path returns the
+    # windowed (time, axis) data, which both views consume.
+    frozenset({"time", "axis"}): ["trajectory", "timeseries"],
 }
 
 
@@ -68,6 +73,11 @@ class ServerState:
     layout: LayoutManager
     events: EventRegistry
     brainstates: xr.DataArray | None = None
+    # Generic context tracks (auxiliary, time-aligned strips): categorical bands
+    # (brainstate, sleep stage) or scalar traces (speed, EMG). brainstate is
+    # registered here as track "brainstate" too — `brainstates` above stays the
+    # back-compat slot the /brainstates router reads. See io/tracks.py.
+    tracks: dict[str, xr.DataArray] = field(default_factory=dict)
     # G7: per-electrode region annotations loaded from a sidecar JSON file.
     # None when no sidecar accompanied the dataset — the /probe_layout
     # endpoint returns 404 in that case and the frontend renders unchanged.
@@ -581,6 +591,7 @@ def create_server_state(
     events: EventRegistry | None = None,
     layout: LayoutManager | None = None,
     brainstates: xr.DataArray | None = None,
+    tracks: dict[str, xr.DataArray] | None = None,
     probe_layout: ProbeLayout | None = None,
     dataset_dir: Path | None = None,
 ) -> ServerState:
@@ -601,6 +612,12 @@ def create_server_state(
     brainstates
         Optional 1-D ``(time,)`` DataArray of integer state codes.
         Attributes should include ``state_names`` (comma-separated label string).
+        Registered as a categorical context track named ``"brainstate"`` too.
+    tracks
+        Optional ``{name: DataArray}`` of context tracks — categorical bands or
+        scalar traces, each a 1-D ``(time,)`` array carrying a ``track_kind``
+        attr (see ``io/tracks.py``). ``brainstates`` is folded in under the
+        name ``"brainstate"`` when not already present.
     """
     app_state = TensorScopeState()
     if isinstance(data, dict):
@@ -615,11 +632,20 @@ def create_server_state(
     else:
         app_state.tensors.add(TensorNode(name=tensor_name, data=data))
         app_state.set_active_tensor(tensor_name)
+    resolved_tracks: dict[str, xr.DataArray] = dict(tracks or {})
+    # Fold the back-compat brainstate slot in as a categorical track so it
+    # shows up in the generic /tracks listing alongside motion etc.
+    if brainstates is not None and "brainstate" not in resolved_tracks:
+        bs_track = brainstates.copy()
+        bs_track.attrs.setdefault("track_kind", "categorical")
+        resolved_tracks["brainstate"] = bs_track
+
     return ServerState(
         app_state=app_state,
         layout=layout or LayoutManager(),
         events=events or EventRegistry(),
         brainstates=brainstates,
+        tracks=resolved_tracks,
         probe_layout=probe_layout,
         dataset_dir=dataset_dir,
     )
@@ -1752,6 +1778,134 @@ def brainstate_meta(bs: xr.DataArray) -> dict[str, Any]:
         "state_names": names,
         "time_range": [float(time_vals[0]), float(time_vals[-1])] if len(time_vals) else [None, None],
         "n_steps": len(time_vals),
+    }
+
+
+# --- Generic context tracks --------------------------------------------------
+# A track is a 1-D (time,) DataArray with attrs["track_kind"] in
+# {"categorical","scalar"}. Categorical tracks reuse the brainstate interval
+# machinery; scalar tracks get min/max-envelope decimation. See io/tracks.py.
+
+
+def track_kind(da: xr.DataArray) -> str:
+    """Resolve a track's kind from attrs, inferring when unset.
+
+    Inference: integer codes carrying ``state_names`` → categorical, else scalar.
+    """
+    kind = da.attrs.get("track_kind")
+    if kind in ("categorical", "scalar"):
+        return kind
+    if "state_names" in da.attrs and np.issubdtype(np.asarray(da.values).dtype, np.integer):
+        return "categorical"
+    return "scalar"
+
+
+def track_meta(name: str, da: xr.DataArray) -> dict[str, Any]:
+    """Metadata for one context track (name, kind, range, units/state_names)."""
+    time_vals = np.asarray(da.coords["time"].values, dtype=float)
+    kind = track_kind(da)
+    meta: dict[str, Any] = {
+        "name": name,
+        "kind": kind,
+        "time_range": [float(time_vals[0]), float(time_vals[-1])] if len(time_vals) else [None, None],
+        "n_steps": int(len(time_vals)),
+        "units": None,
+        "state_names": [],
+    }
+    if kind == "categorical":
+        meta["state_names"] = [s.strip() for s in str(da.attrs.get("state_names", "")).split(",") if s.strip()]
+    else:
+        units = da.attrs.get("units")
+        meta["units"] = str(units) if units is not None else None
+    return meta
+
+
+def list_track_meta(state: "ServerState") -> list[dict[str, Any]]:
+    """Metadata for every context track on the session, name-sorted."""
+    return [track_meta(name, state.tracks[name]) for name in sorted(state.tracks)]
+
+
+def track_intervals(
+    da: xr.DataArray,
+    t0: float | None = None,
+    t1: float | None = None,
+) -> list[dict[str, Any]]:
+    """Categorical track → merged ``{start,end,state}`` intervals.
+
+    Thin wrapper over :func:`brainstate_intervals` (which a categorical track's
+    coded representation matches by construction).
+    """
+    if track_kind(da) != "categorical":
+        raise ValueError("track_intervals requires a categorical track")
+    return brainstate_intervals(da, t0, t1)
+
+
+def track_series(
+    da: xr.DataArray,
+    t0: float | None = None,
+    t1: float | None = None,
+    max_points: int = 2000,
+) -> dict[str, Any]:
+    """Scalar track → window-filtered, min/max-decimated ``{t, v}`` series.
+
+    Min/max-envelope decimation keeps the visual extremes (peaks/troughs) a
+    naive stride would drop. When the windowed sample count already fits within
+    ``max_points`` the raw samples are returned untouched.
+    """
+    if track_kind(da) != "scalar":
+        raise ValueError("track_series requires a scalar track")
+    if max_points < 2:
+        raise ValueError("max_points must be >= 2")
+
+    times = np.asarray(da.coords["time"].values, dtype=float)
+    vals = np.asarray(da.values, dtype=float).ravel()
+
+    if t0 is not None and t1 is not None:
+        sel = (times >= t0) & (times <= t1)
+        times, vals = times[sel], vals[sel]
+
+    n = times.size
+    full_range = (
+        [float(times[0]), float(times[-1])] if n else [None, None]
+    )
+    if n == 0:
+        return {"name": da.name, "units": da.attrs.get("units"), "t": [], "v": [], "n_total": 0, "t_range": full_range}
+    if n <= max_points:
+        return {
+            "name": da.name,
+            "units": da.attrs.get("units"),
+            "t": [float(x) for x in times],
+            "v": [float(x) for x in vals],
+            "n_total": int(n),
+            "t_range": full_range,
+        }
+
+    # Bucket into ~max_points/2 buckets, emit (argmin, argmax) per bucket in
+    # time order so the trace's envelope is preserved.
+    n_buckets = max(max_points // 2, 1)
+    edges = np.linspace(0, n, n_buckets + 1).astype(int)
+    out_t: list[float] = []
+    out_v: list[float] = []
+    for b in range(n_buckets):
+        lo, hi = edges[b], edges[b + 1]
+        if hi <= lo:
+            continue
+        seg = vals[lo:hi]
+        i_min = lo + int(np.argmin(seg))
+        i_max = lo + int(np.argmax(seg))
+        first, second = (i_min, i_max) if i_min <= i_max else (i_max, i_min)
+        out_t.append(float(times[first]))
+        out_v.append(float(vals[first]))
+        if second != first:
+            out_t.append(float(times[second]))
+            out_v.append(float(vals[second]))
+    return {
+        "name": da.name,
+        "units": da.attrs.get("units"),
+        "t": out_t,
+        "v": out_v,
+        "n_total": int(n),
+        "t_range": full_range,
     }
 
 

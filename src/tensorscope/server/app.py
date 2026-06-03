@@ -15,7 +15,7 @@ from tensorscope.core.events import EventRegistry, EventStream
 from tensorscope.core.probe_layout import ProbeLayout
 from tensorscope.server.models import ApiErrorDTO
 from tensorscope.server.routers import brainstates as brainstates_router_mod
-from tensorscope.server.routers import dag, event_review, events, layout, masks, pipeline, probe_layout as probe_layout_router_mod, processing, selection, state, stream, tensors, tensors_v2, transforms, viewport
+from tensorscope.server.routers import dag, event_review, events, layout, masks, pipeline, probe_layout as probe_layout_router_mod, processing, selection, state, stream, tensors, tensors_v2, tracks as tracks_router_mod, transforms, viewport
 from tensorscope.server.session import SESSION_COOKIE_NAME, SessionManager
 from tensorscope.server.state import ServerState, create_server_state
 
@@ -49,6 +49,7 @@ def create_app(
     tensor_name: str = "signal",
     events_registry: EventRegistry | None = None,
     brainstates: xr.DataArray | None = None,
+    tracks: dict[str, xr.DataArray] | None = None,
     probe_layout: ProbeLayout | None = None,
     dataset_dir: Path | None = None,
     static_dir: Path | None = None,
@@ -70,6 +71,7 @@ def create_app(
         tensor_name=tensor_name,
         events=events_registry,
         brainstates=brainstates,
+        tracks=tracks,
         probe_layout=probe_layout,
         dataset_dir=dataset_dir,
     )
@@ -91,6 +93,7 @@ def create_app(
     app.include_router(dag.router, prefix="/api/v1")
     app.include_router(pipeline.router, prefix="/api/v1")
     app.include_router(brainstates_router_mod.router, prefix="/api/v1")
+    app.include_router(tracks_router_mod.router, prefix="/api/v1")
     app.include_router(masks.router, prefix="/api/v1")
     app.include_router(stream.router, prefix="/api/v1")
     app.include_router(probe_layout_router_mod.router, prefix="/api/v1")
