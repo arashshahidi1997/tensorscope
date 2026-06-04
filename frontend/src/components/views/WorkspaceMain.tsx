@@ -208,9 +208,15 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   // available views (no overflow); once the user toggles views by hand
   // (activeViews non-empty) we respect that explicit set instead.
   const gridSlotViews = layoutViewIds(gridLayout);
+  const multiProbeLayout = gridLayout === "probe_lanes";
   const effectiveActiveViews =
     activeViews.length === 0
-      ? availableViews.filter((v) => gridSlotViews.has(v))
+      ? multiProbeLayout
+        // Multi-probe lanes each fetch against their OWN tensor (the npx lane
+        // supports depth_map even though the global ecog tensor doesn't), so
+        // don't gate the slotted views by the global tensor's availability.
+        ? Array.from(gridSlotViews)
+        : availableViews.filter((v) => gridSlotViews.has(v))
       : activeViews.filter((v) => availableViews.includes(v));
   const hasTimeseries = effectiveActiveViews.includes("timeseries");
   const hasSpatial = effectiveActiveViews.includes("spatial_map");
@@ -227,9 +233,8 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const hasSpectrogramLive = effectiveActiveViews.includes("spectrogram_live");
   const hasEventAverage = effectiveActiveViews.includes("event_average");
   // Multi-probe duplicate lanes (Track C2/C3) are only live in the probe-lanes layout.
-  const isProbeLanes = gridLayout === "probe_lanes";
-  const hasTimeseriesNpx = isProbeLanes;
-  const hasSpectrogramNpx = isProbeLanes;
+  const hasTimeseriesNpx = multiProbeLayout;
+  const hasSpectrogramNpx = multiProbeLayout;
 
   // Detect if the active tensor supports ortho-slicing (4D: time, freq, AP, ML)
   const tensorDims = tensorQuery.data?.dims ?? activeTensorSummary?.dims ?? [];
