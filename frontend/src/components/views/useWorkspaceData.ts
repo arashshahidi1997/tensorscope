@@ -35,6 +35,10 @@ export type WorkspaceDataParams = {
   selectedTensor: string | null;
   selectionDraft: SelectionDTO;
   safeWindow: [number, number];
+  /** Tile-snapped overscan buffer feeding the timeseries fetch (P7). Held
+   *  stable while the visible window pans inside it so a local pan reuses the
+   *  same key — wider than `safeWindow` by the overscan margin. */
+  timeseriesFetchWindow: [number, number];
   /** Longer-debounced window for the Tier-2 expensive views (P5). */
   expensiveSafeWindow: [number, number];
   timeCoord: CoordSummary | undefined;
@@ -82,6 +86,7 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
     selectedTensor,
     selectionDraft,
     safeWindow,
+    timeseriesFetchWindow,
     expensiveSafeWindow,
     timeCoord,
     flags,
@@ -97,7 +102,9 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
   const timeseriesV2Query = useV2TimeseriesQuery(
     selectedTensor,
     flags.hasTimeseries
-      ? withFocus(makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow, timeseriesPixelWidth))
+      ? withFocus(
+          makeDefaultSliceRequest("timeseries", selectionDraft, timeseriesFetchWindow, timeseriesPixelWidth),
+        )
       : null,
     "Timeseries",
   );
@@ -189,7 +196,7 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
   const bandpassRequest =
     flags.hasTimeseries && activeBand
       ? withFocus({
-          ...makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow, timeseriesPixelWidth),
+          ...makeDefaultSliceRequest("timeseries", selectionDraft, timeseriesFetchWindow, timeseriesPixelWidth),
           bandpass: { lo_hz: activeBand[0], hi_hz: activeBand[1] },
         })
       : null;

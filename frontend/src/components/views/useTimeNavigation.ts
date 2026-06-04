@@ -1,5 +1,5 @@
-import { useCallback, useMemo } from "react";
-import { clampWindow } from "../../api/queries";
+import { useCallback, useMemo, useRef } from "react";
+import { clampWindow, snapWindowToLodTiles } from "../../api/queries";
 import type { CoordSummary, SelectionDTO } from "../../api/types";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { toSelectionDTO, useSelectionStore } from "../../store/selectionStore";
@@ -14,6 +14,39 @@ const WINDOW_FETCH_DEBOUNCE_MS = 100;
  * only publishes the FINAL position so a burst of window changes triggers one
  * spectral compute, not one per frame (perf-navigation-plan P5). */
 const EXPENSIVE_WINDOW_FETCH_DEBOUNCE_MS = 350;
+
+/** Overscan factor (P7): the timeseries query fetches this multiple of the
+ * visible window so small pans/zoom-ins land inside already-loaded data and
+ * don't refetch — the Neuroscope/HiGlass "local pan" feel. `2` gives half a
+ * visible window of slack on each side. */
+const TIMESERIES_OVERSCAN_FACTOR = 2;
+
+/**
+ * Tile-snapped overscan buffer around a visible window (P7). Widens the window
+ * by `(factor − 1)/2` on each side, then snaps to the LOD-tile grid so the
+ * buffer is a stable, cache-aligned key (the same grid the server LOD ladder
+ * uses, P2/P6). Returns the input unchanged for a non-positive duration.
+ */
+export function overscanBuffer(
+  visible: [number, number],
+  factor = TIMESERIES_OVERSCAN_FACTOR,
+): [number, number] {
+  const [t0, t1] = visible;
+  const duration = t1 - t0;
+  if (!(duration > 0)) return visible;
+  const margin = (duration * (factor - 1)) / 2;
+  return snapWindowToLodTiles([t0 - margin, t1 + margin]);
+}
+
+/** True when the live visible window is fully inside the loaded buffer (P7) —
+ * the client already holds data covering it, so a pan/zoom to `visible` needs
+ * no refetch. */
+export function isWithinLoadedBuffer(
+  visible: [number, number],
+  buffer: [number, number],
+): boolean {
+  return buffer[0] <= visible[0] && visible[1] <= buffer[1];
+}
 
 export type TimeNavigation = {
   /** Memoised selection DTO — stable identity across renders that don't change
@@ -30,6 +63,11 @@ export type TimeNavigation = {
   setHoveredElectrode: (id: number | null) => void;
   /** Debounced + data-bounds-clamped window that feeds slice FETCHES. */
   safeWindow: [number, number];
+  /** Tile-snapped overscan buffer feeding the timeseries fetch (P7). Wider than
+   *  the visible window and held stable while the visible window pans/zooms
+   *  inside it, so a local pan reuses the same key (no refetch). A fresh buffer
+   *  is computed only when the gesture leaves the loaded buffer. */
+  timeseriesFetchWindow: [number, number];
   /** Longer-debounced + clamped window feeding the Tier-2 expensive views
    *  (`psd_live`, `spectrogram_live`) so a scrub doesn't enqueue a multitaper
    *  compute per intermediate step (P5). */
@@ -92,6 +130,25 @@ export function useTimeNavigation(timeCoord: CoordSummary | undefined): TimeNavi
   const safeWindow = clampWindow(fetchWindow, timeCoord);
   const expensiveSafeWindow = clampWindow(expensiveFetchWindow, timeCoord);
 
+  // Overscan buffer for the timeseries view (P7). The timeseries renderer is
+  // overscan-ready — its x-scale is driven by the live `timeWindow`, not the
+  // data extent (setData(…, false)) — so we fetch a window WIDER than what's
+  // visible and keep that same buffer while the visible window pans/zooms
+  // inside it: a local-only pan with zero network. A fresh, tile-snapped
+  // buffer is computed only when the gesture leaves the loaded buffer. Other
+  // window-bound views (raster / spectrogram) keep `safeWindow` because their
+  // renderers draw exactly the fetched window — widening them would desync the
+  // stacked panels.
+  const bufferRef = useRef<[number, number] | null>(null);
+  const timeseriesFetchWindow = useMemo<[number, number]>(() => {
+    const visible = clampWindow(fetchWindow, timeCoord);
+    const prev = bufferRef.current;
+    if (prev && isWithinLoadedBuffer(visible, prev)) return prev;
+    const next = clampWindow(overscanBuffer(visible), timeCoord);
+    bufferRef.current = next;
+    return next;
+  }, [fetchWindow, timeCoord]);
+
   return {
     selectionDraft,
     timeWindow,
@@ -101,6 +158,7 @@ export function useTimeNavigation(timeCoord: CoordSummary | undefined): TimeNavi
     handleSelectFreq,
     setHoveredElectrode,
     safeWindow,
+    timeseriesFetchWindow,
     expensiveSafeWindow,
     selectedEventId: selectionState.event.eventId,
     selectedStreamName: selectionState.event.streamName,
