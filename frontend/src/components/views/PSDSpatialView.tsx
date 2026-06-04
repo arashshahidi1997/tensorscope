@@ -4,6 +4,7 @@ import { useAppStore } from "../../store/appStore";
 import { useMaskStore } from "../../store/maskStore";
 import { ChannelGridRenderer } from "./ChannelGridRenderer";
 import { ColorBar } from "./ColorBar";
+import { unmaskedCellRange } from "./colorRange";
 import type { SpatialCellWithId } from "./SpatialRenderer";
 
 type PSDSpatialProps = {
@@ -46,8 +47,8 @@ export function PSDSpatialView({ v2, selectedFreq, onSelectFreq, onSelectCell, t
     const nML = Math.max(...rawCells.map((c) => c.ml)) + 1;
     nMLRef.current = nML;
     nAPRef.current = Math.max(...rawCells.map((c) => c.ap)) + 1;
-    minValueRef.current = Math.min(...rawCells.map((c) => c.value));
-    maxValueRef.current = Math.max(...rawCells.map((c) => c.value));
+    // Color range excludes masked channels (a bad channel must not skew it).
+    [minValueRef.current, maxValueRef.current] = unmaskedCellRange(rawCells, nML, maskedSet);
     cellsRef.current = rawCells.map((c) => ({
       id: c.ap * nML + c.ml,
       apIdx: c.ap,

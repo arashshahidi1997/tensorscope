@@ -15,6 +15,6 @@ import type { SliceViewProps } from "./viewTypes";
  * (`tensorName` is accepted for call-site compatibility with the other spatial
  * views' channel-mask routing; the raster image does not currently hatch masks.)
  */
-export function DepthMapSliceView({ slice }: SliceViewProps & { tensorName?: string }) {
-  return <RasterView slice={slice} />;
+export function DepthMapSliceView({ slice, tensorName }: SliceViewProps & { tensorName?: string }) {
+  return <RasterView slice={slice} tensorName={tensorName} />;
 }
