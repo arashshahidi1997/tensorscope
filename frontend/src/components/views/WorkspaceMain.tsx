@@ -28,7 +28,7 @@ import type { SelectionDTO, TensorSliceRequestDTO } from "../../api/types";
 import { resolveBand, useAppStore } from "../../store/appStore";
 import { useViewportStore } from "../../store/viewportStore";
 import { useTimeNavigation } from "./useTimeNavigation";
-import { useWorkspaceData } from "./useWorkspaceData";
+import { resolveTensorForSlot, useWorkspaceData } from "./useWorkspaceData";
 import { getAvailableViews, getOrthoPair, viewRegistry } from "../../registry/viewRegistry";
 import { EventAverageView } from "./EventAverageView";
 import { TrackStack } from "./TrackStack";
@@ -388,6 +388,11 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     return times;
   }, [pinnedStreams, filteredEventsByStream, eventStreamsList, coincidenceWindow]);
 
+  // Per-slot resolved tensor for the spatial views' channel-mask lookup (C4),
+  // matching the per-slot data routing in useWorkspaceData (C1).
+  const tensorForSlot = (slotId: string) =>
+    resolveTensorForSlot(panelTensorOverrides, selectedTensor, slotId) ?? undefined;
+
   const SpatialMapComponent = viewRegistry.spatial_map as typeof SpatialMapSliceView;
   const PSDComponent = viewRegistry.psd_average as typeof PSDSliceView;
   const SpectrogramComponent = viewRegistry.spectrogram;
@@ -486,6 +491,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       <SpatialMapComponent
         v2Cells={v2SpatialData}
         selection={selectionDraft}
+        tensorName={tensorForSlot("spatial_map")}
         onSelectCell={(ap, ml) => {
           // Drilling down: enter focus mode AND move the cursor. The
           // timeseries + spectrogram_live slices pick up `focusChannel`
@@ -506,6 +512,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       <DepthMapSliceView
         slice={depthMapSliceQuery.data}
         selection={selectionDraft}
+        tensorName={tensorForSlot("depth_map")}
         onSelectCell={(ap) => {
           // ap is the depth rank == channel index for a single-column strip.
           setFocusChannel({ ap, ml: 0 });
@@ -545,7 +552,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   if (hasPropagation) {
     viewElements["propagation_frame"] = (
       <PropagationController
-        tensorName={selectedTensor}
+        tensorName={tensorForSlot("propagation_frame") ?? selectedTensor}
         timeCoord={timeCoord}
         selectionDraft={selectionDraft}
         onSelectCell={(ap, ml) => {
@@ -666,6 +673,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
           v2={psdCube}
           selectedFreq={selectionDraft.freq}
           onSelectFreq={handleSelectFreq}
+          tensorName={tensorForSlot("psd_spatial")}
           onSelectCell={(ap, ml) => {
             // PSD-spatial map: same drill-down behaviour as the main
             // spatial map. The reviewer picked the cell whose PSD they

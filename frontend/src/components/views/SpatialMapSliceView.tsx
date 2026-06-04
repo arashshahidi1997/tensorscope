@@ -30,15 +30,18 @@ export function SpatialMapSliceView({
   colorScale = "sequential",
   hoveredId = null,
   selectedIds = [],
-}: SpatialMapProps) {
+  tensorName,
+}: SpatialMapProps & { tensorName?: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<ChannelGridRenderer>(new ChannelGridRenderer());
 
-  // Pull mask for the active tensor. Subscribe via the masks slice so a
-  // toggle in the sidebar repaints in place without a fresh slice fetch.
-  const selectedTensor = useAppStore((s) => s.selectedTensor);
-  const maskedArray = useMaskStore((s) => (selectedTensor ? s.masks[selectedTensor] : undefined));
+  // Pull mask for the panel's resolved tensor (Track C4 — own probe's mask in
+  // multi-probe). Subscribe via the masks slice so a sidebar toggle repaints
+  // in place without a fresh slice fetch.
+  const globalTensor = useAppStore((s) => s.selectedTensor);
+  const maskTensor = tensorName ?? globalTensor;
+  const maskedArray = useMaskStore((s) => (maskTensor ? s.masks[maskTensor] : undefined));
   const maskedSet = maskedArray ? new Set(maskedArray) : undefined;
 
   // G7: per-electrode region annotations. Returns null when no sidecar is

@@ -17,6 +17,8 @@ type PropagationViewProps = SliceViewProps & {
   globalMax?: number;
   /** Colormap for the value tiles + ColorBar. Defaults to viridis (ADR-0008). */
   colormap?: ColormapName;
+  /** Panel's resolved tensor for the channel-mask lookup (Track C4). */
+  tensorName?: string;
 };
 
 export function PropagationView({
@@ -29,6 +31,7 @@ export function PropagationView({
   globalMin,
   globalMax,
   colormap = "viridis",
+  tensorName,
 }: PropagationViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -38,8 +41,9 @@ export function PropagationView({
   // overlay, consistent with the spatial-map + PSD-spatial views. Held
   // in a ref too so the ResizeObserver closure (created once) reads the
   // current mask without re-subscribing.
-  const selectedTensor = useAppStore((s) => s.selectedTensor);
-  const maskedArray = useMaskStore((s) => (selectedTensor ? s.masks[selectedTensor] : undefined));
+  const globalTensor = useAppStore((s) => s.selectedTensor);
+  const maskTensor = tensorName ?? globalTensor;
+  const maskedArray = useMaskStore((s) => (maskTensor ? s.masks[maskTensor] : undefined));
   const maskedSet = useMemo(
     () => (maskedArray ? new Set(maskedArray) : undefined),
     [maskedArray],

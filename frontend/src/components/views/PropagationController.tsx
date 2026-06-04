@@ -418,6 +418,7 @@ export function PropagationController({
               globalMax={colorScaleLock ? playerRange?.[1] : undefined}
               onSelectCell={onSelectCell}
               onHoverElectrode={onHoverElectrode}
+              tensorName={tensorName ?? undefined}
             />
           ) : (
             <div className="placeholder">Loading…</div>
@@ -485,6 +486,7 @@ export function PropagationController({
                   onSelectCell={onSelectCell}
                   globalMin={colorScaleLock ? (globalMinMax?.[0] ?? undefined) : undefined}
                   globalMax={colorScaleLock ? (globalMinMax?.[1] ?? undefined) : undefined}
+                  tensorName={tensorName ?? undefined}
                 />
               ) : (
                 <div className="placeholder placeholder--mini">…</div>
@@ -511,6 +513,7 @@ export function PropagationController({
                   onSelectCell={onSelectCell}
                   globalMin={colorScaleLock ? (globalMinMax?.[0] ?? undefined) : undefined}
                   globalMax={colorScaleLock ? (globalMinMax?.[1] ?? undefined) : undefined}
+                  tensorName={tensorName ?? undefined}
                 />
               ) : (
                 <div className="placeholder placeholder--mini">…</div>

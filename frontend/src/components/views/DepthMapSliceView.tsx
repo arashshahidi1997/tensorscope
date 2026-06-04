@@ -17,13 +17,21 @@ import type { SliceViewProps } from "./viewTypes";
  * Clicking a cell selects that channel (ap rank → channel via onSelectCell,
  * with ml fixed at 0) so the rest of the workspace can follow the depth cursor.
  */
-export function DepthMapSliceView({ slice, selection, onSelectCell }: SliceViewProps) {
+export function DepthMapSliceView({
+  slice,
+  selection,
+  onSelectCell,
+  tensorName,
+}: SliceViewProps & { tensorName?: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<ChannelGridRenderer>(new ChannelGridRenderer());
 
-  const selectedTensor = useAppStore((s) => s.selectedTensor);
-  const maskedArray = useMaskStore((s) => (selectedTensor ? s.masks[selectedTensor] : undefined));
+  // Mask is keyed by tensor — use the panel's resolved tensor (Track C4) so a
+  // multi-probe panel reads its own probe's mask, not the global one.
+  const globalTensor = useAppStore((s) => s.selectedTensor);
+  const maskTensor = tensorName ?? globalTensor;
+  const maskedArray = useMaskStore((s) => (maskTensor ? s.masks[maskTensor] : undefined));
   const maskedSet = maskedArray ? new Set(maskedArray) : undefined;
 
   const cellsRef = useRef<SpatialCellWithId[]>([]);

@@ -11,18 +11,21 @@ type PSDSpatialProps = {
   selectedFreq: number;
   onSelectFreq: (freq: number) => void;
   onSelectCell?: (ap: number, ml: number) => void;
+  /** Panel's resolved tensor for the channel-mask lookup (Track C4). */
+  tensorName?: string;
 };
 
-export function PSDSpatialView({ v2, selectedFreq, onSelectFreq, onSelectCell }: PSDSpatialProps) {
+export function PSDSpatialView({ v2, selectedFreq, onSelectFreq, onSelectCell, tensorName }: PSDSpatialProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<ChannelGridRenderer>(new ChannelGridRenderer());
 
-  // Channel mask for the active tensor — masked cells render with the
-  // hatch overlay, consistent with the spatial-map view. Subscribed via
-  // the mask store so a sidebar toggle repaints in place.
-  const selectedTensor = useAppStore((s) => s.selectedTensor);
-  const maskedArray = useMaskStore((s) => (selectedTensor ? s.masks[selectedTensor] : undefined));
+  // Channel mask for the panel's resolved tensor (Track C4) — masked cells
+  // render with the hatch overlay, consistent with the spatial-map view.
+  // Subscribed via the mask store so a sidebar toggle repaints in place.
+  const globalTensor = useAppStore((s) => s.selectedTensor);
+  const maskTensor = tensorName ?? globalTensor;
+  const maskedArray = useMaskStore((s) => (maskTensor ? s.masks[maskTensor] : undefined));
   const maskedSet = useMemo(
     () => (maskedArray ? new Set(maskedArray) : undefined),
     [maskedArray],
