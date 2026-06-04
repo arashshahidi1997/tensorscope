@@ -35,6 +35,8 @@ export type WorkspaceDataParams = {
   selectedTensor: string | null;
   selectionDraft: SelectionDTO;
   safeWindow: [number, number];
+  /** Longer-debounced window for the Tier-2 expensive views (P5). */
+  expensiveSafeWindow: [number, number];
   timeCoord: CoordSummary | undefined;
   flags: WorkspaceViewFlags;
   /** Adds `ap_range`/`ml_range` when the reviewer has drilled into one cell. */
@@ -78,6 +80,7 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
     selectedTensor,
     selectionDraft,
     safeWindow,
+    expensiveSafeWindow,
     timeCoord,
     flags,
     withFocus,
@@ -132,12 +135,21 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
     selectedTensor,
     flags.hasSpectrogram ? makeDefaultSliceRequest("spectrogram", selectionDraft, safeWindow) : null,
   );
+  // Tier-2 deprioritization gate (P5): hold the expensive spectral queries
+  // until the cheap Tier-0 timeseries query has settled, so a scrub/pan
+  // doesn't enqueue a multitaper compute per intermediate window. When the
+  // timeseries panel isn't live the gate is open (its query is disabled, so
+  // `isFetching` stays false). psd_live is keyed on the cursor (not the
+  // window), so the longer-debounced expensiveSafeWindow can't deprioritize
+  // it — the settle gate does.
+  const tier0Pending = flags.hasTimeseries && timeseriesV2Query.isFetching;
+
   // PSD-live cube — one (freq, AP, ML | channel) tensor feeds all three
   // subviews (psd_heatmap via extractHeatmapNDV2, psd_curve via
   // extractPSDAverageV2, psd_spatial via extractPSDSpatialV2).
   const psdLiveV2Query = useV2PSDLiveQuery(
     selectedTensor,
-    flags.hasPSDLive
+    flags.hasPSDLive && !tier0Pending
       ? makePSDLiveRequest(
           selectionDraft,
           psd.windowS,
@@ -149,13 +161,14 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
   );
   // Spectrogram live — multitaper spectrogram on the visible window. Server
   // defaults are sleep-band tuned (Prerau-style baseline subtraction); the
-  // request shape forwards any params on the wire. We pass `safeWindow`
-  // (already clamped against the tensor's time coord) so the heatmap's
-  // x-axis tracks the timeseries / navigator visible range.
+  // request shape forwards any params on the wire. We pass `expensiveSafeWindow`
+  // (the longer-debounced, clamped window — P5) so a scrub coalesces to one
+  // compute on the final position; the heatmap's x-axis still tracks the
+  // timeseries / navigator visible range once it settles.
   const spectrogramLiveV2Query = useV2SpectrogramQuery(
     selectedTensor,
     flags.hasSpectrogramLive
-      ? withFocus(makeSpectrogramLiveRequest(selectionDraft, safeWindow))
+      ? withFocus(makeSpectrogramLiveRequest(selectionDraft, expensiveSafeWindow))
       : null,
     "SpectrogramLive",
   );

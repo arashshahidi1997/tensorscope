@@ -8,6 +8,13 @@ import { toSelectionDTO, useSelectionStore } from "../../store/selectionStore";
  * HiGlass uses ~100 ms; the live window still drives the chart x-scale. */
 const WINDOW_FETCH_DEBOUNCE_MS = 100;
 
+/** Longer debounce (ms) for the Tier-2 (expensive) views — `psd_live` and
+ * `spectrogram_live`. A scrub/pan settles the cheap window at ~100 ms but the
+ * multitaper compute must not be enqueued per intermediate step; this window
+ * only publishes the FINAL position so a burst of window changes triggers one
+ * spectral compute, not one per frame (perf-navigation-plan P5). */
+const EXPENSIVE_WINDOW_FETCH_DEBOUNCE_MS = 350;
+
 export type TimeNavigation = {
   /** Memoised selection DTO — stable identity across renders that don't change
    *  the underlying cursor/freq/spatial primitives. */
@@ -23,6 +30,10 @@ export type TimeNavigation = {
   setHoveredElectrode: (id: number | null) => void;
   /** Debounced + data-bounds-clamped window that feeds slice FETCHES. */
   safeWindow: [number, number];
+  /** Longer-debounced + clamped window feeding the Tier-2 expensive views
+   *  (`psd_live`, `spectrogram_live`) so a scrub doesn't enqueue a multitaper
+   *  compute per intermediate step (P5). */
+  expensiveSafeWindow: [number, number];
   /** Event selection (for PSD-lock-to-event derivation). */
   selectedEventId: string | number | null;
   selectedStreamName: string | null;
@@ -71,9 +82,15 @@ export function useTimeNavigation(timeCoord: CoordSummary | undefined): TimeNavi
   // directly), so the pan stays smooth while the data trails.
   const fetchWindow = useDebouncedValue(timeWindow, WINDOW_FETCH_DEBOUNCE_MS);
 
+  // Tier-2 (expensive) window: a longer-debounced copy of the same live window.
+  // Feeds psd_live / spectrogram_live so a scrub coalesces to one spectral
+  // compute on the final position instead of one per intermediate step (P5).
+  const expensiveFetchWindow = useDebouncedValue(timeWindow, EXPENSIVE_WINDOW_FETCH_DEBOUNCE_MS);
+
   // Clamp the (debounced) window to data bounds so panning outside the recording
   // never triggers a "slice returned no data" 400 from the server.
   const safeWindow = clampWindow(fetchWindow, timeCoord);
+  const expensiveSafeWindow = clampWindow(expensiveFetchWindow, timeCoord);
 
   return {
     selectionDraft,
@@ -84,6 +101,7 @@ export function useTimeNavigation(timeCoord: CoordSummary | undefined): TimeNavi
     handleSelectFreq,
     setHoveredElectrode,
     safeWindow,
+    expensiveSafeWindow,
     selectedEventId: selectionState.event.eventId,
     selectedStreamName: selectionState.event.streamName,
   };

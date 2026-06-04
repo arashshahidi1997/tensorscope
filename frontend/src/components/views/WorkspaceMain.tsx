@@ -229,6 +229,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     handleSelectFreq,
     setHoveredElectrode,
     safeWindow,
+    expensiveSafeWindow,
     selectedEventId,
     selectedStreamName,
   } = useTimeNavigation(timeCoord);
@@ -317,6 +318,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     selectedTensor,
     selectionDraft,
     safeWindow,
+    expensiveSafeWindow,
     timeCoord,
     flags: {
       hasTimeseries,
