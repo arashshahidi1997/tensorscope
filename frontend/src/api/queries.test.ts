@@ -153,6 +153,21 @@ describe("P6 — LOD point budget + tile snapping", () => {
       // start floored to the 0.25 grid: floor(10.1/0.25)*0.25 = 10.0
       expect(s0).toBe(10);
     });
+
+    it("clamps the snapped start to ≥ 0 (overscan near the recording start)", () => {
+      // The overscan buffer widens below the visible start; near t=0 the floor
+      // can land negative, which would pin selection.time < 0 → a 422. Clamp it.
+      expect(snapWindowToLodTiles([-1, 3])[0]).toBe(0);
+      expect(snapWindowToLodTiles([-0.4, 1.6])[0]).toBe(0);
+    });
+  });
+
+  it("a timeseries request near t=0 never pins selection.time < 0 (422 regression)", () => {
+    // Overscan can push the fetch window's start below 0; selection.time is
+    // pinned to the snapped start and must satisfy the SelectionDTO time ≥ 0.
+    const req = makeDefaultSliceRequest("timeseries", SEL, [-0.5, 2.5], 1280);
+    expect(req.selection.time).toBeGreaterThanOrEqual(0);
+    expect(req.time_range![0]).toBeGreaterThanOrEqual(0);
   });
 
   it("a sub-tile pan yields a byte-identical request key (cache hit)", () => {

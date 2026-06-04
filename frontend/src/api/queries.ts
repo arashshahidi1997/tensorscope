@@ -465,13 +465,19 @@ export function lodTileSeconds(durationS: number): number {
  * window even when its start isn't tile-aligned. The renderer keeps painting
  * the user's `timeWindow` (its x-scale is driven by the nav window, not the
  * data extent — `setData(…, false)`), so the slightly-wider data is invisible.
+ *
+ * The snapped start is clamped to ≥ 0: the overscan buffer widens the window
+ * below the visible start, and near the recording start that floor can land
+ * negative — which the timeseries request then pins into `selection.time`,
+ * violating the `SelectionDTO` `time ≥ 0` constraint (a 422). Recordings start
+ * at t ≥ 0, so clamping the snapped start is correct and keeps the key stable.
  */
 export function snapWindowToLodTiles(window: [number, number]): [number, number] {
   const [t0, t1] = window;
   const duration = t1 - t0;
   if (!(duration > 0)) return window;
   const tile = lodTileSeconds(duration);
-  const start = Math.floor(t0 / tile) * tile;
+  const start = Math.max(0, Math.floor(t0 / tile) * tile);
   const nTiles = Math.ceil(duration / tile) + 1;
   return [start, start + nTiles * tile];
 }
