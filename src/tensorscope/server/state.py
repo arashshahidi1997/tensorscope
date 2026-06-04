@@ -6,8 +6,12 @@ import asyncio
 import base64
 import json
 import logging
+import multiprocessing as mp
+import os
 from collections import OrderedDict
 from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
@@ -924,6 +928,99 @@ def _apply_channel_mask_nan(data: xr.DataArray, masked_ids: list[int]) -> xr.Dat
     return data
 
 
+# ── P4: process-pool offload for the expensive Tier-2 spectral compute ──────
+# psd_live + spectrogram_live are CPU-bound numpy/cogpy/ghostipy work. Run
+# inline they hold the single uvicorn worker's GIL, so a heavy spectral request
+# blocks the cheap Tier-0 timeseries/navigator requests it shares the process
+# with (the measured ~9.9 s co-topping in docs/design/perf-navigation-plan.md).
+# We move the pure numpy cores onto ONE long-lived module-level
+# ProcessPoolExecutor and block on .result(): the parent GIL is released while
+# the subprocess computes, so concurrent Tier-0 requests proceed. Only numpy
+# arrays + plain param dicts cross the boundary — ServerState (with its
+# non-picklable _Subscriber asyncio loops) is NEVER shipped. P1's per-view cache
+# sits in front, so a revisited window skips the pool entirely.
+_SPECTRAL_POOL: ProcessPoolExecutor | None = None
+
+
+def _get_spectral_pool() -> ProcessPoolExecutor:
+    """Lazily build & return the module-level spectral process pool (singleton).
+
+    Sized ``max(1, cpu_count - 2)`` to leave headroom on the shared box. Uses a
+    ``forkserver`` context (Linux): workers fork from a clean minimal server, not
+    from this heavy parent which has imported numpy/BLAS/dask/ghostipy
+    threadpools — sidestepping the classic fork-after-threads deadlock. Worker
+    processes spawn lazily on the first submit, so constructing the executor
+    object here is cheap and import-safe.
+    """
+    global _SPECTRAL_POOL
+    if _SPECTRAL_POOL is None:
+        try:
+            ctx: Any = mp.get_context("forkserver")
+        except ValueError:  # pragma: no cover - non-Linux fallback
+            ctx = mp.get_context()
+        _SPECTRAL_POOL = ProcessPoolExecutor(
+            max_workers=max(1, (os.cpu_count() or 1) - 2), mp_context=ctx
+        )
+    return _SPECTRAL_POOL
+
+
+def _run_in_spectral_pool(fn: Callable[..., Any], *args: Any) -> Any:
+    """Submit a picklable spectral core to the pool and block on its result.
+
+    Releasing the GIL here is the point: the parent thread waits on the
+    subprocess while other (Tier-0) requests run on the event loop's threadpool.
+    Falls back to in-process compute if the pool is broken so a view never goes
+    dark; a broken pool is reset so the next request rebuilds it.
+    """
+    global _SPECTRAL_POOL
+    try:
+        return _get_spectral_pool().submit(fn, *args).result()
+    except BrokenProcessPool as exc:  # pragma: no cover - defensive
+        logging.getLogger(__name__).warning(
+            "spectral process pool broke (%s); computing in-process", exc
+        )
+        _SPECTRAL_POOL = None
+        return fn(*args)
+
+
+def _psd_multitaper_core(
+    arr: np.ndarray, fs: float, mt_kwargs: dict[str, Any]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Pure, picklable multitaper-PSD core (runs in the spectral pool).
+
+    ``arr`` is ``(n_ch, time)`` or ``(time,)``; returns ``(psd_vals, freqs)``.
+    Channel masking (zero-in / NaN-out) stays in the caller — only the
+    CPU-bound FFT crosses the process boundary.
+    """
+    from cogpy.spectral.psd import psd_multitaper
+
+    psd_vals, freqs = psd_multitaper(arr, fs, **mt_kwargs)
+    return np.asarray(psd_vals), np.asarray(freqs)
+
+
+def _spectrogram_live_core(
+    flat: np.ndarray, mtm_kwargs: dict[str, Any]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Pure, picklable multitaper-spectrogram core (runs in the spectral pool).
+
+    Computes the spectrogram for every row of ``flat`` (n_ch, T) and returns
+    ``(mtspec (n_ch, n_freq, n_t), freqs, t_centers)``. This replaces the prior
+    per-request in-parent ThreadPoolExecutor fan-out: the whole channel set is
+    computed in one subprocess, so the offload itself supplies the parallelism
+    while the parent GIL stays free. ghostipy releases the GIL internally, so a
+    sequential per-channel loop in the worker is fine.
+    """
+    import ghostipy as gsp
+
+    S0, freqs, t_centers = gsp.mtm_spectrogram(flat[0], **mtm_kwargs)
+    out = np.empty((flat.shape[0], *S0.shape), dtype=S0.dtype)
+    out[0] = S0
+    for i in range(1, flat.shape[0]):
+        S, _f, _t = gsp.mtm_spectrogram(flat[i], **mtm_kwargs)
+        out[i] = S
+    return out, np.asarray(freqs), np.asarray(t_centers)
+
+
 def apply_slice_request(
     data: xr.DataArray,
     request: TensorSliceRequestDTO,
@@ -1004,8 +1101,6 @@ def apply_slice_request(
 
     # 2b. PSD live: compute multitaper PSD, replacing time dim with freq.
     if request.view_type == "psd_live" and "time" in sliced.dims:
-        from cogpy.spectral.psd import psd_multitaper
-
         from tensorscope.server.models import PsdParamsDTO
 
         time_vals = np.asarray(sliced.coords["time"].values, dtype=float)
@@ -1034,7 +1129,10 @@ def apply_slice_request(
             row_masked = np.isnan(flat).any(axis=1)
             if row_masked.any():
                 flat = np.where(row_masked[:, None], 0.0, flat)
-            psd_vals, freqs = psd_multitaper(flat, fs, **mt_kwargs)
+            # P4: offload the multitaper FFT to the process pool (GIL-free).
+            psd_vals, freqs = _run_in_spectral_pool(
+                _psd_multitaper_core, flat, fs, mt_kwargs
+            )
             if row_masked.any():
                 psd_vals[row_masked] = np.nan
             # psd_vals: (n_ch, freq) -> reshape to (*orig_shape, freq) -> (freq, *orig_shape)
@@ -1042,7 +1140,9 @@ def apply_slice_request(
             psd_vals = np.moveaxis(psd_vals, -1, 0)
         else:
             arr = np.asarray(sliced.values)  # (time,)
-            psd_vals, freqs = psd_multitaper(arr, fs, **mt_kwargs)
+            psd_vals, freqs = _run_in_spectral_pool(
+                _psd_multitaper_core, arr, fs, mt_kwargs
+            )
 
         coords = {"freq": freqs}
         for d in non_time_dims:
@@ -1069,8 +1169,6 @@ def apply_slice_request(
     #     stuck in dask scheduler lock-wait. Direct ghostipy + numpy
     #     apply_along_axis collapses the same workload to ~150 ms.
     if request.view_type == "spectrogram_live" and "time" in sliced.dims:
-        import ghostipy as gsp
-
         from tensorscope.server.models import SpectrogramLiveParamsDTO
 
         spec_params = request.spectrogram_live_params or SpectrogramLiveParamsDTO()
@@ -1145,17 +1243,12 @@ def apply_slice_request(
         if row_masked.any():
             flat = np.where(row_masked[:, None], 0.0, flat)
 
-        # Probe one fiber to fix the freq / time-segment shapes, then
-        # parallelise the rest across channels via a thread pool.
-        # ghostipy releases the GIL during FFTW + ndarray ops, so a
-        # threaded fan-out gives ~3x speedup on this workload (256
-        # channels) without process-fork overhead. Sequential
-        # np.apply_along_axis is the fallback if the user has only
-        # 1 CPU available. Per-call FFTW threads are pinned to 1 to
-        # avoid oversubscription with the outer pool.
-        import os
-        from concurrent.futures import ThreadPoolExecutor
-
+        # P4: offload the whole multi-channel spectrogram to the process pool
+        # (one submit per request) instead of an in-parent ThreadPoolExecutor.
+        # The subprocess loops over channels (ghostipy releases the GIL per
+        # FFT); blocking on .result() here frees the parent GIL for concurrent
+        # Tier-0 requests. Per-call FFTW threads are pinned to 1 to avoid
+        # oversubscription. mtspec shape: (n_ch, n_freq, n_t_segments).
         mtm_kwargs = dict(
             bandwidth=bandwidth_eff,  # may have been auto-bumped above
             fs=fs,
@@ -1164,26 +1257,10 @@ def apply_slice_request(
             remove_mean=True,
             n_fft_threads=1,
         )
-
-        def _mtspec(x: np.ndarray) -> np.ndarray:
-            S, _f, _t = gsp.mtm_spectrogram(x, **mtm_kwargs)
-            return S
-
-        S0, freqs, t_centers = gsp.mtm_spectrogram(flat[0], **mtm_kwargs)
-        n_workers = max(1, min(8, (os.cpu_count() or 1) - 1))
-        if n_workers <= 1 or flat.shape[0] <= 4:
-            mtspec = np.apply_along_axis(_mtspec, -1, flat)
-        else:
-            # Pre-allocate the output and write per-channel results into it
-            # to avoid the np.stack copy at the end.
-            mtspec = np.empty((flat.shape[0], *S0.shape), dtype=S0.dtype)
-            with ThreadPoolExecutor(max_workers=n_workers) as ex:
-                for i, S in enumerate(ex.map(_mtspec, flat)):
-                    mtspec[i] = S
-        # mtspec shape: (n_ch, n_freq, n_t_segments)
+        mtspec, freqs, t_centers = _run_in_spectral_pool(
+            _spectrogram_live_core, flat, mtm_kwargs
+        )
         mtspec = np.asarray(mtspec, dtype=np.float64)
-        freqs = np.asarray(freqs)
-        t_centers = np.asarray(t_centers)
 
         # Re-apply mask to the spec output (rows we zeroed for FFT input).
         if row_masked.any():
@@ -2072,3 +2149,17 @@ def _scalar_or_none(value: Any) -> str | float | int | None:
     if isinstance(value, (np.floating, float)):
         return float(value)
     return str(value)
+
+
+# Warm the spectral process pool at import (P4): construct the module-level
+# singleton so the first psd_live / spectrogram_live request doesn't pay
+# executor construction on the hot path. Constructing the executor is cheap and
+# forks nothing — worker processes spawn lazily on the first submit. Guarded to
+# the main interpreter so pool-worker re-imports (under forkserver/spawn) don't
+# build a redundant executor, and wrapped so a pool init failure can never break
+# module import.
+if mp.current_process().name == "MainProcess":  # pragma: no cover - import side effect
+    try:
+        _get_spectral_pool()
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).debug("spectral pool warm-up at import skipped", exc_info=True)
