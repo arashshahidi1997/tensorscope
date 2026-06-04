@@ -17,6 +17,7 @@ import {
   type AnnotationPopoverValue,
 } from "./AnnotationPopover";
 import { ExportDecisionsControls } from "./ExportDecisionsControls";
+import { EventFilterPanel } from "./EventFilterPanel";
 
 const NOTES_PREVIEW_LEN = 30;
 
@@ -49,9 +50,12 @@ type Props = {
   /** Color per pinned stream — used for the chip dots and matches the
    *  per-stream timeseries marker color. */
   streamColors: Map<string, string>;
-  /** Window query result per pinned stream. Streams without a fetch yet
-   *  are absent. */
+  /** Window query result per pinned stream (post property-filter). Streams
+   *  without a fetch yet are absent. */
   eventsByStream: Map<string, EventRecordDTO[]>;
+  /** Unfiltered window query result — feeds the filter panel's distribution
+   *  histograms so they don't collapse as filters tighten (E2). */
+  rawEventsByStream: Map<string, EventRecordDTO[]>;
   /** Seconds; tolerance for the coincidence summary. */
   coincidenceWindow: number;
   selectedTime: number;
@@ -92,6 +96,7 @@ export function EventTableView({
   activeStreamName,
   streamColors,
   eventsByStream,
+  rawEventsByStream,
   coincidenceWindow,
   selectedTime,
   selectedEventId,
@@ -119,6 +124,12 @@ export function EventTableView({
   const events = useMemo<EventRecordDTO[]>(
     () => (activeStreamName ? eventsByStream.get(activeStreamName) ?? [] : []),
     [eventsByStream, activeStreamName],
+  );
+  // Unfiltered active-stream records — drives the filter panel's distribution
+  // histograms (which must not collapse as the user tightens thresholds).
+  const rawEvents = useMemo<EventRecordDTO[]>(
+    () => (activeStreamName ? rawEventsByStream.get(activeStreamName) ?? [] : []),
+    [rawEventsByStream, activeStreamName],
   );
 
   // Coincidence summary count for the active stream (against every other
@@ -374,6 +385,21 @@ export function EventTableView({
             </select>
             <span className="muted shortcut-hint">y / n / m / u</span>
           </div>
+
+          <details className="event-property-filter" style={{ margin: "4px 0" }}>
+            <summary style={{ cursor: "pointer", fontSize: 12 }}>
+              Property filters
+            </summary>
+            <div style={{ padding: "6px 2px 2px" }}>
+              <EventFilterPanel
+                streamName={streamMeta.name}
+                records={rawEvents}
+                filteredCount={events.length}
+                columns={streamMeta.columns}
+                excludeColumns={[streamMeta.time_col, streamMeta.id_col]}
+              />
+            </div>
+          </details>
 
           {pinnedStreams.length >= 2 && (
             <p

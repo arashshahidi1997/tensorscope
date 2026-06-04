@@ -236,6 +236,7 @@ function App() {
                 activeStreamName={activeStreamName}
                 streamColors={streamColors}
                 eventsByStream={filteredEventsByStream}
+                rawEventsByStream={eventsByStream}
                 coincidenceWindow={coincidenceWindow}
                 selectedTime={selectionState.timeCursor}
                 selectedEventId={eventNav.selectedEventId}

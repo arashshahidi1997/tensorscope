@@ -84,6 +84,131 @@ export function resolveEventProperty(
   return undefined;
 }
 
+// ── Property enumeration + histogram (E2: data-driven filter UI) ───────────
+
+/** A numeric property the user can threshold, with its loaded-data range. */
+export type FilterableProperty = { key: string; label: string; min: number; max: number };
+
+/**
+ * Structural / coordinate / categorical columns that are never thresholdable
+ * properties (identity, the time stamp + interval bounds, spatial coords, and
+ * the categorical labels). Compared case-insensitively.
+ */
+const BLOCKED_COLUMNS = new Set<string>([
+  "event_id", "id", "name", "label", "state", "brainstate", "motor_state",
+  "t", "t0", "t1", "event_start", "event_end",
+  "peak_time", "trough_time", "midcrossing_time",
+  "ap", "ml", "channel", "x", "y", "z",
+]);
+
+/** Raw column name → canonical property key (collapses detector aliases). */
+const COLUMN_TO_CANONICAL: Record<string, string> = {
+  value: "peak_z",
+  peak_z: "peak_z",
+  freq: "frequency",
+  freq_peak: "frequency",
+  frequency: "frequency",
+};
+
+/** Human labels for the canonical keys; falls back to the key itself. */
+export const PROPERTY_LABELS: Record<string, string> = {
+  peak_z: "peak z-score",
+  frequency: "frequency (Hz)",
+  duration: "duration (s)",
+  duration_neg: "neg. duration (s)",
+  amplitude: "amplitude",
+  rel_power: "rel. power",
+  symmetry: "symmetry",
+};
+
+/** Map a raw column to its canonical filter key. */
+export function canonicalProperty(column: string): string {
+  return COLUMN_TO_CANONICAL[column.toLowerCase()] ?? column;
+}
+
+/**
+ * Enumerate the numeric, thresholdable properties present in a stream's loaded
+ * records — the data-driven basis for the filter UI (event-filtering-plan.md
+ * E2). Columns are canonicalized (aliases collapsed) and screened against a
+ * blocklist of structural/coordinate/categorical columns plus the caller's
+ * `exclude` (typically the stream's time_col + id_col). `duration` is offered
+ * whenever a span is resolvable even without an explicit column. Only
+ * properties with an actual range (min < max over the loaded events) are
+ * returned — a zero-width slider has nothing to threshold.
+ */
+export function enumerateFilterableProperties(
+  records: EventRecordDTO[],
+  columns: string[],
+  exclude: string[] = [],
+): FilterableProperty[] {
+  const excludeSet = new Set(exclude.map((c) => c.toLowerCase()));
+  const candidates = new Set<string>();
+  for (const col of columns) {
+    const lc = col.toLowerCase();
+    if (BLOCKED_COLUMNS.has(lc) || excludeSet.has(lc)) continue;
+    candidates.add(canonicalProperty(col));
+  }
+  // Duration is synthetic — resolvable from t0/t1 even when no column exists.
+  candidates.add("duration");
+
+  const out: FilterableProperty[] = [];
+  for (const key of candidates) {
+    let min = Infinity;
+    let max = -Infinity;
+    let n = 0;
+    for (const rec of records) {
+      const v = resolveEventProperty(rec.record, key);
+      if (v === undefined) continue;
+      n += 1;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+    if (n === 0 || !Number.isFinite(min) || !Number.isFinite(max) || min >= max) continue;
+    out.push({ key, label: PROPERTY_LABELS[key] ?? key, min, max });
+  }
+  out.sort((a, b) => a.label.localeCompare(b.label));
+  return out;
+}
+
+/** Histogram bin counts over [min,max] of the finite values. */
+export type Histogram = { counts: number[]; min: number; max: number; binWidth: number };
+
+/**
+ * Bin finite values into `nBins` equal-width buckets over their [min,max].
+ * The maximum value falls in the last bin (right-inclusive top edge). Returns
+ * a single full bin when all values are equal. Pure; golden-tested.
+ */
+export function computeHistogram(values: number[], nBins: number): Histogram {
+  const finite = values.filter((v) => Number.isFinite(v));
+  if (finite.length === 0 || nBins < 1) return { counts: [], min: 0, max: 0, binWidth: 0 };
+  let min = Infinity;
+  let max = -Infinity;
+  for (const v of finite) {
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  if (min === max) return { counts: [finite.length], min, max, binWidth: 0 };
+  const binWidth = (max - min) / nBins;
+  const counts = new Array<number>(nBins).fill(0);
+  for (const v of finite) {
+    let idx = Math.floor((v - min) / binWidth);
+    if (idx >= nBins) idx = nBins - 1;
+    if (idx < 0) idx = 0;
+    counts[idx] += 1;
+  }
+  return { counts, min, max, binWidth };
+}
+
+/** Resolve every finite value of a canonical property across records (for the histogram). */
+export function propertyValues(records: EventRecordDTO[], key: string): number[] {
+  const out: number[] = [];
+  for (const rec of records) {
+    const v = resolveEventProperty(rec.record, key);
+    if (v !== undefined) out.push(v);
+  }
+  return out;
+}
+
 /** True when at least one stream carries an active property filter. */
 function hasAnyFilter(filters: EventFilters): boolean {
   for (const stream in filters) {

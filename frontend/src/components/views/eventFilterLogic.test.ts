@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   applyEventFilters,
+  canonicalProperty,
+  computeHistogram,
+  enumerateFilterableProperties,
+  propertyValues,
   resolveEventProperty,
   resolveEventSpan,
 } from "./eventFilterLogic";
@@ -119,5 +123,82 @@ describe("applyEventFilters", () => {
     // ripple untouched (same records), spindle filtered
     expect(out.get("ripple")).toBe(m.get("ripple"));
     expect(out.get("spindle")!.length).toBe(1);
+  });
+});
+
+describe("canonicalProperty", () => {
+  it("collapses detector aliases to a canonical key, case-insensitively", () => {
+    expect(canonicalProperty("value")).toBe("peak_z");
+    expect(canonicalProperty("freq")).toBe("frequency");
+    expect(canonicalProperty("FREQ_PEAK")).toBe("frequency");
+    expect(canonicalProperty("amplitude")).toBe("amplitude"); // unknown → itself
+  });
+});
+
+describe("enumerateFilterableProperties", () => {
+  it("offers only ranged numeric properties; excludes structural/constant cols", () => {
+    // Mirrors the demo `events` stream columns.
+    const records = [
+      rec({ event_id: 0, t: 0.66, AP: 0.5, ML: 0.0, freq: 11.3, amplitude: 1.5, label: "burst" }),
+      rec({ event_id: 1, t: 1.68, AP: 0.4, ML: 0.7, freq: 9.0, amplitude: 1.5, label: "burst" }),
+      rec({ event_id: 2, t: 3.11, AP: 0.2, ML: 0.5, freq: 10.3, amplitude: 1.5, label: "burst" }),
+    ];
+    const cols = ["event_id", "t", "AP", "ML", "freq", "amplitude", "label"];
+    const props = enumerateFilterableProperties(records, cols, ["t", "event_id"]);
+    const keys = props.map((p) => p.key);
+    // freq → canonical `frequency` (ranged); amplitude constant (min==max) dropped;
+    // event_id/t/AP/ML/label all excluded; no span → no `duration`.
+    expect(keys).toEqual(["frequency"]);
+    const freq = props.find((p) => p.key === "frequency")!;
+    expect(freq.min).toBeCloseTo(9.0);
+    expect(freq.max).toBeCloseTo(11.3);
+    expect(freq.label).toBe("frequency (Hz)");
+  });
+
+  it("offers a computed `duration` for interval events", () => {
+    const records = [
+      rec({ t: 1, t0: 0.9, t1: 1.2, value: 3 }),
+      rec({ t: 2, t0: 1.8, t1: 2.5, value: 5 }),
+    ];
+    const props = enumerateFilterableProperties(records, ["t", "t0", "t1", "value"], ["t"]);
+    const keys = props.map((p) => p.key).sort();
+    expect(keys).toContain("duration");
+    expect(keys).toContain("peak_z"); // value → peak_z
+    const dur = props.find((p) => p.key === "duration")!;
+    expect(dur.min).toBeCloseTo(0.3);
+    expect(dur.max).toBeCloseTo(0.7);
+  });
+});
+
+describe("computeHistogram", () => {
+  it("bins values into equal-width buckets, max in the last bin", () => {
+    const h = computeHistogram([0, 1, 2, 3, 4], 4);
+    expect(h.min).toBe(0);
+    expect(h.max).toBe(4);
+    expect(h.binWidth).toBe(1);
+    // edges [0,1),[1,2),[2,3),[3,4]; 4 lands in the last bin
+    expect(h.counts).toEqual([1, 1, 1, 2]);
+    expect(h.counts.reduce((a, b) => a + b, 0)).toBe(5);
+  });
+
+  it("returns a single full bin when all values are equal", () => {
+    expect(computeHistogram([1.5, 1.5, 1.5], 10)).toEqual({
+      counts: [3],
+      min: 1.5,
+      max: 1.5,
+      binWidth: 0,
+    });
+  });
+
+  it("ignores non-finite values and handles empty input", () => {
+    expect(computeHistogram([NaN, Infinity], 5).counts).toEqual([]);
+    expect(computeHistogram([], 5).counts).toEqual([]);
+  });
+});
+
+describe("propertyValues", () => {
+  it("resolves every finite value of a canonical property (alias-aware)", () => {
+    const records = [rec({ value: 3 }), rec({ value: "5" }), rec({ /* missing */ })];
+    expect(propertyValues(records, "peak_z")).toEqual([3, 5]);
   });
 });

@@ -16,6 +16,8 @@ type EventsTabContentProps = {
   activeStreamName: string | null;
   streamColors: Map<string, string>;
   eventsByStream: Map<string, EventRecordDTO[]>;
+  /** Unfiltered events — feeds the filter UI's distribution histograms (E2). */
+  rawEventsByStream: Map<string, EventRecordDTO[]>;
   coincidenceWindow: number;
   selectedTime: number;
   selectedEventId: string | number | null;
@@ -36,6 +38,7 @@ export function EventsTabContent({
   activeStreamName,
   streamColors,
   eventsByStream,
+  rawEventsByStream,
   coincidenceWindow,
   selectedTime,
   selectedEventId,
@@ -56,6 +59,7 @@ export function EventsTabContent({
       activeStreamName={activeStreamName}
       streamColors={streamColors}
       eventsByStream={eventsByStream}
+      rawEventsByStream={rawEventsByStream}
       coincidenceWindow={coincidenceWindow}
       selectedTime={selectedTime}
       selectedEventId={selectedEventId}
