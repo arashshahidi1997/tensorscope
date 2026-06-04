@@ -55,6 +55,18 @@ type AppStore = {
   psdLockToEvent: boolean;
   freqLogScale: boolean;
   /**
+   * Spectrogram-live frequency range + window length. These are the only
+   * frontend control over the `spectrogram_live` view's band: without them the
+   * TF panel was pinned to the server defaults (0.5–30 Hz), making ripples
+   * (100–250 Hz) literally unviewable. Threaded into `makeSpectrogramLiveRequest`
+   * via `useWorkspaceData` → `spectrogram_live_params`. Defaults mirror the
+   * server DTO (`SpectrogramLiveParamsDTO`: fmin 0.5 / fmax 30 / nperseg_s 1.0)
+   * so the default render is unchanged. See oscillation-coupling-plan.md A1.
+   */
+  specFmin: number;
+  specFmax: number;
+  specNpersegS: number;
+  /**
    * Per-view bandpass overlay (timeseries view). Controls the
    * filtered-band feature from `docs/design/filtered-band-overlay.md`.
    * `preset === "off"` disables the overlay entirely.
@@ -98,6 +110,9 @@ type AppStore = {
   setPsdWindowS: (value: number) => void;
   togglePsdLockToEvent: () => void;
   toggleFreqLogScale: () => void;
+  setSpecFmin: (value: number) => void;
+  setSpecFmax: (value: number) => void;
+  setSpecNpersegS: (value: number) => void;
   setBandPreset: (preset: BandPreset) => void;
   setBandCustom: (lo: number, hi: number) => void;
   /**
@@ -188,11 +203,17 @@ export const useAppStore = create<AppStore>((set) => ({
   psdWindowS: 1,
   psdLockToEvent: false,
   freqLogScale: false,
+  specFmin: 0.5,
+  specFmax: 30,
+  specNpersegS: 1.0,
   setPsdFmax: (value) => set({ psdFmax: value }),
   setPsdNW: (value) => set({ psdNW: value }),
   setPsdWindowS: (value) => set({ psdWindowS: value }),
   togglePsdLockToEvent: () => set((s) => ({ psdLockToEvent: !s.psdLockToEvent })),
   toggleFreqLogScale: () => set((s) => ({ freqLogScale: !s.freqLogScale })),
+  setSpecFmin: (value) => set({ specFmin: value }),
+  setSpecFmax: (value) => set({ specFmax: value }),
+  setSpecNpersegS: (value) => set({ specNpersegS: value }),
   bandPreset: "off",
   bandCustom: [11, 16],
   setBandPreset: (preset) => set({ bandPreset: preset }),

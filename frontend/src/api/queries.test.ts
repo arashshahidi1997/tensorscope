@@ -373,6 +373,21 @@ describe("makeSpectrogramLiveRequest", () => {
     const req = makeSpectrogramLiveRequest(SEL, [0, 10]);
     expect(req.spectrogram_live_params).toBeUndefined();
   });
+
+  it("carries the A1 ripple band (fmax_hz 250) + window through the params slot", () => {
+    // A1: useWorkspaceData threads the appStore spec fields here. Raising
+    // fmax_hz to 250 is what makes ripples viewable (server default caps at 30).
+    const req = makeSpectrogramLiveRequest(SEL, [0, 10], {
+      fmin_hz: 80,
+      fmax_hz: 250,
+      nperseg_s: 0.25,
+    });
+    expect(req.spectrogram_live_params).toEqual({
+      fmin_hz: 80,
+      fmax_hz: 250,
+      nperseg_s: 0.25,
+    });
+  });
 });
 
 describe("makePropagationMovieRequest", () => {

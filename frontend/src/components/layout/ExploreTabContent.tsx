@@ -60,6 +60,12 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
     setPsdWindowS,
     togglePsdLockToEvent,
     toggleFreqLogScale,
+    specFmin,
+    specFmax,
+    specNpersegS,
+    setSpecFmin,
+    setSpecFmax,
+    setSpecNpersegS,
   } = useAppStore();
 
   // Pull bounds for the SelectionPanel sliders from the active tensor's
@@ -201,6 +207,60 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
               onChange={toggleFreqLogScale}
             />
             Log frequency scale
+          </label>
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Spectrogram Settings" defaultOpen={false}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "4px 0" }}>
+          <div style={{ fontSize: 11, color: "#8b949e", lineHeight: 1.4 }}>
+            TF panel band &amp; window. Raise F<sub>max</sub> to see fast bands
+            (e.g. 250 Hz for ripples) — the default 0.5&ndash;30 Hz hides them.
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+            F<sub>min</sub> (Hz)
+            <input
+              type="number"
+              min={0}
+              max={1000}
+              step={0.5}
+              value={specFmin}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (Number.isFinite(v) && v >= 0) setSpecFmin(v);
+              }}
+              style={{ width: 60, fontSize: 12 }}
+            />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+            F<sub>max</sub> (Hz)
+            <input
+              type="number"
+              min={1}
+              max={1000}
+              step={10}
+              value={specFmax}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (Number.isFinite(v) && v > 0) setSpecFmax(v);
+              }}
+              style={{ width: 60, fontSize: 12 }}
+            />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+            Window (s)
+            <input
+              type="number"
+              min={0.01}
+              max={60}
+              step={0.1}
+              value={specNpersegS}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (Number.isFinite(v) && v > 0) setSpecNpersegS(v);
+              }}
+              style={{ width: 60, fontSize: 12 }}
+            />
           </label>
         </div>
       </CollapsibleSection>

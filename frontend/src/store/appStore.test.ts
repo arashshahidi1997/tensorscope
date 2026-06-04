@@ -20,6 +20,9 @@ beforeEach(() => {
     psdNW: 4,
     psdWindowS: 1,
     freqLogScale: false,
+    specFmin: 0.5,
+    specFmax: 30,
+    specNpersegS: 1.0,
   });
 });
 
@@ -130,5 +133,25 @@ describe("PSD settings", () => {
     expect(getStore().freqLogScale).toBe(true);
     getStore().toggleFreqLogScale();
     expect(getStore().freqLogScale).toBe(false);
+  });
+});
+
+describe("Spectrogram settings (A1)", () => {
+  it("defaults mirror the server DTO (0.5 / 30 / 1.0)", () => {
+    const s = getStore();
+    expect(s.specFmin).toBe(0.5);
+    expect(s.specFmax).toBe(30);
+    expect(s.specNpersegS).toBe(1.0);
+  });
+
+  it("setSpecFmin / setSpecFmax / setSpecNpersegS update the corresponding fields", () => {
+    // Raising fmax to 250 is what makes ripples viewable in the TF panel.
+    getStore().setSpecFmax(250);
+    getStore().setSpecFmin(80);
+    getStore().setSpecNpersegS(0.25);
+    const s = getStore();
+    expect(s.specFmax).toBe(250);
+    expect(s.specFmin).toBe(80);
+    expect(s.specNpersegS).toBe(0.25);
   });
 });
