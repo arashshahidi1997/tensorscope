@@ -1,17 +1,21 @@
 // @vitest-environment jsdom
 /**
- * Frontend parity tests for the contract-v2 decoder + extractor.
+ * Tests for the contract-v2 decoder + extractors.
  *
  * Two layers:
  *
- *  1. Pure-TS unit tests construct a `LabeledTensor` directly (no IPC) and
- *     assert `extractPSDHeatmapV2` produces the same shape / labels / values
- *     as v1's `extractPSDHeatmap` on the equivalent long-format payload.
- *  2. A round-trip parity test invokes the live python encoder
+ *  1. Pure-TS unit tests construct a `LabeledTensor` directly (no IPC). For the
+ *     views whose v1 extractor was retired in the contract-v2 Phase-5 cleanup
+ *     (PSD heatmap / average / spatial, spatial frames) the v2 extractor is
+ *     asserted against frozen GOLDEN_* literals — captured from the original v1
+ *     output before deletion, now the standalone spec. Views whose v1 extractor
+ *     is still in production (extractFreqCurve, extractSpatialCells,
+ *     extractHeatmapND) keep a live v1↔v2 parity comparison.
+ *  2. A round-trip test invokes the live python encoder
  *     (`.pixi/envs/default/bin/python -c "encode_arrow_v2(...)"`) on a
  *     synthetic (freq, AP, ML) cube and decodes those real wire bytes
- *     through `decodeLabeledTensor`. This is the parity gate matching the
- *     backend test in `tests/test_slice_v2.py`.
+ *     through `decodeLabeledTensor`, asserting the same golden. This matches
+ *     the backend test in `tests/test_slice_v2.py`.
  *
  * If python is unavailable in CI, the unit tests still run; the round-trip
  * test guards itself with `it.skipIf`.
@@ -36,11 +40,7 @@ import {
 import {
   decodeArrowSlice,
   extractFreqCurve,
-  extractPSDAverage,
-  extractPSDHeatmap,
-  extractPSDSpatialAtFreq,
   extractSpatialCells,
-  extractSpatialFrames,
   extractSpectrogram,
   extractTimeseriesColumnar,
 } from "./arrow";
@@ -81,46 +81,6 @@ function buildSpatialSlice(
   };
 }
 
-/** Long-format (time, AP, ML, value) slice for propagation_movie parity. */
-function buildTimeSpatialSlice(
-  times: number[],
-  apVals: number[],
-  mlVals: number[],
-  values: Float32Array,
-): TensorSliceDTO {
-  const nT = times.length;
-  const nAP = apVals.length;
-  const nML = mlVals.length;
-  const total = nT * nAP * nML;
-  const cT = new Float64Array(total);
-  const cAP = new Float64Array(total);
-  const cML = new Float64Array(total);
-  const cVal = new Float64Array(total);
-  let idx = 0;
-  for (let ti = 0; ti < nT; ti++) {
-    for (let a = 0; a < nAP; a++) {
-      for (let m = 0; m < nML; m++) {
-        cT[idx] = times[ti];
-        cAP[idx] = apVals[a];
-        cML[idx] = mlVals[m];
-        cVal[idx] = values[ti * nAP * nML + a * nML + m];
-        idx++;
-      }
-    }
-  }
-  const table = tableFromArrays({ time: cT, AP: cAP, ML: cML, value: cVal });
-  const payload = Buffer.from(tableToIPC(table)).toString("base64");
-  return {
-    name: "test",
-    view_type: "propagation_movie",
-    dims: ["time", "AP", "ML"],
-    shape: [nT, nAP, nML],
-    encoding: "arrow_ipc",
-    payload,
-    meta: {},
-  };
-}
-
 const PY_PATH = resolve(__dirname, "../../../.pixi/envs/default/bin/python");
 const PY_AVAILABLE = existsSync(PY_PATH);
 
@@ -130,8 +90,8 @@ function buildLongFormatSlice(
   mlVals: number[],
   values: Float32Array,
 ): TensorSliceDTO {
-  // Equivalent v1 long-format payload for the same (freq, AP, ML) cube —
-  // needed so we can drive `extractPSDHeatmap` and compare against v2.
+  // Equivalent v1 long-format payload for the same (freq, AP, ML) cube — used by
+  // the surviving extractFreqCurve parity check.
   const nF = freqs.length;
   const nAP = apVals.length;
   const nML = mlVals.length;
@@ -191,8 +151,36 @@ function syntheticCube(): {
   return { freqs, ap, ml, values };
 }
 
+// Golden outputs for `syntheticCube()`, frozen from the original v1 extractors
+// (extractPSDHeatmap / extractPSDAverage / extractPSDSpatialAtFreq) before they
+// were deleted in the contract-v2 Phase-5 cleanup. These are now the spec the
+// v2 extractors must reproduce — a standalone golden, not a v1 cross-check.
+const GOLDEN_HEATMAP = {
+  freqs: [10, 20, 30, 40],
+  channelLabels: ["AP0_ML100", "AP0_ML200", "AP1_ML100", "AP1_ML200", "AP2_ML100", "AP2_ML200"],
+  matrix: [
+    [0, 1, 10, 11, 20, 21],
+    [100, 101, 110, 111, 120, 121],
+    [200, 201, 210, 211, 220, 221],
+    [300, 301, 310, 311, 320, 321],
+  ],
+};
+const GOLDEN_PSDAVG = {
+  freqs: [10, 20, 30, 40],
+  mean: [10.5, 110.5, 210.5, 310.5],
+  std: [8.180260794538684, 8.180260794538684, 8.180260794538684, 8.180260794538684],
+};
+const GOLDEN_PSDSPATIAL = [
+  { ap: 0, ml: 0, value: 100 },
+  { ap: 0, ml: 1, value: 101 },
+  { ap: 1, ml: 0, value: 110 },
+  { ap: 1, ml: 1, value: 111 },
+  { ap: 2, ml: 0, value: 120 },
+  { ap: 2, ml: 1, value: 121 },
+];
+
 describe("decodeLabeledTensor + extractPSDHeatmapV2 (no IPC)", () => {
-  it("matches v1 extractPSDHeatmap on the same (freq, AP, ML) cube", () => {
+  it("reproduces the frozen PSD-heatmap golden on a (freq, AP, ML) cube", () => {
     const { freqs, ap, ml, values } = syntheticCube();
 
     // v2 path: build LabeledTensor directly (no IPC round-trip).
@@ -215,18 +203,13 @@ describe("decodeLabeledTensor + extractPSDHeatmapV2 (no IPC)", () => {
     };
     const v2 = extractPSDHeatmapV2(labeled);
 
-    // v1 path: build a long-format Arrow slice with identical values.
-    const v1Slice = buildLongFormatSlice(freqs, ap, ml, values);
-    const v1 = extractPSDHeatmap(decodeArrowSlice(v1Slice));
-
-    expect(v2.freqs).toEqual(v1.freqs);
-    expect(v2.channelLabels).toEqual(v1.channelLabels);
-    expect(v2.matrix.length).toBe(v1.matrix.length);
-    for (let fi = 0; fi < v2.matrix.length; fi++) {
-      for (let ci = 0; ci < v2.matrix[fi].length; ci++) {
-        // Both paths carry the same underlying float values; equality is
-        // exact within float32 representability.
-        expect(v2.matrix[fi][ci]).toBeCloseTo(v1.matrix[fi][ci], 5);
+    expect(v2.freqs).toEqual(GOLDEN_HEATMAP.freqs);
+    expect(v2.channelLabels).toEqual(GOLDEN_HEATMAP.channelLabels);
+    expect(v2.matrix.length).toBe(GOLDEN_HEATMAP.matrix.length);
+    for (let fi = 0; fi < GOLDEN_HEATMAP.matrix.length; fi++) {
+      for (let ci = 0; ci < GOLDEN_HEATMAP.matrix[fi].length; ci++) {
+        // Float32-representable integers; golden is the frozen v1 output.
+        expect(v2.matrix[fi][ci]).toBeCloseTo(GOLDEN_HEATMAP.matrix[fi][ci], 5);
       }
     }
   });
@@ -505,7 +488,7 @@ describe("decodeLabeledTensor — round-trip via the live python encoder", () =>
   // python env isn't available (e.g. portable CI without the project env).
   const itIfPy = PY_AVAILABLE ? it : it.skip;
 
-  itIfPy("decodes a real v2 IPC payload and matches the v1 extractor", { timeout: 60_000 }, () => {
+  itIfPy("decodes a real v2 IPC payload and reproduces the PSD-heatmap golden", { timeout: 60_000 }, () => {
     const { freqs, ap, ml, values } = syntheticCube();
 
     // Have python emit base64-encoded v2 IPC bytes for this exact cube.
@@ -532,15 +515,13 @@ sys.stdout.write(base64.b64encode(encode_arrow_v2(da)).decode("ascii"))
     expect(labeled.meta.shape).toEqual([freqs.length, ap.length, ml.length]);
     const v2 = extractPSDHeatmapV2(labeled);
 
-    // v1 extractor on the equivalent long-format payload.
-    const v1Slice = buildLongFormatSlice(freqs, ap, ml, values);
-    const v1 = extractPSDHeatmap(decodeArrowSlice(v1Slice));
-
-    expect(v2.freqs).toEqual(v1.freqs);
-    expect(v2.channelLabels).toEqual(v1.channelLabels);
-    for (let fi = 0; fi < v2.matrix.length; fi++) {
-      for (let ci = 0; ci < v2.matrix[fi].length; ci++) {
-        expect(v2.matrix[fi][ci]).toBeCloseTo(v1.matrix[fi][ci], 5);
+    // Real wire bytes from the live python encoder must decode to the same
+    // frozen v1 golden as the no-IPC test.
+    expect(v2.freqs).toEqual(GOLDEN_HEATMAP.freqs);
+    expect(v2.channelLabels).toEqual(GOLDEN_HEATMAP.channelLabels);
+    for (let fi = 0; fi < GOLDEN_HEATMAP.matrix.length; fi++) {
+      for (let ci = 0; ci < GOLDEN_HEATMAP.matrix[fi].length; ci++) {
+        expect(v2.matrix[fi][ci]).toBeCloseTo(GOLDEN_HEATMAP.matrix[fi][ci], 5);
       }
     }
   });
@@ -596,7 +577,7 @@ describe("extractHeatmapNDV2 parity", () => {
 });
 
 describe("extractPSDAverageV2 parity", () => {
-  it("matches v1 extractPSDAverage on a (freq, AP, ML) cube", () => {
+  it("reproduces the frozen PSD-average golden on a (freq, AP, ML) cube", () => {
     const { freqs, ap, ml, values } = syntheticCube();
     const labeled: LabeledTensor = {
       meta: {
@@ -616,13 +597,12 @@ describe("extractPSDAverageV2 parity", () => {
       },
     };
     const v2 = extractPSDAverageV2(labeled);
-    const v1 = extractPSDAverage(decodeArrowSlice(buildLongFormatSlice(freqs, ap, ml, values)));
 
-    expect(v2.freqs).toEqual(v1.freqs);
-    expect(v2.mean.length).toBe(v1.mean.length);
-    for (let i = 0; i < v2.mean.length; i++) {
-      expect(v2.mean[i]).toBeCloseTo(v1.mean[i], 4);
-      expect(v2.std[i]).toBeCloseTo(v1.std[i], 4);
+    expect(v2.freqs).toEqual(GOLDEN_PSDAVG.freqs);
+    expect(v2.mean.length).toBe(GOLDEN_PSDAVG.mean.length);
+    for (let i = 0; i < GOLDEN_PSDAVG.mean.length; i++) {
+      expect(v2.mean[i]).toBeCloseTo(GOLDEN_PSDAVG.mean[i], 4);
+      expect(v2.std[i]).toBeCloseTo(GOLDEN_PSDAVG.std[i], 4);
     }
   });
 
@@ -659,7 +639,7 @@ describe("extractPSDAverageV2 parity", () => {
 });
 
 describe("extractPSDSpatialV2 parity", () => {
-  it("matches v1 extractPSDSpatialAtFreq at the nearest freq", () => {
+  it("reproduces the frozen PSD-spatial golden at the nearest freq", () => {
     const { freqs, ap, ml, values } = syntheticCube();
     const targetFreq = 22; // nearest is 20
     const labeled: LabeledTensor = {
@@ -680,14 +660,11 @@ describe("extractPSDSpatialV2 parity", () => {
       },
     };
     const v2 = extractPSDSpatialV2(labeled, targetFreq);
-    const v1 = extractPSDSpatialAtFreq(
-      decodeArrowSlice(buildLongFormatSlice(freqs, ap, ml, values)),
-      targetFreq,
-    );
 
-    expect(v2.map((c) => [c.ap, c.ml])).toEqual(v1.map((c) => [c.ap, c.ml]));
-    for (let i = 0; i < v2.length; i++) {
-      expect(v2[i].value).toBeCloseTo(v1[i].value, 4);
+    // Golden = frozen v1 extractPSDSpatialAtFreq output at the nearest freq (20).
+    expect(v2.map((c) => [c.ap, c.ml])).toEqual(GOLDEN_PSDSPATIAL.map((c) => [c.ap, c.ml]));
+    for (let i = 0; i < GOLDEN_PSDSPATIAL.length; i++) {
+      expect(v2[i].value).toBeCloseTo(GOLDEN_PSDSPATIAL[i].value, 4);
     }
   });
 });
@@ -724,7 +701,7 @@ describe("extractSpatialCellsV2 parity", () => {
 });
 
 describe("extractSpatialFramesV2 parity", () => {
-  it("matches v1 extractSpatialFrames on a (time, AP, ML) cube", () => {
+  it("reproduces the frozen spatial-frames golden on a (time, AP, ML) cube", () => {
     const times = [0.0, 0.1, 0.2];
     const ap = [0, 1];
     const ml = [100, 200];
@@ -755,22 +732,33 @@ describe("extractSpatialFramesV2 parity", () => {
       },
     };
     const v2 = extractSpatialFramesV2(labeled);
-    const v1 = extractSpatialFrames(
-      decodeArrowSlice(buildTimeSpatialSlice(times, ap, ml, values)),
-    );
 
-    expect(v2.nAP).toBe(v1.nAP);
-    expect(v2.nML).toBe(v1.nML);
-    expect(v2.min).toBeCloseTo(v1.min, 5);
-    expect(v2.max).toBeCloseTo(v1.max, 5);
-    expect(v2.frames.length).toBe(v1.frames.length);
-    for (let fi = 0; fi < v2.frames.length; fi++) {
-      expect(v2.frames[fi].time).toBeCloseTo(v1.frames[fi].time, 5);
+    // Golden = frozen v1 extractSpatialFrames output for this (time, AP, ML) cube
+    // (values = ti*1000 + a*10 + m; AP/ML rank-normalised to 0-based indices).
+    const golden = {
+      nAP: 2,
+      nML: 2,
+      min: 0,
+      max: 2011,
+      frames: [
+        { time: 0, cells: [ { ap: 0, ml: 0, value: 0 }, { ap: 0, ml: 1, value: 1 }, { ap: 1, ml: 0, value: 10 }, { ap: 1, ml: 1, value: 11 } ] },
+        { time: 0.1, cells: [ { ap: 0, ml: 0, value: 1000 }, { ap: 0, ml: 1, value: 1001 }, { ap: 1, ml: 0, value: 1010 }, { ap: 1, ml: 1, value: 1011 } ] },
+        { time: 0.2, cells: [ { ap: 0, ml: 0, value: 2000 }, { ap: 0, ml: 1, value: 2001 }, { ap: 1, ml: 0, value: 2010 }, { ap: 1, ml: 1, value: 2011 } ] },
+      ],
+    };
+
+    expect(v2.nAP).toBe(golden.nAP);
+    expect(v2.nML).toBe(golden.nML);
+    expect(v2.min).toBeCloseTo(golden.min, 5);
+    expect(v2.max).toBeCloseTo(golden.max, 5);
+    expect(v2.frames.length).toBe(golden.frames.length);
+    for (let fi = 0; fi < golden.frames.length; fi++) {
+      expect(v2.frames[fi].time).toBeCloseTo(golden.frames[fi].time, 5);
       expect(v2.frames[fi].cells.map((c) => [c.ap, c.ml])).toEqual(
-        v1.frames[fi].cells.map((c) => [c.ap, c.ml]),
+        golden.frames[fi].cells.map((c) => [c.ap, c.ml]),
       );
-      for (let ci = 0; ci < v2.frames[fi].cells.length; ci++) {
-        expect(v2.frames[fi].cells[ci].value).toBeCloseTo(v1.frames[fi].cells[ci].value, 5);
+      for (let ci = 0; ci < golden.frames[fi].cells.length; ci++) {
+        expect(v2.frames[fi].cells[ci].value).toBeCloseTo(golden.frames[fi].cells[ci].value, 5);
       }
     }
   });

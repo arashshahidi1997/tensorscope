@@ -6,11 +6,7 @@ import {
   extractTimeseriesColumnar,
   extractTimeseriesColumnarFast,
   extractSpatialCells,
-  extractSpatialFrames,
   extractFreqCurve,
-  extractPSDHeatmap,
-  extractPSDAverage,
-  extractPSDSpatialAtFreq,
   extractSpectrogram,
   extractTrajectory,
   toNumber,
@@ -135,70 +131,6 @@ describe("extractSpatialCells", () => {
   });
 });
 
-describe("extractSpatialFrames", () => {
-  it("groups (time, AP, ML) rows into per-frame cell arrays with global min/max", () => {
-    const decoded = decodeArrowSlice(
-      buildSlice({
-        time: [0, 0, 0, 0, 1, 1, 1, 1],
-        AP: [0, 0, 1, 1, 0, 0, 1, 1],
-        ML: [0, 1, 0, 1, 0, 1, 0, 1],
-        value: [1, 2, 3, 4, 10, 20, 30, 40],
-      }),
-    );
-    const movie = extractSpatialFrames(decoded);
-    expect(movie.frames).toHaveLength(2);
-    expect(movie.nAP).toBe(2);
-    expect(movie.nML).toBe(2);
-    expect(movie.min).toBe(1);
-    expect(movie.max).toBe(40);
-    expect(movie.frames[0].time).toBe(0);
-    expect(movie.frames[1].time).toBe(1);
-    // Frame 0 cells sorted by (ap, ml)
-    expect(movie.frames[0].cells).toEqual([
-      { ap: 0, ml: 0, value: 1 },
-      { ap: 0, ml: 1, value: 2 },
-      { ap: 1, ml: 0, value: 3 },
-      { ap: 1, ml: 1, value: 4 },
-    ]);
-  });
-
-  it("normalizes float AP/ML coords to 0-based ranks with stable order across frames", () => {
-    const decoded = decodeArrowSlice(
-      buildSlice({
-        time: [0, 0, 1, 1],
-        AP: [0.5, 1.5, 0.5, 1.5],
-        ML: [10, 20, 10, 20],
-        value: [1, 2, 3, 4],
-      }),
-    );
-    const movie = extractSpatialFrames(decoded);
-    expect(movie.frames[0].cells[0].ap).toBe(0);
-    expect(movie.frames[0].cells[1].ap).toBe(1);
-    expect(movie.frames[1].cells[0].ap).toBe(0);
-    expect(movie.frames[1].cells[1].ap).toBe(1);
-  });
-
-  it("returns empty movie when required columns are missing", () => {
-    const decoded = decodeArrowSlice(buildSlice({ AP: [0], value: [1] }));
-    const movie = extractSpatialFrames(decoded);
-    expect(movie.frames).toEqual([]);
-    expect(movie.nAP).toBe(0);
-  });
-
-  it("sorts frames by ascending time", () => {
-    const decoded = decodeArrowSlice(
-      buildSlice({
-        time: [2, 2, 0, 0, 1, 1],
-        AP: [0, 0, 0, 0, 0, 0],
-        ML: [0, 1, 0, 1, 0, 1],
-        value: [9, 9, 1, 1, 5, 5],
-      }),
-    );
-    const movie = extractSpatialFrames(decoded);
-    expect(movie.frames.map((f) => f.time)).toEqual([0, 1, 2]);
-  });
-});
-
 describe("extractFreqCurve", () => {
   it("averages values across spatial dims at each freq", () => {
     const decoded = decodeArrowSlice(
@@ -212,96 +144,6 @@ describe("extractFreqCurve", () => {
     const curve = extractFreqCurve(decoded);
     expect(curve.freqs).toEqual([10, 20]);
     expect(curve.values).toEqual([6, 15]);
-  });
-});
-
-describe("extractPSDHeatmap", () => {
-  it("builds (freq × channel) matrix with AP-then-ML ordering", () => {
-    const decoded = decodeArrowSlice(
-      buildSlice({
-        freq: [10, 10, 20, 20],
-        AP: [0, 1, 0, 1],
-        ML: [0, 0, 0, 0],
-        value: [1, 2, 3, 4],
-      }),
-    );
-    const hm = extractPSDHeatmap(decoded);
-    expect(hm.freqs).toEqual([10, 20]);
-    expect(hm.channelLabels).toEqual(["AP0_ML0", "AP1_ML0"]);
-    expect(hm.matrix).toEqual([
-      [1, 2],
-      [3, 4],
-    ]);
-  });
-
-  it("fills NaN for missing (freq, channel) cells", () => {
-    const decoded = decodeArrowSlice(
-      buildSlice({
-        freq: [10, 10, 20], // AP1 missing at freq=20
-        AP: [0, 1, 0],
-        ML: [0, 0, 0],
-        value: [1, 2, 3],
-      }),
-    );
-    const hm = extractPSDHeatmap(decoded);
-    expect(hm.matrix[0]).toEqual([1, 2]);
-    expect(hm.matrix[1][0]).toBe(3);
-    expect(Number.isNaN(hm.matrix[1][1])).toBe(true);
-  });
-
-  it("supports channel-keyed tensors without AP/ML", () => {
-    const decoded = decodeArrowSlice(
-      buildSlice({ freq: [10, 10], channel: [0, 1], value: [5, 7] }),
-    );
-    const hm = extractPSDHeatmap(decoded);
-    expect(hm.channelLabels).toEqual(["Ch0", "Ch1"]);
-    expect(hm.matrix).toEqual([[5, 7]]);
-  });
-});
-
-describe("extractPSDAverage", () => {
-  it("returns per-freq mean and std across channels", () => {
-    const decoded = decodeArrowSlice(
-      buildSlice({
-        freq: [10, 10, 10, 20, 20, 20],
-        channel: [0, 1, 2, 0, 1, 2],
-        value: [2, 4, 6, 10, 10, 10], // mean 4/σ≈1.633, mean 10/σ=0
-      }),
-    );
-    const avg = extractPSDAverage(decoded);
-    expect(avg.freqs).toEqual([10, 20]);
-    expect(avg.mean).toEqual([4, 10]);
-    expect(avg.std[0]).toBeCloseTo(Math.sqrt(8 / 3), 5);
-    expect(avg.std[1]).toBe(0);
-  });
-
-  it("reports std=0 when only one sample per freq", () => {
-    const decoded = decodeArrowSlice(buildSlice({ freq: [10, 20], value: [1, 2] }));
-    expect(extractPSDAverage(decoded).std).toEqual([0, 0]);
-  });
-});
-
-describe("extractPSDSpatialAtFreq", () => {
-  it("snaps to the nearest freq", () => {
-    const decoded = decodeArrowSlice(
-      buildSlice({
-        freq: [10, 10, 50, 50],
-        AP: [0, 1, 0, 1],
-        ML: [0, 0, 0, 0],
-        value: [1, 2, 3, 4],
-      }),
-    );
-    // target=48 → nearest is 50
-    const cells = extractPSDSpatialAtFreq(decoded, 48);
-    expect(cells).toEqual([
-      { ap: 0, ml: 0, value: 3 },
-      { ap: 1, ml: 0, value: 4 },
-    ]);
-  });
-
-  it("returns empty when spatial columns are missing", () => {
-    const decoded = decodeArrowSlice(buildSlice({ freq: [10], value: [1] }));
-    expect(extractPSDSpatialAtFreq(decoded, 10)).toEqual([]);
   });
 });
 
@@ -434,16 +276,6 @@ describe("extractTimeseriesColumnarFast — edge cases (N3)", () => {
     for (const s of result.series) {
       expect(s.values).toBeInstanceOf(Float32Array);
     }
-  });
-});
-
-describe("extractPSDAverage — edge cases (N3)", () => {
-  it("returns empty curves on an empty payload", () => {
-    const decoded = decodeArrowSlice(buildSlice({ freq: [], value: [] }));
-    const avg = extractPSDAverage(decoded);
-    expect(avg.freqs).toEqual([]);
-    expect(avg.mean).toEqual([]);
-    expect(avg.std).toEqual([]);
   });
 });
 
