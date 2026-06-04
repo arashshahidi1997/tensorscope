@@ -11,41 +11,22 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  clampWindow,
   eventTimeRange,
-  makeDefaultSliceRequest,
   useProcessingQuery,
   useSetProcessing,
-  makeNavigatorRequest,
-  makePSDLiveRequest,
-  makeSpectrogramLiveRequest,
-  makeTrajectoryRequest,
   PSD_EVENT_LOCK_MARGIN_S,
-  useBrainstateIntervalsQuery,
-  useBrainstateMetaQuery,
   useEventWindowQueries,
-  useSliceQuery,
   useStateQuery,
   useTensorQuery,
-  useV2PSDAverageQuery,
-  useV2PSDLiveQuery,
-  useV2SpatialQuery,
-  useV2SpectrogramQuery,
-  useV2TimeseriesQuery,
 } from "../../api/queries";
 import { coincidenceIndicesByStream, extractEventTimes } from "../../api/coincidence";
 import { useEventStreamsStore } from "../../store/eventStreamsStore";
 import { buildStreamColorMap } from "./eventStreamColors";
-import {
-  type ColumnarTimeseries,
-  type SpatialCell,
-  type Spectrogram,
-} from "../../api/arrow";
-import { extractPSDAverageV2, type LabeledTensor } from "../../api/v2-arrow";
+import { extractPSDAverageV2 } from "../../api/v2-arrow";
 import type { SelectionDTO, TensorSliceRequestDTO } from "../../api/types";
 import { resolveBand, useAppStore } from "../../store/appStore";
-import { useSelectionStore, toSelectionDTO } from "../../store/selectionStore";
-import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { useTimeNavigation } from "./useTimeNavigation";
+import { useWorkspaceData } from "./useWorkspaceData";
 import { getAvailableViews, getOrthoPair, viewRegistry } from "../../registry/viewRegistry";
 import { EventAverageView } from "./EventAverageView";
 import { TrackStack } from "./TrackStack";
@@ -68,12 +49,7 @@ import { OrthoSlicerView } from "./OrthoSlicerView";
 import { TensorChooser } from "./TensorChooser";
 import { TensorOverview } from "./TensorOverview";
 import { ViewGrid } from "./ViewGrid";
-import { buildViewQueryStatusMaps } from "./viewQueryStatus";
 import { ProcessingPanel } from "../controls/ProcessingPanel";
-
-/** Debounce (ms) between a window gesture settling and the slice refetch.
- * HiGlass uses ~100 ms; the live window still drives the chart x-scale. */
-const WINDOW_FETCH_DEBOUNCE_MS = 100;
 
 const PSD_LIVE_EXPANSION = ["psd_heatmap", "psd_curve", "psd_spatial"];
 
@@ -144,30 +120,6 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     objectLayoutMode,
     setObjectLayoutMode,
   } = useAppStore();
-  const selectionState = useSelectionStore();
-  const { timeWindow, setTimeWindow, setFreq, setHoveredElectrode, setDuration } = selectionState;
-  // Visible-window width (s) — DERIVED from the window, not stored. Highlights
-  // the matching TimeScaleBar preset; the single source of truth for duration.
-  const viewportDuration = timeWindow[1] - timeWindow[0];
-
-  // Store-local freq update — no server round-trip; spectrogram and PSD already
-  // render the full freq range and project the cursor client-side.
-  const handleSelectFreq = useCallback((freq: number) => setFreq({ freq }), [setFreq]);
-  // Memoise selectionDraft on the underlying primitives so its identity is
-  // stable across renders that don't actually change the selection. Without
-  // this, every store mutation (including hover-only events on the canvas
-  // that touch `spatial.hoveredId`) produces a fresh DTO and invalidates
-  // every downstream memo.
-  const selectionDraft = useMemo(
-    () => toSelectionDTO(selectionState),
-    [
-      selectionState.timeCursor,
-      selectionState.freq.freq,
-      selectionState.spatial.ap,
-      selectionState.spatial.ml,
-      selectionState.spatial.channel,
-    ],
-  );
 
   // `onCommitSelection` is a fresh arrow on every App render (App.tsx:68
   // wraps a mutation without useCallback). We don't want it as a memo dep
@@ -265,16 +217,21 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
 
   const timeCoord = tensorQuery.data?.coords.find((c) => c.name === "time");
 
-  // Debounce the window that feeds slice FETCHES (~100 ms) so a pan/zoom drag
-  // fires one request after it settles, not one per frame. The live `timeWindow`
-  // still drives the chart x-scale instantly (TimeseriesSliceView reads it
-  // directly), so the pan stays smooth while the data trails — the HiGlass
-  // "optimistic transform + debounced fetch" pattern. See time-transport.md (D).
-  const fetchWindow = useDebouncedValue(timeWindow, WINDOW_FETCH_DEBOUNCE_MS);
-
-  // Clamp the (debounced) window to data bounds so panning outside the recording
-  // never triggers a "slice returned no data" 400 from the server.
-  const safeWindow = clampWindow(fetchWindow, timeCoord);
+  // Time / cursor navigation controller — owns the live window, the debounced +
+  // data-bounds-clamped fetch window, the memoised selection draft, and the
+  // freq/duration/hover handlers. See ./useTimeNavigation.
+  const {
+    selectionDraft,
+    timeWindow,
+    setTimeWindow,
+    viewportDuration,
+    setDuration,
+    handleSelectFreq,
+    setHoveredElectrode,
+    safeWindow,
+    selectedEventId,
+    selectedStreamName,
+  } = useTimeNavigation(timeCoord);
 
   // G8: PSD-lock-to-event derivation.
   //
@@ -288,8 +245,6 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const { pinnedStreams, coincidenceWindow } = useEventStreamsStore();
   const eventsByStream = useEventWindowQueries(pinnedStreams, selectionDraft, 2);
 
-  const selectedEventId = selectionState.event.eventId;
-  const selectedStreamName = selectionState.event.streamName;
   const lockedEventTimeRange = useMemo<[number, number] | null>(() => {
     if (!psdLockToEvent || selectedEventId == null || !selectedStreamName) return null;
     const meta = eventStreamsList.find((s) => s.name === selectedStreamName);
@@ -332,148 +287,54 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     [focusChannel],
   );
 
-  // Contract-v2 is the only data path. Each view's query returns the
-  // pre-extracted shape the view consumes directly (no v1 long-format decode).
-  const timeseriesV2Query = useV2TimeseriesQuery(
-    selectedTensor,
-    hasTimeseries
-      ? withFocus(makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow))
-      : null,
-    "Timeseries",
-  );
-  const spatialV2Query = useV2SpatialQuery(
-    selectedTensor,
-    hasSpatial ? makeDefaultSliceRequest("spatial_map", selectionDraft, safeWindow) : null,
-  );
-  // depth_map: linear-probe analogue of spatial_map (Neuropixels DV). Same
-  // ±0.25 s instantaneous slice shape; server collapses time → (channel,)
-  // profile with the depth coord. No v2 extractor yet → stays v1.
-  const depthMapSliceQuery = useSliceQuery(
-    selectedTensor,
-    hasDepthMap ? makeDefaultSliceRequest("depth_map", selectionDraft, safeWindow) : null,
-  );
-  // raster: channel × time amplitude heatmap over the visible window. No v2
-  // extractor yet → stays v1.
-  const rasterSliceQuery = useSliceQuery(
-    selectedTensor,
-    hasRaster ? makeDefaultSliceRequest("raster", selectionDraft, safeWindow) : null,
-  );
-  // trajectory: full-session position path (time, axis). Pinned full-range
-  // request (like the navigator) so the whole arena is visible and the query
-  // key doesn't churn on cursor moves — the marker tracks selection.time.
-  // No v2 extractor yet → stays v1.
-  const trajectorySliceQuery = useSliceQuery(
-    selectedTensor,
-    hasTrajectory && timeCoord ? makeTrajectoryRequest(selectionDraft, timeCoord) : null,
-  );
-  // Standalone psd_average — a pre-computed freq-only (or freq × spatial)
-  // tensor. The view derives its `{freqs, values}` curve via extractPSDAverageV2.
-  const psdAverageV2Query = useV2PSDAverageQuery(
-    selectedTensor,
-    hasPSD ? makeDefaultSliceRequest("psd_average", selectionDraft, safeWindow) : null,
-  );
-  // Precomputed spectrogram (4D ortho path). No v2 extractor for the ortho
-  // slicer yet → stays v1.
-  const spectrogramSliceQuery = useSliceQuery(
-    selectedTensor,
-    hasSpectrogram ? makeDefaultSliceRequest("spectrogram", selectionDraft, safeWindow) : null,
-  );
-  // PSD-live cube — one (freq, AP, ML | channel) tensor feeds all three
-  // subviews (psd_heatmap via extractHeatmapNDV2, psd_curve via
-  // extractPSDAverageV2, psd_spatial via extractPSDSpatialV2).
-  const psdLiveV2Query = useV2PSDLiveQuery(
-    selectedTensor,
-    hasPSDLive
-      ? makePSDLiveRequest(
-          selectionDraft,
-          psdWindowS,
-          timeCoord,
-          { NW: psdNW, fmax: psdFmax },
-          lockedEventTimeRange,
-        )
-      : null,
-  );
-  // Spectrogram live — multitaper spectrogram on the visible window. Server
-  // defaults are sleep-band tuned (Prerau-style baseline subtraction); the
-  // request shape forwards any params on the wire. We pass `safeWindow`
-  // (already clamped against the tensor's time coord) so the heatmap's
-  // x-axis tracks the timeseries / navigator visible range.
-  const spectrogramLiveV2Query = useV2SpectrogramQuery(
-    selectedTensor,
-    hasSpectrogramLive
-      ? withFocus(makeSpectrogramLiveRequest(selectionDraft, safeWindow))
-      : null,
-    "SpectrogramLive",
-  );
-  const navigatorV2Query = useV2TimeseriesQuery(
-    selectedTensor,
-    hasNavigator && timeCoord
-      ? makeNavigatorRequest(selectionDraft, timeCoord)
-      : null,
-    "Navigator",
-  );
-
-  // Filtered-band overlay (G1, `docs/design/filtered-band-overlay.md`).
-  // Fires only when a band preset is active. Reuses the timeseries shape —
-  // server applies `bandpass` after slicing.
+  // Filtered-band overlay (G1, `docs/design/filtered-band-overlay.md`):
+  // active band preset ([lo,hi]) or null when the overlay is off.
   const activeBand = resolveBand(bandPreset, bandCustom);
-  const bandpassRequest =
-    hasTimeseries && activeBand
-      ? withFocus({
-          ...makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow),
-          bandpass: { lo_hz: activeBand[0], hi_hz: activeBand[1] },
-        })
-      : null;
-  const timeseriesBandpassQuery = useV2TimeseriesQuery(
+
+  // Per-view data layer — every slice query (v2 + the not-yet-migrated v1
+  // views), the brainstate metadata/intervals fetch, the sticky "last good
+  // slice" pins, and the derived per-view status maps. See ./useWorkspaceData.
+  const {
+    v2TimeseriesData,
+    v2SpectrogramData,
+    v2NavigatorData,
+    v2BandpassData,
+    v2SpatialData,
+    v2PsdLiveData,
+    v2PsdAverageData,
+    depthMapSliceQuery,
+    rasterSliceQuery,
+    trajectorySliceQuery,
+    spectrogramSliceQuery,
+    spectrogramLiveV2Query,
+    psdLiveV2Query,
+    brainstateIntervals,
+    brainstateAvailable,
+    fetchingByView,
+    erroredByView,
+    staleByView,
+  } = useWorkspaceData({
     selectedTensor,
-    bandpassRequest,
-    "TimeseriesBandpass",
-  );
-
-  // Brainstate queries — fetch metadata once, intervals per visible window
-  const brainstateMetaQuery = useBrainstateMetaQuery();
-  const brainstateAvailable = brainstateMetaQuery.data?.available ?? false;
-  const brainstateTimeRange = brainstateMetaQuery.data?.time_range ?? [null, null];
-  // Fetch all intervals (no window filter) since the dataset is small
-  const brainstateIntervalsQuery = useBrainstateIntervalsQuery(
-    brainstateAvailable && typeof brainstateTimeRange[0] === "number" ? brainstateTimeRange[0] : undefined,
-    brainstateAvailable && typeof brainstateTimeRange[1] === "number" ? brainstateTimeRange[1] : undefined,
-  );
-  const brainstateIntervals = brainstateIntervalsQuery.data ?? [];
-
-  // Keep the last successfully-received result for each v2 view so a transient
-  // query error (e.g. zooming between two samples → 400 "no data") doesn't blank
-  // the panel. Combined with `placeholderData: keepPreviousData`, the canvas
-  // keeps painting the previous slice through an in-flight or errored fetch.
-  // Per docs/design/contract-v2.md §0.2 (Neuroglancer "render whatever's in GPU
-  // memory immediately" + HiGlass "old tiles remain visible").
-  const lastTimeseriesV2 = useRef<ColumnarTimeseries | null>(null);
-  const lastSpectrogramV2 = useRef<Spectrogram | null>(null);
-  const lastNavigatorV2 = useRef<ColumnarTimeseries | null>(null);
-  const lastBandpassV2 = useRef<ColumnarTimeseries | null>(null);
-  const lastSpatialV2 = useRef<SpatialCell[] | null>(null);
-  const lastPsdLiveV2 = useRef<LabeledTensor | null>(null);
-  const lastPsdAverageV2 = useRef<LabeledTensor | null>(null);
-  if (timeseriesV2Query.data) lastTimeseriesV2.current = timeseriesV2Query.data;
-  if (spectrogramLiveV2Query.data) lastSpectrogramV2.current = spectrogramLiveV2Query.data;
-  if (navigatorV2Query.data) lastNavigatorV2.current = navigatorV2Query.data;
-  if (timeseriesBandpassQuery.data) lastBandpassV2.current = timeseriesBandpassQuery.data;
-  if (spatialV2Query.data) lastSpatialV2.current = spatialV2Query.data;
-  if (psdLiveV2Query.data) lastPsdLiveV2.current = psdLiveV2Query.data;
-  if (psdAverageV2Query.data) lastPsdAverageV2.current = psdAverageV2Query.data;
-  // When the user toggles bandpass off, clear the sticky ref so the
-  // filtered overlay disappears immediately instead of lingering as a
-  // stale series.
-  if (!activeBand) lastBandpassV2.current = null;
-  const v2TimeseriesData = timeseriesV2Query.data ?? lastTimeseriesV2.current;
-  const v2SpectrogramData = spectrogramLiveV2Query.data ?? lastSpectrogramV2.current;
-  const v2NavigatorData = navigatorV2Query.data ?? lastNavigatorV2.current;
-  const v2BandpassData = activeBand
-    ? (timeseriesBandpassQuery.data ?? lastBandpassV2.current)
-    : null;
-  const v2SpatialData = spatialV2Query.data ?? lastSpatialV2.current;
-  const v2PsdLiveData = psdLiveV2Query.data ?? lastPsdLiveV2.current;
-  const v2PsdAverageData = psdAverageV2Query.data ?? lastPsdAverageV2.current;
+    selectionDraft,
+    safeWindow,
+    timeCoord,
+    flags: {
+      hasTimeseries,
+      hasSpatial,
+      hasDepthMap,
+      hasRaster,
+      hasTrajectory,
+      hasPSD,
+      hasSpectrogram,
+      hasNavigator,
+      hasPSDLive,
+      hasSpectrogramLive,
+    },
+    withFocus,
+    psd: { nw: psdNW, fmax: psdFmax, windowS: psdWindowS },
+    lockedEventTimeRange,
+    activeBand,
+  });
 
   // Multi-stream event window for the timeseries markers (G5). The
   // `pinnedStreams`/`eventsByStream` declarations live above (alongside the
@@ -561,28 +422,6 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   useEffect(() => {
     navigatorRef.current?.(navigatorElement);
   }, [navigatorElement]);
-
-  // Per-view query status. `useSliceQuery` uses `placeholderData:
-  // keepPreviousData` + `retry: false`, so each panel keeps painting the
-  // PREVIOUS slice through a refetch or error — without a signal the user
-  // can't tell the panel is showing the wrong window. We surface three
-  // flags per view (refactor-plan N2): isFetching (in flight), isError
-  // (last fetch failed → showing stale-and-known-bad data), isPlaceholderData
-  // (showing previous-window data while the new fetch is in flight).
-  const { fetchingByView, erroredByView, staleByView } = buildViewQueryStatusMaps({
-    timeseries: timeseriesV2Query,
-    spatial_map: spatialV2Query,
-    depth_map: depthMapSliceQuery,
-    raster: rasterSliceQuery,
-    trajectory: trajectorySliceQuery,
-    psd_average: psdAverageV2Query,
-    spectrogram: spectrogramSliceQuery,
-    spectrogram_live: spectrogramLiveV2Query,
-    navigator: navigatorV2Query,
-    psd_heatmap: psdLiveV2Query,
-    psd_curve: psdLiveV2Query,
-    psd_spatial: psdLiveV2Query,
-  });
 
   // ── Build view elements map ────────────────────────────────────────────
   const viewElements: Record<string, ReactNode> = {};
