@@ -46,6 +46,8 @@ export type WorkspaceDataParams = {
   lockedEventTimeRange: [number, number] | null;
   /** Active filtered-band preset ([lo,hi]) or null when the overlay is off. */
   activeBand: [number, number] | null;
+  /** Measured timeseries panel width (CSS px) → viewport-derived point budget (P6). */
+  timeseriesPixelWidth?: number;
 };
 
 /**
@@ -87,6 +89,7 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
     psd,
     lockedEventTimeRange,
     activeBand,
+    timeseriesPixelWidth,
   } = params;
 
   // Contract-v2 is the only data path. Each view's query returns the
@@ -94,7 +97,7 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
   const timeseriesV2Query = useV2TimeseriesQuery(
     selectedTensor,
     flags.hasTimeseries
-      ? withFocus(makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow))
+      ? withFocus(makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow, timeseriesPixelWidth))
       : null,
     "Timeseries",
   );
@@ -186,7 +189,7 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
   const bandpassRequest =
     flags.hasTimeseries && activeBand
       ? withFocus({
-          ...makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow),
+          ...makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow, timeseriesPixelWidth),
           bandpass: { lo_hz: activeBand[0], hi_hz: activeBand[1] },
         })
       : null;

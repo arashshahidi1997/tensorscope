@@ -2,12 +2,15 @@ import { describe, it, expect } from "vitest";
 import {
   clampWindow,
   eventTimeRange,
+  lodTileSeconds,
   makeDefaultSliceRequest,
   makeNavigatorRequest,
   makeOrthoSpatialRequest,
   makePropagationMovieRequest,
   makePSDLiveRequest,
   makeSpectrogramLiveRequest,
+  snapWindowToLodTiles,
+  timeseriesPointBudget,
 } from "./queries";
 import type { CoordSummary, SelectionDTO } from "./types";
 
@@ -35,17 +38,21 @@ describe("clampWindow", () => {
 });
 
 describe("makeDefaultSliceRequest", () => {
-  it("defaults the time window to ±1s around the cursor", () => {
+  it("LOD-snaps the default ±1s window and sizes max_points to the viewport (P6)", () => {
     const req = makeDefaultSliceRequest("timeseries", SEL);
-    expect(req.time_range).toEqual([9, 11]);
-    expect(req.max_points).toBe(2000);
+    // Default window [9, 11] (duration 2) → tile 0.5; start floor(9/0.5)*0.5 = 9;
+    // 5 tiles of slack-coverage → end 11.5.
+    expect(req.time_range).toEqual([9, 11.5]);
+    // No width passed → fallback budget (DEFAULT_TIMESERIES_PX bucket × 2).
+    expect(req.max_points).toBe(timeseriesPointBudget(undefined));
     expect(req.downsample).toBe("minmax");
   });
 
-  it("clamps the default window to time>=0 for early cursors", () => {
+  it("snaps the early-cursor window to the tile grid, still starting at 0 (P6)", () => {
     const req = makeDefaultSliceRequest("timeseries", { ...SEL, time: 0.3 });
+    // Window [0, 1.3] (duration 1.3) → tile 0.25; start 0; 7 tiles → end 1.75.
     expect(req.time_range![0]).toBe(0);
-    expect(req.time_range![1]).toBeCloseTo(1.3);
+    expect(req.time_range![1]).toBeCloseTo(1.75);
   });
 
   it("uses a narrow window and no downsampling for spatial_map / psd_spatial", () => {
@@ -104,6 +111,73 @@ describe("makeDefaultSliceRequest", () => {
     const b = makeDefaultSliceRequest("spatial_map", { ...SEL, time: 10.8 });
     expect(a.selection.time).toBe(9.2);
     expect(a).not.toEqual(b);
+  });
+});
+
+describe("P6 — LOD point budget + tile snapping", () => {
+  describe("timeseriesPointBudget", () => {
+    it("scales with pixel width (2 samples/px for the min/max envelope)", () => {
+      // Width is bucketed to a 256px quantum, then × SAMPLES_PER_PX (2).
+      expect(timeseriesPointBudget(1024)).toBe(1024 * 2); // exact bucket
+      expect(timeseriesPointBudget(2048)).toBe(2048 * 2);
+      // A wider viewport always yields a strictly larger budget.
+      expect(timeseriesPointBudget(2560)).toBeGreaterThan(timeseriesPointBudget(1024));
+    });
+
+    it("buckets sub-quantum width changes to the same budget (no key churn)", () => {
+      // 1024 and 1100 both bucket up to 1280 → identical budget, so a few-px
+      // drag-resize doesn't change max_points (and therefore the request key).
+      expect(timeseriesPointBudget(1100)).toBe(timeseriesPointBudget(1090));
+      expect(timeseriesPointBudget(1100)).toBe(1280 * 2);
+    });
+
+    it("clamps to [512, 16384] and falls back to a constant when unmeasured", () => {
+      expect(timeseriesPointBudget(10)).toBe(512); // tiny panel → MIN
+      expect(timeseriesPointBudget(100000)).toBe(16384); // huge panel → MAX
+      expect(timeseriesPointBudget(undefined)).toBe(1280 * 2); // fallback width
+      expect(timeseriesPointBudget(0)).toBe(1280 * 2); // non-positive → fallback
+    });
+  });
+
+  describe("lodTileSeconds / snapWindowToLodTiles", () => {
+    it("picks a power-of-two-seconds tile from the window duration", () => {
+      expect(lodTileSeconds(2)).toBe(0.5); // ~4 tiles across a 2s window
+      expect(lodTileSeconds(10)).toBe(2);
+      expect(lodTileSeconds(4)).toBe(1);
+    });
+
+    it("snaps the window to a tile-aligned range that contains the visible window", () => {
+      const [s0, s1] = snapWindowToLodTiles([10.1, 11.1]); // duration 1 → tile 0.25
+      expect(s0).toBeLessThanOrEqual(10.1);
+      expect(s1).toBeGreaterThanOrEqual(11.1);
+      // start floored to the 0.25 grid: floor(10.1/0.25)*0.25 = 10.0
+      expect(s0).toBe(10);
+    });
+  });
+
+  it("a sub-tile pan yields a byte-identical request key (cache hit)", () => {
+    // Both windows (duration 1 → tile 0.25) start in the same tile cell
+    // [10.0, 10.25), so the snapped fetch window is identical.
+    const a = makeDefaultSliceRequest("timeseries", SEL, [10.1, 11.1], 1280);
+    const b = makeDefaultSliceRequest("timeseries", SEL, [10.2, 11.2], 1280);
+    expect(a).toEqual(b);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b)); // byte-identical
+  });
+
+  it("a pan past the tile boundary changes the request key (new fetch)", () => {
+    // Panning to [10.4, 11.4] crosses into the next 0.25 tile cell, so the
+    // snapped start steps from 10.0 → 10.25 and the key differs.
+    const a = makeDefaultSliceRequest("timeseries", SEL, [10.1, 11.1], 1280);
+    const c = makeDefaultSliceRequest("timeseries", SEL, [10.4, 11.4], 1280);
+    expect(c).not.toEqual(a);
+    expect(c.time_range![0]).toBe(10.25);
+  });
+
+  it("a width change re-keys the request (refetches at the new resolution)", () => {
+    const narrow = makeDefaultSliceRequest("timeseries", SEL, [10, 12], 1024);
+    const wide = makeDefaultSliceRequest("timeseries", SEL, [10, 12], 2560);
+    expect(wide.max_points).toBeGreaterThan(narrow.max_points!);
+    expect(wide.time_range).toEqual(narrow.time_range); // same window, only budget differs
   });
 });
 

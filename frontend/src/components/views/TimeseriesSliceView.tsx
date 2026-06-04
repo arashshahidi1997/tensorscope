@@ -5,6 +5,7 @@ import { extractTimeseriesColumnarFast, type ColumnarTimeseries } from "../../ap
 import { buildRegionResolver } from "../../api/probeLayout";
 import { useProbeLayoutQuery } from "../../api/queries";
 import { useAppStore, type BandPreset } from "../../store/appStore";
+import { useViewportStore } from "../../store/viewportStore";
 import { useChannelViewportShortcuts } from "./useChannelViewportShortcuts";
 import { CrosshairOverlay } from "./CrosshairOverlay";
 import type { BrainstateIntervalDTO, EventRecordDTO } from "../../api/types";
@@ -840,6 +841,11 @@ export function TimeseriesSliceView({
     resizeObserverRef.current = new ResizeObserver(() => {
       const size = getMeasuredSize();
       if (!size) return;
+      // Publish the panel width so the data layer can size the LOD point
+      // budget to the viewport (P6). The store dedupes equal widths; the
+      // budget itself is bucketed (timeseriesPointBudget) so only a quantum
+      // crossing changes the request key.
+      useViewportStore.getState().setTimeseriesWidthPx(size.width);
       scheduleReconcile(2);
     });
     resizeObserverRef.current.observe(el);

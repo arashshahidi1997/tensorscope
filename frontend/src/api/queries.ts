@@ -417,6 +417,66 @@ export function clampWindow(
 }
 
 /**
+ * Min/max-envelope sample budget per CSS pixel (P6). A min/max decimation needs
+ * two samples per pixel column (one trough, one peak) to preserve extrema, so
+ * the timeseries point budget is `width × 2`. (mne-python's browser uses ~5
+ * raw samples/px for a line plot; our server returns a min/max envelope, so 2
+ * is the relevant rate.) Coarser/finer than this just over- or under-feeds the
+ * decimator — the renderer still draws the same pixels.
+ */
+export const SAMPLES_PER_PX = 2;
+/** Fallback panel width (CSS px) when the renderer hasn't measured one yet. */
+export const DEFAULT_TIMESERIES_PX = 1280;
+/** Width quantum (CSS px) — bucket the measured width so minor resizes don't churn the request key. */
+const WIDTH_QUANTUM_PX = 256;
+const MIN_POINT_BUDGET = 512;
+const MAX_POINT_BUDGET = 16384;
+
+/**
+ * Viewport-derived min/max point budget for the timeseries window (P6). The
+ * width is bucketed to `WIDTH_QUANTUM_PX` so a drag-resize that nudges the
+ * panel by a few pixels doesn't change `max_points` (and therefore the React
+ * Query key); the budget only steps when the panel crosses a quantum.
+ */
+export function timeseriesPointBudget(pixelWidth?: number): number {
+  const px = typeof pixelWidth === "number" && pixelWidth > 0 ? pixelWidth : DEFAULT_TIMESERIES_PX;
+  const bucket = Math.ceil(px / WIDTH_QUANTUM_PX) * WIDTH_QUANTUM_PX;
+  const budget = bucket * SAMPLES_PER_PX;
+  return Math.min(MAX_POINT_BUDGET, Math.max(MIN_POINT_BUDGET, budget));
+}
+
+/**
+ * LOD tile width (seconds) for a window of `durationS`. A power-of-two-seconds
+ * grid: the tile depends only on the zoom level (window duration), not the
+ * window position, so it's invariant under pan and doubles cleanly as you zoom
+ * out — mirroring the server's decimation ladder (P2). Targets ~4 tiles across
+ * the visible window.
+ */
+export function lodTileSeconds(durationS: number): number {
+  if (!(durationS > 0)) return 1;
+  return 2 ** Math.round(Math.log2(durationS / 4));
+}
+
+/**
+ * Snap a fetch window to the LOD-tile grid (P6) so a sub-tile pan reproduces a
+ * byte-identical request — a cache hit against the server LOD ladder. The
+ * start is floored to the tile grid and the span rounded up to whole tiles
+ * plus one tile of slack, so the snapped range always *contains* the visible
+ * window even when its start isn't tile-aligned. The renderer keeps painting
+ * the user's `timeWindow` (its x-scale is driven by the nav window, not the
+ * data extent — `setData(…, false)`), so the slightly-wider data is invisible.
+ */
+export function snapWindowToLodTiles(window: [number, number]): [number, number] {
+  const [t0, t1] = window;
+  const duration = t1 - t0;
+  if (!(duration > 0)) return window;
+  const tile = lodTileSeconds(duration);
+  const start = Math.floor(t0 / tile) * tile;
+  const nTiles = Math.ceil(duration / tile) + 1;
+  return [start, start + nTiles * tile];
+}
+
+/**
  * Build a slice request for a given view type.
  *
  * This function encodes the per-view pixel budgets (`max_points`) and default
@@ -424,13 +484,15 @@ export function clampWindow(
  * `SliceOptions.maxPoints` and `SliceOptions.downsample` fields described in
  * `./dataSource.ts`.
  *
- * Prompt 13 (LOD pipeline) will replace or supplement these hardcoded budgets
- * with values derived from actual viewport pixel width.
+ * The `timeseries` path derives `max_points` from the viewport pixel width
+ * (`timeseriesPointBudget`) and snaps `time_range` to the LOD-tile grid
+ * (`snapWindowToLodTiles`) so a sub-tile pan is a cache hit (P6).
  */
 export function makeDefaultSliceRequest(
   viewType: string,
   selection: SelectionDTO,
   timeWindow: [number, number] = [Math.max(0, selection.time - 1), selection.time + 1],
+  pixelWidth?: number,
 ): TensorSliceRequestDTO {
   switch (viewType) {
     case "spatial_map":
@@ -486,12 +548,30 @@ export function makeDefaultSliceRequest(
         downsample: "minmax",
       };
 
-    default: // timeseries / raster, and anything else purely window-based
+    case "timeseries": {
+      // LOD-aware (P6): point budget scales with the viewport pixel width and
+      // the window is snapped to the LOD-tile grid, so a sub-tile pan reuses
+      // the same key (cache hit against the server LOD ladder, P2).
+      const snapped = snapWindowToLodTiles(timeWindow);
+      return {
+        view_type: viewType,
+        // Pin time to the (snapped) window start — same window-bound invariant
+        // as the spectrogram branch above (timeseries data depends on the
+        // window, not the cursor). Pinning to the snapped start keeps the key
+        // stable under both cursor moves and sub-tile pans.
+        selection: { ...selection, time: snapped[0] },
+        time_range: snapped,
+        max_points: timeseriesPointBudget(pixelWidth),
+        downsample: "minmax",
+      };
+    }
+
+    default: // raster, and anything else purely window-based
       return {
         view_type: viewType,
         // Pin time to the window start — same window-bound invariant as the
-        // spectrogram branch above (timeseries/raster data depend on the
-        // window, not the cursor). Keeps the key stable under cursor moves.
+        // spectrogram branch above (raster data depends on the window, not
+        // the cursor). Keeps the key stable under cursor moves.
         selection: { ...selection, time: timeWindow[0] },
         time_range: timeWindow,
         max_points: 2000,

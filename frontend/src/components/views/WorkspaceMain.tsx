@@ -24,6 +24,7 @@ import { useEventStreamsStore } from "../../store/eventStreamsStore";
 import { buildStreamColorMap } from "./eventStreamColors";
 import type { SelectionDTO, TensorSliceRequestDTO } from "../../api/types";
 import { resolveBand, useAppStore } from "../../store/appStore";
+import { useViewportStore } from "../../store/viewportStore";
 import { useTimeNavigation } from "./useTimeNavigation";
 import { useWorkspaceData } from "./useWorkspaceData";
 import { getAvailableViews, getOrthoPair, viewRegistry } from "../../registry/viewRegistry";
@@ -291,6 +292,11 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   // active band preset ([lo,hi]) or null when the overlay is off.
   const activeBand = resolveBand(bandPreset, bandCustom);
 
+  // Measured timeseries panel width → viewport-derived LOD point budget (P6).
+  // Null until the panel's ResizeObserver first fires; makeDefaultSliceRequest
+  // falls back to a sensible constant in that gap.
+  const timeseriesPixelWidth = useViewportStore((s) => s.timeseriesWidthPx) ?? undefined;
+
   // Per-view data layer — every slice query (v2 + the not-yet-migrated v1
   // views), the brainstate metadata/intervals fetch, the sticky "last good
   // slice" pins, and the derived per-view status maps. See ./useWorkspaceData.
@@ -335,6 +341,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     psd: { nw: psdNW, fmax: psdFmax, windowS: psdWindowS },
     lockedEventTimeRange,
     activeBand,
+    timeseriesPixelWidth,
   });
 
   // Multi-stream event window for the timeseries markers (G5). The
