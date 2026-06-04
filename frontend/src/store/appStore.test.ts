@@ -10,6 +10,8 @@ beforeEach(() => {
     selectedTensor: null,
     activeViews: [],
     panelTensorOverrides: {},
+    gridLayout: "default",
+    multiProbeMode: false,
     layoutDraft: null,
     theme: "plotly-dark",
     brainstateOverlay: true,
@@ -36,6 +38,43 @@ describe("selectedTensor", () => {
     expect(getStore().selectedTensor).toBe("ripple");
     expect(getStore().activeViews).toEqual([]);
     expect(getStore().panelTensorOverrides).toEqual({});
+  });
+});
+
+describe("multi-probe layout (Track C3/C5)", () => {
+  it("setGridLayout('probe_lanes') seeds npx overrides + flips multiProbeMode", () => {
+    getStore().setGridLayout("probe_lanes");
+    const s = getStore();
+    expect(s.gridLayout).toBe("probe_lanes");
+    expect(s.multiProbeMode).toBe(true);
+    // npx lanes route to neuropixels; the ecog lanes fall back to the global tensor.
+    expect(s.panelTensorOverrides).toEqual({
+      depth_map: "neuropixels",
+      timeseries_npx: "neuropixels",
+      spectrogram_npx: "neuropixels",
+    });
+    expect(s.activeViews).toEqual(["timeseries", "spatial_map", "depth_map", "spectrogram_live"]);
+  });
+
+  it("in multi-probe mode, switching the nav tensor preserves the per-lane overrides (C5)", () => {
+    getStore().setGridLayout("probe_lanes");
+    getStore().setSelectedTensor("ecog");
+    const s = getStore();
+    expect(s.selectedTensor).toBe("ecog");
+    // The fixed layout + per-slot map survive — NOT cleared as in single-probe.
+    expect(s.multiProbeMode).toBe(true);
+    expect(s.panelTensorOverrides.timeseries_npx).toBe("neuropixels");
+    expect(s.activeViews.length).toBeGreaterThan(0);
+  });
+
+  it("setGridLayout('default') exits multi-probe and clears overrides", () => {
+    getStore().setGridLayout("probe_lanes");
+    getStore().setGridLayout("default");
+    const s = getStore();
+    expect(s.gridLayout).toBe("default");
+    expect(s.multiProbeMode).toBe(false);
+    expect(s.panelTensorOverrides).toEqual({});
+    expect(s.activeViews).toEqual([]);
   });
 });
 

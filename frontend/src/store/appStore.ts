@@ -35,6 +35,14 @@ type AppStore = {
   trackVisibility: Record<string, boolean>;
   /** Per-panel tensor overrides: slotId → tensorName */
   panelTensorOverrides: Record<string, string>;
+  /** Active view-grid layout (Track C3). "probe_lanes" = the multi-probe preset. */
+  gridLayout: GridLayoutId;
+  /**
+   * Multi-probe mode (Track C5). When on, switching the navigation tensor does
+   * NOT wipe the per-slot tensor map / active views — the per-lane overrides (+
+   * the fixed probe-lanes layout) are the source of truth.
+   */
+  multiProbeMode: boolean;
   /**
    * Per-view heatmap axis encoding: viewId → {x, y} dim names. When unset a
    * view uses its default encoding (see HEATMAP_DEFAULT_ENCODING). Lets the
@@ -100,6 +108,8 @@ type AppStore = {
   setHeatmapAxes: (viewId: string, x: string, y: string) => void;
   toggleView: (view: string, availableViews: string[]) => void;
   setActiveViews: (views: string[]) => void;
+  /** Switch the view-grid layout; "probe_lanes" also flips multiProbeMode + seeds npx overrides. */
+  setGridLayout: (layout: GridLayoutId) => void;
   setLayoutDraft: (value: LayoutDTO) => void;
   setTheme: (value: ThemeId) => void;
   toggleBrainstateOverlay: () => void;
@@ -126,6 +136,21 @@ type AppStore = {
   setFocusChannel: (coord: { ap: number; ml: number } | null) => void;
 };
 
+/** View-grid layout id (Track C3). */
+export type GridLayoutId = "default" | "probe_lanes";
+
+/**
+ * Default per-slot tensor routing for the "Probe lanes" layout (Track C3):
+ * the npx lanes pull from "neuropixels"; the ecog lanes fall back to the
+ * global navigation tensor. Slot ids match PROBE_LANES_LAYOUT in
+ * viewGridLayout.ts. Tensor names match io.assemble_session's session keys.
+ */
+export const PROBE_LANES_OVERRIDES: Record<string, string> = {
+  depth_map: "neuropixels",
+  timeseries_npx: "neuropixels",
+  spectrogram_npx: "neuropixels",
+};
+
 export type BandPreset = "off" | "spindle" | "ripple" | "slow" | "custom";
 
 /** Band [lo_hz, hi_hz] for each preset. `off` returns null = no filter. */
@@ -149,12 +174,34 @@ export const useAppStore = create<AppStore>((set) => ({
   selectedTensor: null,
   activeViews: [],
   panelTensorOverrides: {},
+  gridLayout: "default",
+  multiProbeMode: false,
   heatmapEncodings: {},
   layoutDraft: null,
   theme: getInitialTheme(),
   brainstateOverlay: true,
   trackVisibility: {},
-  setSelectedTensor: (value) => set({ selectedTensor: value, activeViews: [], panelTensorOverrides: {} }),
+  setSelectedTensor: (value) =>
+    set((s) =>
+      // In multi-probe mode the per-slot tensor map + fixed layout are the
+      // source of truth, so a nav-tensor switch keeps them (Track C5).
+      s.multiProbeMode
+        ? { selectedTensor: value }
+        : { selectedTensor: value, activeViews: [], panelTensorOverrides: {} },
+    ),
+  setGridLayout: (layout) =>
+    set(() =>
+      layout === "probe_lanes"
+        ? {
+            gridLayout: "probe_lanes",
+            multiProbeMode: true,
+            panelTensorOverrides: { ...PROBE_LANES_OVERRIDES },
+            // Scope active views to the probe lanes so the focused 3-row layout
+            // doesn't dump every other view into the overflow area.
+            activeViews: ["timeseries", "spatial_map", "depth_map", "spectrogram_live"],
+          }
+        : { gridLayout: "default", multiProbeMode: false, panelTensorOverrides: {}, activeViews: [] },
+    ),
   setPanelTensor: (slotId, tensorName) =>
     set((s) => ({ panelTensorOverrides: { ...s.panelTensorOverrides, [slotId]: tensorName } })),
   clearPanelTensor: (slotId) =>

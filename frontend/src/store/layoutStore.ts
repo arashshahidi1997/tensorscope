@@ -4,7 +4,14 @@ import { persist } from "zustand/middleware";
 export type SidebarTabId = "explore" | "graph" | "tensors" | "events" | "pipeline";
 
 export type ViewSlot = {
+  /** Which view component renders here (e.g. "timeseries"). */
   viewId: string;
+  /**
+   * Stable slot identity for keying / per-panel tensor overrides / viewElements
+   * lookup. Defaults to `viewId`. Distinct slots can share a `viewId` (the
+   * multi-probe layout shows `timeseries` twice — ecog + `timeseries_npx`).
+   */
+  slotId?: string;
   region: "left" | "right" | "center";
   widthFraction: number; // e.g. 0.65
 };

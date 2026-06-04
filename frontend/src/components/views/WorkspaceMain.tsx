@@ -104,6 +104,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const {
     selectedTensor,
     panelTensorOverrides,
+    gridLayout,
     activeViews,
     setSelectedTensor,
     toggleView,
@@ -216,6 +217,10 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   );
   const hasSpectrogramLive = effectiveActiveViews.includes("spectrogram_live");
   const hasEventAverage = effectiveActiveViews.includes("event_average");
+  // Multi-probe duplicate lanes (Track C2/C3) are only live in the probe-lanes layout.
+  const isProbeLanes = gridLayout === "probe_lanes";
+  const hasTimeseriesNpx = isProbeLanes;
+  const hasSpectrogramNpx = isProbeLanes;
 
   // Detect if the active tensor supports ortho-slicing (4D: time, freq, AP, ML)
   const tensorDims = tensorQuery.data?.dims ?? activeTensorSummary?.dims ?? [];
@@ -318,6 +323,8 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const {
     v2TimeseriesData,
     v2SpectrogramData,
+    v2TimeseriesNpxData,
+    v2SpectrogramNpxData,
     v2NavigatorData,
     v2BandpassData,
     v2SpatialData,
@@ -353,6 +360,8 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       hasNavigator,
       hasPSDLive,
       hasSpectrogramLive,
+      hasTimeseriesNpx,
+      hasSpectrogramNpx,
     },
     withFocus,
     psd: { nw: psdNW, fmax: psdFmax, windowS: psdWindowS },
@@ -612,6 +621,54 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       <div className="placeholder placeholder--error">
         spectrogram_live failed: {String(spectrogramLiveV2Query.error ?? "unknown")}
       </div>
+    ) : (
+      <div className="placeholder placeholder--computing">
+        <span className="spinner" aria-hidden="true" /> Computing multitaper spectrogram…
+      </div>
+    );
+  }
+
+  // Multi-probe duplicate lanes (Track C2): a second timeseries + spectrogram
+  // fed by the `*_npx` slots' tensor (npx by default) on the SHARED time axis.
+  // The cortical event overlay carries over (the coupling view: see where ecog
+  // spindles/SO align with the hippocampal lane). Focus is not applied (C5).
+  if (hasTimeseriesNpx) {
+    const dataRange: [number, number] | undefined =
+      typeof timeCoord?.min === "number" && typeof timeCoord?.max === "number"
+        ? [timeCoord.min, timeCoord.max]
+        : undefined;
+    viewElements["timeseries_npx"] = v2TimeseriesNpxData ? (
+      <TimeseriesSliceView
+        v2Data={v2TimeseriesNpxData}
+        bandPreset={bandPreset}
+        bandActive={activeBand}
+        focusChannel={null}
+        selection={selectionDraft}
+        eventsByStream={filteredEventsByStream}
+        streamColors={streamColorsMap}
+        coincidentTimes={coincidentTimes}
+        brainstateIntervals={brainstateIntervals}
+        brainstateOverlayEnabled={brainstateOverlay && brainstateAvailable}
+        onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
+        onTimeWindowChange={setTimeWindow}
+        timeWindow={timeWindow}
+        dataRange={dataRange}
+      />
+    ) : (
+      <div className="placeholder">Loading…</div>
+    );
+  }
+
+  if (hasSpectrogramNpx) {
+    viewElements["spectrogram_npx"] = v2SpectrogramNpxData ? (
+      <SpectrogramView
+        v2Data={v2SpectrogramNpxData}
+        selection={selectionDraft}
+        onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
+        onSelectFreq={handleSelectFreq}
+        onTimeWindowChange={setTimeWindow}
+        timeWindow={timeWindow}
+      />
     ) : (
       <div className="placeholder placeholder--computing">
         <span className="spinner" aria-hidden="true" /> Computing multitaper spectrogram…

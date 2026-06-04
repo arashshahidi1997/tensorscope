@@ -46,6 +46,10 @@ export type WorkspaceViewFlags = {
   hasNavigator: boolean;
   hasPSDLive: boolean;
   hasSpectrogramLive: boolean;
+  /** Multi-probe duplicate lanes (Track C2) — a second timeseries + spectrogram
+   *  routed to their own tensor via the `*_npx` slot overrides. */
+  hasTimeseriesNpx: boolean;
+  hasSpectrogramNpx: boolean;
 };
 
 export type WorkspaceDataParams = {
@@ -245,6 +249,29 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
     "TimeseriesBandpass",
   );
 
+  // Multi-probe duplicate lanes (Track C2): a second timeseries + spectrogram
+  // routed to the `*_npx` slots' tensor (npx by default). Disabled (request
+  // null) outside the probe-lanes layout, so single-probe pays nothing. Focus
+  // is intentionally NOT applied — the npx lane shows all channels (C5).
+  const timeseriesNpxV2Query = useV2TimeseriesQuery(
+    tensorFor("timeseries_npx"),
+    flags.hasTimeseriesNpx
+      ? makeDefaultSliceRequest("timeseries", selectionDraft, timeseriesFetchWindow, timeseriesPixelWidth)
+      : null,
+    "TimeseriesNpx",
+  );
+  const spectrogramNpxV2Query = useV2SpectrogramQuery(
+    tensorFor("spectrogram_npx"),
+    flags.hasSpectrogramNpx
+      ? makeSpectrogramLiveRequest(selectionDraft, expensiveSafeWindow, {
+          fmin_hz: spec.fmin,
+          fmax_hz: spec.fmax,
+          nperseg_s: spec.npersegS,
+        })
+      : null,
+    "SpectrogramNpx",
+  );
+
   // Brainstate queries — fetch metadata once, intervals per visible window
   const brainstateMetaQuery = useBrainstateMetaQuery();
   const brainstateAvailable = brainstateMetaQuery.data?.available ?? false;
@@ -266,6 +293,8 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
   const v2SpatialData = useStickyData(spatialV2Query.data);
   const v2PsdLiveData = useStickyData(psdLiveV2Query.data);
   const v2PsdAverageData = useStickyData(psdAverageV2Query.data);
+  const v2TimeseriesNpxData = useStickyData(timeseriesNpxV2Query.data);
+  const v2SpectrogramNpxData = useStickyData(spectrogramNpxV2Query.data);
 
   // Per-view query status. `useSliceQuery` uses `placeholderData:
   // keepPreviousData` + `retry: false`, so each panel keeps painting the
@@ -287,6 +316,8 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
     psd_heatmap: psdLiveV2Query,
     psd_curve: psdLiveV2Query,
     psd_spatial: psdLiveV2Query,
+    timeseries_npx: timeseriesNpxV2Query,
+    spectrogram_npx: spectrogramNpxV2Query,
   });
 
   return {
@@ -298,6 +329,8 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
     v2SpatialData,
     v2PsdLiveData,
     v2PsdAverageData,
+    v2TimeseriesNpxData,
+    v2SpectrogramNpxData,
     // Raw query handles for the render's loading/error branches.
     depthMapSliceQuery,
     rasterSliceQuery,

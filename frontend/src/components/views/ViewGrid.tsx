@@ -9,7 +9,7 @@ import { useCallback, useMemo, type ReactNode } from "react";
 import { useLayoutStore } from "../../store/layoutStore";
 import { useAppStore } from "../../store/appStore";
 import { VIEW_DESCRIPTORS } from "../../registry/viewRegistry";
-import { DEFAULT_SLOT_LAYOUT, isRowActive, getOverflowViews } from "./viewGridLayout";
+import { DEFAULT_SLOT_LAYOUT, PROBE_LANES_LAYOUT, isRowActive, getOverflowViews, slotKey } from "./viewGridLayout";
 import { resolveTensorForSlot } from "./useWorkspaceData";
 import { ViewPanel } from "./ViewPanel";
 
@@ -46,9 +46,9 @@ export function ViewGrid({
   tensorNames,
 }: ViewGridProps) {
   const { maximizedView, toggleMaximizeView } = useLayoutStore();
-  const { toggleView, panelTensorOverrides, setPanelTensor, clearPanelTensor } = useAppStore();
+  const { toggleView, panelTensorOverrides, setPanelTensor, clearPanelTensor, gridLayout } = useAppStore();
 
-  const layout = DEFAULT_SLOT_LAYOUT;
+  const layout = gridLayout === "probe_lanes" ? PROBE_LANES_LAYOUT : DEFAULT_SLOT_LAYOUT;
 
   const overflow = useMemo(
     () => getOverflowViews(activeViewIds, layout),
@@ -91,12 +91,17 @@ export function ViewGrid({
               style={rowActive ? { minHeight: `${row.minHeight}px`, flex: `1 1 ${row.minHeight}px` } : undefined}
             >
               {row.slots.map((slot) => {
+                // Slot identity (slotId ?? viewId) keys viewElements / overrides
+                // / maximize / status, so the same view type can appear twice
+                // (e.g. ecog `timeseries` + npx `timeseries_npx`). The view TYPE
+                // (slot.viewId) still drives availability + the human label.
+                const key = slotKey(slot);
                 const isActive = activeSet.has(slot.viewId);
-                const isMaximized = maximizedView === slot.viewId;
+                const isMaximized = maximizedView === key;
 
                 // When maximized, hide other slots in the same row
                 if (maximizedView && !isMaximized) {
-                  return <div key={slot.viewId} style={{ display: "none" }} />;
+                  return <div key={key} style={{ display: "none" }} />;
                 }
 
                 const slotStyle: React.CSSProperties = isMaximized
@@ -107,27 +112,27 @@ export function ViewGrid({
 
                 const slotClassName = `view-slot${!isActive && !maximizedView ? " view-slot--hidden" : ""}`;
 
-                const el = viewElements[slot.viewId];
-                const resolvedTensor = resolveTensor(slot.viewId);
-                const isPinned = slot.viewId in panelTensorOverrides;
+                const el = viewElements[key];
+                const resolvedTensor = resolveTensor(key);
+                const isPinned = key in panelTensorOverrides;
 
                 return (
-                  <div key={slot.viewId} className={slotClassName} style={slotStyle}>
+                  <div key={key} className={slotClassName} style={slotStyle}>
                     {el ? (
                       <ViewPanel
-                        viewId={slot.viewId}
+                        viewId={key}
                         label={getViewLabel(slot.viewId)}
                         isMaximized={isMaximized}
-                        onToggleMaximize={() => toggleMaximizeView(slot.viewId)}
+                        onToggleMaximize={() => toggleMaximizeView(key)}
                         onClose={() => handleClose(slot.viewId)}
                         tensorName={resolvedTensor}
                         isPinned={isPinned}
                         tensorNames={tensorNames}
-                        onSetTensor={(name) => setPanelTensor(slot.viewId, name)}
-                        onClearTensor={() => clearPanelTensor(slot.viewId)}
-                        isFetching={fetchingByView?.[slot.viewId] ?? false}
-                        isError={erroredByView?.[slot.viewId] ?? false}
-                        isStale={staleByView?.[slot.viewId] ?? false}
+                        onSetTensor={(name) => setPanelTensor(key, name)}
+                        onClearTensor={() => clearPanelTensor(key)}
+                        isFetching={fetchingByView?.[key] ?? false}
+                        isError={erroredByView?.[key] ?? false}
+                        isStale={staleByView?.[key] ?? false}
                       >
                         {el}
                       </ViewPanel>

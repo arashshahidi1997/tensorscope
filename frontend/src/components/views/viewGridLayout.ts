@@ -4,10 +4,9 @@
  * Each view type has a permanent "home slot" in a row-based layout.
  * Toggling a view shows/hides it in its slot without reflowing siblings.
  */
-import type { ViewSlotLayout, ViewRow } from "../../store/layoutStore";
+import type { ViewSlotLayout, ViewRow, ViewSlot } from "../../store/layoutStore";
 
-export type { ViewSlotLayout, ViewRow };
-export type { ViewSlot } from "../../store/layoutStore";
+export type { ViewSlotLayout, ViewRow, ViewSlot };
 
 /**
  * Default slot assignments — three rows covering signal, PSD, and spectrogram layers.
@@ -79,6 +78,50 @@ export const DEFAULT_SLOT_LAYOUT: ViewSlotLayout = {
     },
   ],
 };
+
+/**
+ * Multi-probe "Probe lanes" layout (Track C3, D-LAYOUT): ecog + neuropixels on
+ * the shared time axis. Three rows — cortex (ecog timeseries + its event
+ * overlay), hippocampus (npx depth map + npx timeseries), and both
+ * spectrograms. The `_npx` slots reuse a view type a second time (distinct
+ * slotId) and are routed to the neuropixels tensor via PROBE_LANES_OVERRIDES.
+ */
+export const PROBE_LANES_LAYOUT: ViewSlotLayout = {
+  rows: [
+    {
+      id: "cortex",
+      label: "Cortex (ECoG)",
+      slots: [
+        { slotId: "timeseries", viewId: "timeseries", region: "left", widthFraction: 0.65 },
+        { slotId: "spatial_map", viewId: "spatial_map", region: "right", widthFraction: 0.35 },
+      ],
+      minHeight: 240,
+    },
+    {
+      id: "hippocampus",
+      label: "Hippocampus (Neuropixels)",
+      slots: [
+        { slotId: "depth_map", viewId: "depth_map", region: "left", widthFraction: 0.35 },
+        { slotId: "timeseries_npx", viewId: "timeseries", region: "right", widthFraction: 0.65 },
+      ],
+      minHeight: 240,
+    },
+    {
+      id: "spectra",
+      label: "Spectra",
+      slots: [
+        { slotId: "spectrogram_live", viewId: "spectrogram_live", region: "left", widthFraction: 0.5 },
+        { slotId: "spectrogram_npx", viewId: "spectrogram_live", region: "right", widthFraction: 0.5 },
+      ],
+      minHeight: 220,
+    },
+  ],
+};
+
+/** Resolve a slot's stable identity (defaults to its viewId). */
+export function slotKey(slot: ViewSlot): string {
+  return slot.slotId ?? slot.viewId;
+}
 
 /**
  * Check if a row has any active views.
