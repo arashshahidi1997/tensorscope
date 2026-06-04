@@ -22,7 +22,6 @@ import {
 import { coincidenceIndicesByStream, extractEventTimes } from "../../api/coincidence";
 import { useEventStreamsStore } from "../../store/eventStreamsStore";
 import { buildStreamColorMap } from "./eventStreamColors";
-import { extractPSDAverageV2 } from "../../api/v2-arrow";
 import type { SelectionDTO, TensorSliceRequestDTO } from "../../api/types";
 import { resolveBand, useAppStore } from "../../store/appStore";
 import { useTimeNavigation } from "./useTimeNavigation";
@@ -589,10 +588,10 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   }
 
   if (hasPSD && v2PsdAverageData) {
-    const psdAvg = extractPSDAverageV2(v2PsdAverageData);
+    // The worker already reduced the cube to the {freqs, mean, std} curve (P8).
     viewElements["psd_average"] = (
       <PSDComponent
-        v2Data={{ freqs: psdAvg.freqs, values: psdAvg.mean }}
+        v2Data={{ freqs: v2PsdAverageData.freqs, values: v2PsdAverageData.mean }}
         selection={selectionDraft}
         onSelectFreq={handleSelectFreq}
       />
@@ -600,26 +599,29 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   }
 
   if (hasPSDLive) {
-    // All three PSD-live subviews are fed from one v2 cube (LabeledTensor):
-    // psd_heatmap via the encoding-driven HeatmapView, psd_curve via the
-    // mean±std curve from extractPSDAverageV2, and psd_spatial via the
-    // rank-indexed spatial extractor. One server round-trip, three views.
-    const avgData = v2PsdLiveData ? extractPSDAverageV2(v2PsdLiveData) : null;
+    // All three PSD-live subviews are fed from one v2 cube. The worker returns
+    // a PSDLiveDecoded bundle (P8): `tensor` (the raw cube) drives the
+    // encoding-driven heatmap and the freq-selected spatial map (both reshape
+    // on the main thread because their inputs change live without a refetch),
+    // and the worker-reduced `average` mean±std curve feeds psd_curve directly.
+    // One server round-trip, three views.
+    const avgData = v2PsdLiveData ? v2PsdLiveData.average : null;
 
     if (v2PsdLiveData && avgData) {
+      const psdCube = v2PsdLiveData.tensor;
       // Encoding-driven heatmap: freq on X, channel/spatial dim on Y so
       // depth/channel reads vertically. The y-dim defaults to whichever
       // channel-like dim the PSD cube carries (`channel` for linear probes,
       // else `AP`). Remaining dims (e.g. ML) are mean-reduced; the user can
       // reassign axes live. See docs/design/encoding-heatmap.md.
-      const psdYDim = v2PsdLiveData.meta.dims.includes("channel")
+      const psdYDim = psdCube.meta.dims.includes("channel")
         ? "channel"
-        : v2PsdLiveData.meta.dims.includes("AP")
+        : psdCube.meta.dims.includes("AP")
           ? "AP"
-          : v2PsdLiveData.meta.dims.find((c) => c !== "freq") ?? "channel";
+          : psdCube.meta.dims.find((c) => c !== "freq") ?? "channel";
       viewElements["psd_heatmap"] = (
         <HeatmapView
-          v2={v2PsdLiveData}
+          v2={psdCube}
           viewId="psd_heatmap"
           defaultEncoding={{ x: "freq", y: psdYDim }}
           colormap="inferno"
@@ -636,7 +638,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       );
       viewElements["psd_spatial"] = (
         <PSDSpatialView
-          v2={v2PsdLiveData}
+          v2={psdCube}
           selectedFreq={selectionDraft.freq}
           onSelectFreq={handleSelectFreq}
           onSelectCell={(ap, ml) => {

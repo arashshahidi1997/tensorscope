@@ -20,8 +20,8 @@ import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } f
 import { api } from "./client";
 import type { BrainstateIntervalDTO, BrainstateMetaDTO, CoordSummary, EventAverageParamsDTO, EventRecordDTO, MaskStateDTO, ProbeLayoutDTO, ProcessingParamsDTO, ScalarSeriesDTO, SelectionDTO, TensorSliceRequestDTO, TrackMetaDTO } from "./types";
 import type { WorkspaceDAGDTO } from "../types/dag";
-import type { ColumnarTimeseries, SpatialCell, Spectrogram } from "./arrow";
-import type { LabeledTensor } from "./v2-arrow";
+import type { ColumnarTimeseries, PSDAvgData, SpatialCell, Spectrogram } from "./arrow";
+import type { LabeledTensor, PSDLiveDecoded } from "./v2-arrow";
 import { getArrowWorkerPool } from "./workerPool";
 
 export function useStateQuery() {
@@ -141,24 +141,24 @@ export function useV2SpectrogramQuery(
 
 /**
  * v2 PSD-live query — one (freq, AP, ML | channel) cube that powers all three
- * PSD-live subviews (psd_heatmap, psd_curve, psd_spatial). Returns the raw
- * `LabeledTensor` so each subview runs its own extractor on the main thread
- * (`extractHeatmapNDV2` / `extractPSDAverageV2` / `extractPSDSpatialV2`). The
- * cube is freq-major and small, so main-thread extraction is negligible — and
- * one round-trip feeds all three views (matches the v1 `psdLiveQuery` fan-out).
+ * PSD-live subviews (psd_heatmap, psd_curve, psd_spatial). The worker returns a
+ * `PSDLiveDecoded` bundle: the raw `tensor` (consumed by the encoding-driven
+ * heatmap and the freq-selected spatial map, which reshape on the main thread
+ * because their inputs change live without a refetch) plus the param-free
+ * `average` mean±std curve, reduced in the worker so the always-on full-cube
+ * walk never blocks the render thread (P8). One round-trip feeds all three.
  */
 export function useV2PSDLiveQuery(
   name: string | null,
   request: TensorSliceRequestDTO | null,
 ) {
-  return useQuery<LabeledTensor>({
+  return useQuery<PSDLiveDecoded>({
     queryKey: ["slice-v2", "psd_live", name, request],
     queryFn: async ({ signal }) => {
       const buf = await api.getTensorSliceV2(name!, request!, signal);
       logV2PayloadSize("PSDLive", buf.byteLength);
       const pool = getArrowWorkerPool();
-      // psd_live falls to extractV2's default branch → returns the LabeledTensor.
-      return pool.submit<LabeledTensor>(buf, "psd_live");
+      return pool.submit<PSDLiveDecoded>(buf, "psd_live");
     },
     enabled: Boolean(name && request),
     placeholderData: keepPreviousData,
@@ -168,21 +168,21 @@ export function useV2PSDLiveQuery(
 
 /**
  * v2 standalone PSD-average query — a freq-only (or freq × spatial) tensor
- * pre-computed server-side, distinct from the psd_live cube. Returns the
- * `LabeledTensor`; the view derives the `{freqs, values}` curve via
- * `extractPSDAverageV2` on the main thread.
+ * pre-computed server-side, distinct from the psd_live cube. The worker reduces
+ * the cube to the `{freqs, mean, std}` curve (param-free) so the view consumes
+ * it directly with no main-thread cube walk (P8).
  */
 export function useV2PSDAverageQuery(
   name: string | null,
   request: TensorSliceRequestDTO | null,
 ) {
-  return useQuery<LabeledTensor>({
+  return useQuery<PSDAvgData>({
     queryKey: ["slice-v2", "psd_average", name, request],
     queryFn: async ({ signal }) => {
       const buf = await api.getTensorSliceV2(name!, request!, signal);
       logV2PayloadSize("PSDAverage", buf.byteLength);
       const pool = getArrowWorkerPool();
-      return pool.submit<LabeledTensor>(buf, "psd_average");
+      return pool.submit<PSDAvgData>(buf, "psd_average");
     },
     enabled: Boolean(name && request),
     placeholderData: keepPreviousData,

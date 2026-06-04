@@ -828,8 +828,20 @@ export function extractHeatmapNDV2(
  * Centralised here so the worker thread doesn't import view-specific code
  * (keeping the worker bundle small).
  */
+/**
+ * Worker-decoded psd_live result. The cube (`tensor`) still feeds the
+ * encoding-driven heatmap and the freq-selected spatial map — both reshape on
+ * the main thread because their inputs (axis encoding / selected freq) change
+ * live without a refetch. The param-free mean±std curve (`average`) is reduced
+ * in the worker so the always-on full-cube walk never blocks the render thread
+ * (perf-navigation-plan P8). One round-trip still feeds all three subviews.
+ */
+export type PSDLiveDecoded = { tensor: LabeledTensor; average: PSDAvgData };
+
 export type ExtractedV2 =
   | PSDHeatmapData
+  | PSDAvgData
+  | PSDLiveDecoded
   | ColumnarTimeseries
   | Spectrogram
   | SpatialCell[]
@@ -840,6 +852,15 @@ export function extractV2(viewType: string, t: LabeledTensor): ExtractedV2 {
   switch (viewType) {
     case "psd_heatmap":
       return extractPSDHeatmapV2(t);
+    case "psd_average":
+      // Param-free freq curve — reduced in the worker so the standalone
+      // psd_average view consumes it directly (no main-thread cube walk).
+      return extractPSDAverageV2(t);
+    case "psd_live":
+      // Cube + worker-reduced mean±std curve. The heatmap/spatial reshapes
+      // stay on the main thread (live encoding / selected freq), but the
+      // curve walk — which previously re-ran on every render — moves here.
+      return { tensor: t, average: extractPSDAverageV2(t) };
     case "timeseries":
     case "navigator":
       return extractTimeseriesV2(t);
@@ -854,8 +875,7 @@ export function extractV2(viewType: string, t: LabeledTensor): ExtractedV2 {
     default:
       // Unknown viewType — return the labeled tensor untouched so callers
       // can do their own decode. Keeps the worker forwards-compatible as
-      // we add more v2 extractors. `psd_live` falls here on purpose: the
-      // main thread reshapes the one cube into heatmap/curve/spatial.
+      // we add more v2 extractors.
       return t;
   }
 }
@@ -866,6 +886,16 @@ export function extractV2(viewType: string, t: LabeledTensor): ExtractedV2 {
  * worker pool when shipping a decoded result back to the main thread.
  */
 export function transferablesFor(value: ExtractedV2): Transferable[] {
+  // PSDLiveDecoded bundle: the cube's typed arrays are nested under `tensor`;
+  // the `average` curve is plain number[] (cheap structured-clone, no transfer).
+  if ("tensor" in value && "average" in value) {
+    const td = value.tensor;
+    const out: Transferable[] = td.data instanceof Float32Array ? [td.data.buffer] : [];
+    for (const v of Object.values(td.coords)) {
+      if (v instanceof Float64Array) out.push(v.buffer);
+    }
+    return out;
+  }
   if ("data" in value && value.data instanceof Float32Array) {
     const out: Transferable[] = [value.data.buffer];
     for (const v of Object.values(value.coords)) {

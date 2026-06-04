@@ -35,7 +35,9 @@ import {
   extractSpatialFramesV2,
   extractSpectrogramV2,
   extractTimeseriesV2,
+  extractV2,
   type LabeledTensor,
+  type PSDLiveDecoded,
 } from "./v2-arrow";
 import {
   decodeArrowSlice,
@@ -696,6 +698,53 @@ describe("extractSpatialCellsV2 parity", () => {
     expect(v2.map((c) => [c.ap, c.ml])).toEqual(v1.map((c) => [c.ap, c.ml]));
     for (let i = 0; i < v2.length; i++) {
       expect(v2[i].value).toBeCloseTo(v1[i].value, 5);
+    }
+  });
+});
+
+describe("extractV2 dispatch — worker entry point (P8)", () => {
+  // The worker calls extractV2(viewType, labeled). P8 added psd_average +
+  // psd_live cases so the cube reductions run off the main thread. These assert
+  // the dispatch reproduces the standalone extractor output the views consume.
+  function psdCube(): LabeledTensor {
+    const { freqs, ap, ml, values } = syntheticCube();
+    return {
+      meta: {
+        version: "2.0",
+        dims: ["freq", "AP", "ML"],
+        shape: [freqs.length, ap.length, ml.length],
+        dtype: "float32",
+        units: "uV^2/Hz",
+        attrs: {},
+        display_transforms: [],
+      },
+      data: values,
+      coords: {
+        freq: Float64Array.from(freqs),
+        AP: Float64Array.from(ap),
+        ML: Float64Array.from(ml),
+      },
+    };
+  }
+
+  it("routes psd_average to the freq-curve reduction (no main-thread walk)", () => {
+    const labeled = psdCube();
+    const viaDispatch = extractV2("psd_average", labeled);
+    expect(viaDispatch).toEqual(extractPSDAverageV2(labeled));
+  });
+
+  it("routes psd_live to a {tensor, average} bundle for the three subviews", () => {
+    const labeled = psdCube();
+    const result = extractV2("psd_live", labeled) as PSDLiveDecoded;
+    // The cube is forwarded untouched (heatmap/spatial reshape on the main
+    // thread because their inputs change live without a refetch)…
+    expect(result.tensor).toBe(labeled);
+    // …while the worker-reduced curve matches the standalone reduction so
+    // psd_curve consumes it directly.
+    expect(result.average).toEqual(extractPSDAverageV2(labeled));
+    expect(result.average.freqs).toEqual(GOLDEN_PSDAVG.freqs);
+    for (let i = 0; i < GOLDEN_PSDAVG.mean.length; i++) {
+      expect(result.average.mean[i]).toBeCloseTo(GOLDEN_PSDAVG.mean[i], 4);
     }
   });
 });
