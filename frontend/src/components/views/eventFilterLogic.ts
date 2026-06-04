@@ -45,8 +45,18 @@ export function toFiniteNumber(v: unknown): number | undefined {
 export function resolveEventSpan(
   record: Record<string, unknown>,
 ): { t0: number; t1: number; duration: number } | undefined {
-  const t0 = toFiniteNumber(record.t0) ?? toFiniteNumber(record.event_start);
-  const t1 = toFiniteNumber(record.t1) ?? toFiniteNumber(record.event_end);
+  const t0 =
+    toFiniteNumber(record.t0) ??
+    toFiniteNumber(record.event_start) ??
+    toFiniteNumber(record.t_start) ??
+    toFiniteNumber(record.start_time) ??
+    toFiniteNumber(record.onset);
+  const t1 =
+    toFiniteNumber(record.t1) ??
+    toFiniteNumber(record.event_end) ??
+    toFiniteNumber(record.t_end) ??
+    toFiniteNumber(record.end_time) ??
+    toFiniteNumber(record.offset);
   if (t0 !== undefined && t1 !== undefined && t1 >= t0) {
     return { t0, t1, duration: t1 - t0 };
   }
@@ -96,9 +106,14 @@ export type FilterableProperty = { key: string; label: string; min: number; max:
  */
 const BLOCKED_COLUMNS = new Set<string>([
   "event_id", "id", "name", "label", "state", "brainstate", "motor_state",
-  "t", "t0", "t1", "event_start", "event_end",
+  // The time stamp + every interval-bound alias (these are the span, not a
+  // thresholdable property — `duration` is offered instead, derived from them).
+  "t", "t0", "t1", "event_start", "event_end", "t_start", "t_end",
+  "start_time", "end_time", "onset", "offset",
   "peak_time", "trough_time", "midcrossing_time",
   "ap", "ml", "channel", "x", "y", "z",
+  // String/identity columns common in NWB-manifest event tables.
+  "subject", "session", "detection_name", "channel_label", "region", "device",
 ]);
 
 /** Raw column name → canonical property key (collapses detector aliases). */

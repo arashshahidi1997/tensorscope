@@ -59,6 +59,15 @@ describe("resolveEventSpan", () => {
     });
   });
 
+  it("recognizes t_start/t_end (NWB-manifest blob convention)", () => {
+    // Real spindle_ieeg_cortex_blobs records carry t_start/t_end, not t0/t1.
+    expect(resolveEventSpan({ t: 0.5, t_start: 0.25, t_end: 0.75 })).toEqual({
+      t0: 0.25,
+      t1: 0.75,
+      duration: expect.closeTo(0.5),
+    });
+  });
+
   it("derives a centred span from duration + t when no explicit bounds", () => {
     const span = resolveEventSpan({ t: 10, duration: 0.4 });
     expect(span?.t0).toBeCloseTo(9.8);
@@ -153,6 +162,21 @@ describe("enumerateFilterableProperties", () => {
     expect(freq.min).toBeCloseTo(9.0);
     expect(freq.max).toBeCloseTo(11.3);
     expect(freq.label).toBe("frequency (Hz)");
+  });
+
+  it("handles the real spindle-blob columns: bounds blocked, duration offered, freq_peak→frequency", () => {
+    // Mirrors spindle_ieeg_cortex_blobs (t_start/t_end bounds + rich props).
+    const records = [
+      rec({ t: 0.5, t_start: 0.25, t_end: 0.75, amplitude: 3.9, freq_peak: 15, power: 3.5, channel_label: "AP=15,ML=12" }),
+      rec({ t: 2.0, t_start: 1.8, t_end: 2.3, amplitude: 2.0, freq_peak: 11, power: 1.8, channel_label: "AP=2,ML=15" }),
+    ];
+    const cols = ["subject", "session", "channel_label", "t_start", "t", "t_end", "amplitude", "freq_peak", "power", "event_id"];
+    const keys = enumerateFilterableProperties(records, cols, ["t", "event_id"]).map((p) => p.key).sort();
+    // t_start/t_end excluded as bounds; channel_label/subject/session excluded;
+    // freq_peak collapses to canonical `frequency`; duration computed from the span.
+    expect(keys).toEqual(["amplitude", "duration", "frequency", "power"]);
+    expect(keys).not.toContain("t_start");
+    expect(keys).not.toContain("t_end");
   });
 
   it("offers a computed `duration` for interval events", () => {
