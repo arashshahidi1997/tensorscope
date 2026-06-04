@@ -1369,10 +1369,15 @@ def apply_slice_request(
                     {**dict(sliced.attrs), "selected_freq": _scalar_or_none(sliced.coords["freq"].values)}
                 )
 
-    # z-score + stacking offset is a DISPLAY transform. Apply it on the
-    # full-rate windowed data (before downsampling) so the optional bandpass
-    # overlay below filters on the same per-channel scale, and so the std is
-    # estimated from every sample rather than the decimated subset. Audit F3.
+    # z-score + stacking offset is a DISPLAY transform (per-channel z + stack
+    # offset), applied before downsampling. For a NARROW (zoomed-in) window
+    # `sliced` is still the full-rate window, so per-channel std is estimated
+    # from every sample. For a WIDE window P2's LOD selection has already
+    # replaced `sliced` with a coarse min/max level, so the z-score runs on that
+    # few-thousand-point array — off the full-rate hot path (P3) — and its
+    # result is served from the P1 per-view cache on revisit. The optional
+    # bandpass overlay below filters on this same per-channel scale (bandpass
+    # withholds LOD, so it always sees the full-rate slice). Audit F3.
     # Navigator is excluded: the frontend collapses channels to a single mean
     # trace, so per-channel z-score+offset is computed then averaged away.
     # Running it on the navigator's full-session, full-rate slice was the
