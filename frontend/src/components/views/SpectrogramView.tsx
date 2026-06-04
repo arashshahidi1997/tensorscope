@@ -34,7 +34,12 @@ export function SpectrogramView({
   onSelectFreq,
   onTimeWindowChange,
   timeWindow,
-}: SliceViewProps & {
+}: Omit<SliceViewProps, "slice"> & {
+  /**
+   * v1-only precomputed `spectrogram` view passes `slice`; v2 `spectrogram_live`
+   * passes `v2Data`. The view keeps both paths.
+   */
+  slice?: SliceViewProps["slice"];
   /**
    * Contract-v2 pre-extracted spectrogram — when present, replaces the
    * `slice` decode. See `docs/design/contract-v2.md` §5.
@@ -57,9 +62,10 @@ export function SpectrogramView({
   // Decode data
   const { times, freqs, values } = useMemo(() => {
     if (v2Data) return v2Data;
+    if (!slice) return { times: [] as number[], freqs: [] as number[], values: [] as number[][] };
     return extractSpectrogram(decodeArrowSlice(slice));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [v2Data, slice.payload]);
+  }, [v2Data, slice?.payload]);
 
   // Data bounds
   const dataTMin = times.length > 0 ? times[0] : 0;

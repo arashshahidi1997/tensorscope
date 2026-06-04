@@ -17,7 +17,16 @@
  * design rationale.
  */
 import { tableFromIPC, type Table } from "apache-arrow";
-import type { ColumnarTimeseries, PSDHeatmapData, Spectrogram } from "./arrow";
+import type {
+  ColumnarTimeseries,
+  PSDAvgData,
+  PSDHeatmapData,
+  SpatialCell,
+  SpatialMovie,
+  SpatialMovieFrame,
+  Spectrogram,
+} from "./arrow";
+import type { HeatmapEncoding, HeatmapGrid } from "./heatmap";
 
 export const CONTRACT_V2_METADATA_KEY = "tensorscope";
 
@@ -362,7 +371,7 @@ export function extractTimeseriesV2(t: LabeledTensor): ColumnarTimeseries {
     }
   }
 
-  return { times, series };
+  return { times, series, meta };
 }
 
 /**
@@ -444,12 +453,388 @@ export function extractSpectrogramV2(t: LabeledTensor): Spectrogram {
   return { times, freqs, values };
 }
 
+// ── Row-major helpers ───────────────────────────────────────────────────────
+
+/** Row-major strides for a shape: `strides[i] = prod(shape[i+1:])`. */
+function rowMajorStrides(shape: number[]): number[] {
+  const strides = new Array(shape.length).fill(1);
+  for (let i = shape.length - 2; i >= 0; i--) strides[i] = strides[i + 1] * shape[i + 1];
+  return strides;
+}
+
+/**
+ * Average PSD curve (mean + population std across spatial cells per freq) from
+ * a v2 (freq, *spatial) cube. Mirrors v1 `extractPSDAverage`:
+ *   - non-finite cells are skipped (v1's `toNumber` drops NaN/inf rows)
+ *   - std is population (÷N), 0 when a freq has a single finite cell
+ *   - a freq with no finite cells is omitted entirely (v1 never creates that
+ *     group), so the freq axis matches v1 exactly
+ */
+export function extractPSDAverageV2(t: LabeledTensor): PSDAvgData {
+  const { meta, data, coords } = t;
+  const freqAxis = meta.dims.indexOf("freq");
+  if (freqAxis === -1) return { freqs: [], mean: [], std: [] };
+  const freqsTyped = coords["freq"];
+  if (!freqsTyped || !(freqsTyped instanceof Float64Array)) {
+    return { freqs: [], mean: [], std: [] };
+  }
+  const shape = meta.shape;
+  const strides = rowMajorStrides(shape);
+  const freqStride = strides[freqAxis];
+
+  const otherDims = meta.dims
+    .map((d, i) => ({ axis: i, size: shape[i] }))
+    .filter((d) => d.axis !== freqAxis);
+  const otherSizes = otherDims.map((d) => d.size);
+  const otherStrides = otherDims.map((d) => strides[d.axis]);
+  const otherCount = otherSizes.reduce((a, b) => a * b, 1);
+
+  const freqs: number[] = [];
+  const mean: number[] = [];
+  const std: number[] = [];
+  for (let fi = 0; fi < freqsTyped.length; fi++) {
+    const base = fi * freqStride;
+    const vals: number[] = [];
+    const idx = new Array(otherDims.length).fill(0);
+    for (let c = 0; c < otherCount; c++) {
+      let off = base;
+      for (let k = 0; k < idx.length; k++) off += idx[k] * otherStrides[k];
+      const v = data[off];
+      if (Number.isFinite(v)) vals.push(v);
+      for (let i = idx.length - 1; i >= 0; i--) {
+        idx[i] += 1;
+        if (idx[i] < otherSizes[i]) break;
+        idx[i] = 0;
+      }
+    }
+    if (vals.length === 0) continue; // mirror v1: freq absent when fully non-finite
+    const m = vals.reduce((s, v) => s + v, 0) / vals.length;
+    freqs.push(freqsTyped[fi]);
+    mean.push(m);
+    if (vals.length > 1) {
+      const variance = vals.reduce((s, v) => s + (v - m) ** 2, 0) / vals.length;
+      std.push(Math.sqrt(variance));
+    } else {
+      std.push(0);
+    }
+  }
+  return { freqs, mean, std };
+}
+
+/**
+ * Spatial power at the nearest freq to `targetFreq` from a v2 (freq, AP, ML)
+ * cube. Mirrors v1 `extractPSDSpatialAtFreq`:
+ *   - nearest-freq tie-break favours the smaller freq (ascending scan, `<`)
+ *   - non-finite cells skipped; AP/ML ranks built only from finite cells
+ *   - 0-based integer ranks (sorted ascending unique), output sorted (ap, ml)
+ */
+export function extractPSDSpatialV2(
+  t: LabeledTensor,
+  targetFreq: number,
+): { ap: number; ml: number; value: number }[] {
+  const { meta, data, coords } = t;
+  const freqAxis = meta.dims.indexOf("freq");
+  const apAxis = meta.dims.indexOf("AP");
+  const mlAxis = meta.dims.indexOf("ML");
+  if (freqAxis === -1 || apAxis === -1 || mlAxis === -1) return [];
+  const freqsTyped = coords["freq"];
+  const apTyped = coords["AP"];
+  const mlTyped = coords["ML"];
+  if (
+    !(freqsTyped instanceof Float64Array) ||
+    !(apTyped instanceof Float64Array) ||
+    !(mlTyped instanceof Float64Array)
+  ) {
+    return [];
+  }
+  if (freqsTyped.length === 0) return [];
+
+  let nearestIdx = 0;
+  let minDist = Math.abs(targetFreq - freqsTyped[0]);
+  for (let i = 0; i < freqsTyped.length; i++) {
+    const dist = Math.abs(targetFreq - freqsTyped[i]);
+    if (dist < minDist) {
+      minDist = dist;
+      nearestIdx = i;
+    }
+  }
+
+  const shape = meta.shape;
+  const strides = rowMajorStrides(shape);
+  const freqStride = strides[freqAxis];
+  const apStride = strides[apAxis];
+  const mlStride = strides[mlAxis];
+  const nAP = shape[apAxis];
+  const nML = shape[mlAxis];
+
+  const rawCells: { apRaw: number; mlRaw: number; value: number }[] = [];
+  for (let a = 0; a < nAP; a++) {
+    for (let m = 0; m < nML; m++) {
+      const v = data[nearestIdx * freqStride + a * apStride + m * mlStride];
+      if (!Number.isFinite(v)) continue;
+      rawCells.push({ apRaw: apTyped[a], mlRaw: mlTyped[m], value: v });
+    }
+  }
+
+  const apSorted = Array.from(new Set(rawCells.map((c) => c.apRaw))).sort((a, b) => a - b);
+  const mlSorted = Array.from(new Set(rawCells.map((c) => c.mlRaw))).sort((a, b) => a - b);
+  const apRank = new Map(apSorted.map((v, i) => [v, i]));
+  const mlRank = new Map(mlSorted.map((v, i) => [v, i]));
+
+  return rawCells
+    .map((c) => ({ ap: apRank.get(c.apRaw)!, ml: mlRank.get(c.mlRaw)!, value: c.value }))
+    .sort((a, b) => a.ap - b.ap || a.ml - b.ml);
+}
+
+/**
+ * Spatial cells (AP × ML heatmap) from a v2 cube whose dims include AP and ML.
+ * Mirrors v1 `extractSpatialCells`:
+ *   - groups by raw (AP, ML) and averages finite values (collapses any extra
+ *     dims, e.g. a residual time singleton)
+ *   - 0-based integer ranks from finite cells, output sorted (ap, ml)
+ */
+export function extractSpatialCellsV2(t: LabeledTensor): SpatialCell[] {
+  const { meta, data, coords } = t;
+  const apAxis = meta.dims.indexOf("AP");
+  const mlAxis = meta.dims.indexOf("ML");
+  if (apAxis === -1 || mlAxis === -1) return [];
+  const apTyped = coords["AP"];
+  const mlTyped = coords["ML"];
+  if (!(apTyped instanceof Float64Array) || !(mlTyped instanceof Float64Array)) return [];
+
+  const shape = meta.shape;
+  const strides = rowMajorStrides(shape);
+  const apStride = strides[apAxis];
+  const mlStride = strides[mlAxis];
+  const nAP = shape[apAxis];
+  const nML = shape[mlAxis];
+  const otherDims = meta.dims
+    .map((d, i) => ({ axis: i, size: shape[i] }))
+    .filter((d) => d.axis !== apAxis && d.axis !== mlAxis);
+  const otherSizes = otherDims.map((d) => d.size);
+  const otherStrides = otherDims.map((d) => strides[d.axis]);
+  const otherCount = otherSizes.reduce((a, b) => a * b, 1);
+
+  const grouped = new Map<string, { apRaw: number; mlRaw: number; sum: number; count: number }>();
+  for (let a = 0; a < nAP; a++) {
+    for (let m = 0; m < nML; m++) {
+      const apRaw = apTyped[a];
+      const mlRaw = mlTyped[m];
+      const base = a * apStride + m * mlStride;
+      const idx = new Array(otherDims.length).fill(0);
+      for (let c = 0; c < otherCount; c++) {
+        let off = base;
+        for (let k = 0; k < idx.length; k++) off += idx[k] * otherStrides[k];
+        const v = data[off];
+        if (Number.isFinite(v)) {
+          const key = `${apRaw}|${mlRaw}`;
+          let g = grouped.get(key);
+          if (!g) {
+            g = { apRaw, mlRaw, sum: 0, count: 0 };
+            grouped.set(key, g);
+          }
+          g.sum += v;
+          g.count += 1;
+        }
+        for (let i = idx.length - 1; i >= 0; i--) {
+          idx[i] += 1;
+          if (idx[i] < otherSizes[i]) break;
+          idx[i] = 0;
+        }
+      }
+    }
+  }
+
+  const cells = Array.from(grouped.values());
+  const apSorted = Array.from(new Set(cells.map((c) => c.apRaw))).sort((a, b) => a - b);
+  const mlSorted = Array.from(new Set(cells.map((c) => c.mlRaw))).sort((a, b) => a - b);
+  const apRank = new Map(apSorted.map((v, i) => [v, i]));
+  const mlRank = new Map(mlSorted.map((v, i) => [v, i]));
+  return cells
+    .map((c) => ({ ap: apRank.get(c.apRaw)!, ml: mlRank.get(c.mlRaw)!, value: c.sum / c.count }))
+    .sort((a, b) => a.ap - b.ap || a.ml - b.ml);
+}
+
+/**
+ * Per-frame spatial cells + global min/max from a v2 (time, AP, ML)
+ * propagation_movie cube. Mirrors v1 `extractSpatialFrames`:
+ *   - AP/ML ranks computed globally across all frames (stable cell positions)
+ *   - non-finite cells skipped; a fully non-finite frame is omitted
+ *   - global min/max over finite values; per-frame cells sorted (ap, ml)
+ */
+export function extractSpatialFramesV2(t: LabeledTensor): SpatialMovie {
+  const empty: SpatialMovie = { frames: [], nAP: 0, nML: 0, min: 0, max: 1 };
+  const { meta, data, coords } = t;
+  const timeAxis = meta.dims.indexOf("time");
+  const apAxis = meta.dims.indexOf("AP");
+  const mlAxis = meta.dims.indexOf("ML");
+  if (timeAxis === -1 || apAxis === -1 || mlAxis === -1) return empty;
+  const timeTyped = coords["time"];
+  const apTyped = coords["AP"];
+  const mlTyped = coords["ML"];
+  if (
+    !(timeTyped instanceof Float64Array) ||
+    !(apTyped instanceof Float64Array) ||
+    !(mlTyped instanceof Float64Array)
+  ) {
+    return empty;
+  }
+
+  const shape = meta.shape;
+  const strides = rowMajorStrides(shape);
+  const timeStride = strides[timeAxis];
+  const apStride = strides[apAxis];
+  const mlStride = strides[mlAxis];
+  const nT = shape[timeAxis];
+  const nAP = shape[apAxis];
+  const nML = shape[mlAxis];
+
+  const apRaws = new Set<number>();
+  const mlRaws = new Set<number>();
+  let min = Infinity;
+  let max = -Infinity;
+  for (let ti = 0; ti < nT; ti++) {
+    for (let a = 0; a < nAP; a++) {
+      for (let m = 0; m < nML; m++) {
+        const v = data[ti * timeStride + a * apStride + m * mlStride];
+        if (!Number.isFinite(v)) continue;
+        apRaws.add(apTyped[a]);
+        mlRaws.add(mlTyped[m]);
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+    }
+  }
+
+  const apSorted = Array.from(apRaws).sort((a, b) => a - b);
+  const mlSorted = Array.from(mlRaws).sort((a, b) => a - b);
+  if (apSorted.length === 0) return empty; // no finite cells anywhere
+  const apRank = new Map(apSorted.map((v, i) => [v, i]));
+  const mlRank = new Map(mlSorted.map((v, i) => [v, i]));
+
+  const frames: SpatialMovieFrame[] = [];
+  for (let ti = 0; ti < nT; ti++) {
+    const cells: SpatialCell[] = [];
+    for (let a = 0; a < nAP; a++) {
+      for (let m = 0; m < nML; m++) {
+        const v = data[ti * timeStride + a * apStride + m * mlStride];
+        if (!Number.isFinite(v)) continue;
+        cells.push({ ap: apRank.get(apTyped[a])!, ml: mlRank.get(mlTyped[m])!, value: v });
+      }
+    }
+    if (cells.length === 0) continue; // mirror v1: frame absent when fully non-finite
+    cells.sort((a, b) => a.ap - b.ap || a.ml - b.ml);
+    frames.push({ time: timeTyped[ti], cells });
+  }
+  if (frames.length === 0) return empty;
+
+  return {
+    frames,
+    nAP: apSorted.length,
+    nML: mlSorted.length,
+    min: Number.isFinite(min) ? min : 0,
+    max: Number.isFinite(max) ? max : 1,
+  };
+}
+
+const EMPTY_HEATMAP: HeatmapGrid = {
+  xDim: "", yDim: "", xVals: [], yVals: [], values: new Float64Array(0),
+  nx: 0, ny: 0, availableDims: [], reducedDims: [],
+};
+
+/**
+ * Generic N-D → 2-D heatmap pivot from a v2 LabeledTensor. Mirrors v1
+ * `extractHeatmapND` (heatmap.ts) exactly so an encoding-driven `HeatmapView`
+ * renders identically off either path:
+ *   - `availableDims` = `meta.dims` (the data value carries no dim column in v2)
+ *   - unique x/y values are the finite coord values, sorted ascending
+ *   - every other dim is reduced (mean/max) into the colour; empty cell → NaN
+ *
+ * Re-pivots on the main thread (not the worker) because the axis `encoding` is
+ * a live UI choice — the worker decodes the cube once, this reshapes it.
+ */
+export function extractHeatmapNDV2(
+  t: LabeledTensor,
+  encoding: HeatmapEncoding,
+): HeatmapGrid {
+  const { x: xDim, y: yDim, reduce = "mean" } = encoding;
+  const { meta, data, coords } = t;
+  const dims = meta.dims;
+  const xAxis = dims.indexOf(xDim);
+  const yAxis = dims.indexOf(yDim);
+  if (xAxis === -1 || yAxis === -1 || xDim === yDim) return EMPTY_HEATMAP;
+  const xCoord = coords[xDim];
+  const yCoord = coords[yDim];
+  if (!(xCoord instanceof Float64Array) || !(yCoord instanceof Float64Array)) {
+    return EMPTY_HEATMAP;
+  }
+
+  const availableDims = [...dims];
+  const reducedDims = dims.filter((d) => d !== xDim && d !== yDim);
+
+  // Unique finite coord values per axis → sorted band cells (mirror v1 pass 1).
+  const xSet = new Set<number>();
+  const ySet = new Set<number>();
+  for (let i = 0; i < xCoord.length; i++) if (Number.isFinite(xCoord[i])) xSet.add(xCoord[i]);
+  for (let i = 0; i < yCoord.length; i++) if (Number.isFinite(yCoord[i])) ySet.add(yCoord[i]);
+  if (xSet.size === 0 || ySet.size === 0) return EMPTY_HEATMAP;
+
+  const xVals = Array.from(xSet).sort((a, b) => a - b);
+  const yVals = Array.from(ySet).sort((a, b) => a - b);
+  const xIdx = new Map(xVals.map((v, i) => [v, i]));
+  const yIdx = new Map(yVals.map((v, i) => [v, i]));
+  const nx = xVals.length;
+  const ny = yVals.length;
+
+  const shape = meta.shape;
+  const strides = rowMajorStrides(shape);
+  const total = shape.reduce((a, b) => a * b, 1);
+
+  // Pass 2: walk every cube cell (== one v1 long-format row), bucket by the
+  // (x,y) coord at that cell's axis indices, reduce over the rest.
+  const sums = new Float64Array(nx * ny);
+  const counts = new Int32Array(nx * ny);
+  const maxs = new Float64Array(nx * ny).fill(-Infinity);
+  const idx = new Array(shape.length).fill(0);
+  for (let off = 0; off < total; off++) {
+    const xv = xCoord[idx[xAxis]];
+    const yv = yCoord[idx[yAxis]];
+    const v = data[off];
+    if (Number.isFinite(xv) && Number.isFinite(yv) && Number.isFinite(v)) {
+      const cell = yIdx.get(yv)! * nx + xIdx.get(xv)!;
+      counts[cell]++;
+      sums[cell] += v;
+      if (v > maxs[cell]) maxs[cell] = v;
+    }
+    for (let i = idx.length - 1; i >= 0; i--) {
+      idx[i] += 1;
+      if (idx[i] < shape[i]) break;
+      idx[i] = 0;
+    }
+  }
+
+  const values = new Float64Array(nx * ny);
+  for (let i = 0; i < values.length; i++) {
+    if (counts[i] === 0) values[i] = NaN;
+    else if (reduce === "max") values[i] = maxs[i];
+    else values[i] = sums[i] / counts[i];
+  }
+
+  return { xDim, yDim, xVals, yVals, values, nx, ny, availableDims, reducedDims };
+}
+
 /**
  * Worker-friendly entry: dispatch to the right extractor by view type.
  * Centralised here so the worker thread doesn't import view-specific code
  * (keeping the worker bundle small).
  */
-export type ExtractedV2 = PSDHeatmapData | ColumnarTimeseries | Spectrogram | LabeledTensor;
+export type ExtractedV2 =
+  | PSDHeatmapData
+  | ColumnarTimeseries
+  | Spectrogram
+  | SpatialCell[]
+  | SpatialMovie
+  | LabeledTensor;
 
 export function extractV2(viewType: string, t: LabeledTensor): ExtractedV2 {
   switch (viewType) {
@@ -461,10 +846,16 @@ export function extractV2(viewType: string, t: LabeledTensor): ExtractedV2 {
     case "spectrogram":
     case "spectrogram_live":
       return extractSpectrogramV2(t);
+    case "spatial_map":
+    case "propagation_frame":
+      return extractSpatialCellsV2(t);
+    case "propagation_movie":
+      return extractSpatialFramesV2(t);
     default:
       // Unknown viewType — return the labeled tensor untouched so callers
       // can do their own decode. Keeps the worker forwards-compatible as
-      // we add more v2 extractors.
+      // we add more v2 extractors. `psd_live` falls here on purpose: the
+      // main thread reshapes the one cube into heatmap/curve/spatial.
       return t;
   }
 }

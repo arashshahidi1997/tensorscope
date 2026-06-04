@@ -254,7 +254,9 @@ export function TimeseriesSliceView({
   onTimeWindowChange,
   timeWindow,
   dataRange,
-}: SliceViewProps & {
+}: Omit<SliceViewProps, "slice"> & {
+  /** v2-only: present for v1-staying callers, omitted once `v2Data` drives the view. */
+  slice?: SliceViewProps["slice"];
   brainstateIntervals?: BrainstateIntervalDTO[];
   brainstateOverlayEnabled?: boolean;
   /** Full data extent in seconds; if omitted the nav strip is hidden. */
@@ -336,7 +338,7 @@ export function TimeseriesSliceView({
     // The chart structure stays identical so no rebuild is needed when the
     // user toggles the band on/off. NS2-equivalent "filtered view" — full
     // raw + filtered overlay is v0.1 work.
-    const raw = v2Data ?? extractTimeseriesColumnarFast(slice);
+    const raw = v2Data ?? (slice ? extractTimeseriesColumnarFast(slice) : { times: [], series: [] });
     const total = raw.series.length;
     // Infer the grid's ML width from the FULL (uncapped) channel set. The
     // flat-id mapping (ap*nML+ml) used for region lookup must match the
@@ -379,7 +381,7 @@ export function TimeseriesSliceView({
       inferredNML,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [v2Data, slice.payload, v2BandpassData, bandActive?.[0], bandActive?.[1], tsFirstChannel]);
+  }, [v2Data, slice?.payload, v2BandpassData, bandActive?.[0], bandActive?.[1], tsFirstChannel]);
 
   // Register channel-viewport keyboard shortcuts ( [ / ] ) on the page.
   // Active whenever a timeseries view is mounted (one per workspace).
@@ -875,7 +877,7 @@ export function TimeseriesSliceView({
     reconcileChartSize();
     chart.redraw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [v2Data, slice.payload]);
+  }, [v2Data, slice?.payload]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -936,8 +938,8 @@ export function TimeseriesSliceView({
   // Audit F3 / F4 / F21: surface the on-server display transform, the silent
   // channel cap, and any processing-pipeline failure so the user knows the
   // on-screen data isn't what they think it is.
-  const displayTransforms = slice.meta?.display_transforms ?? [];
-  const procStatus = slice.meta?.processing;
+  const displayTransforms = v2Data?.meta?.display_transforms ?? slice?.meta?.display_transforms ?? [];
+  const procStatus = v2Data?.meta?.processing ?? slice?.meta?.processing;
   const fidelityNotices: string[] = [];
   if (channelCapActive) {
     fidelityNotices.push(`showing ${series.length} of ${totalChannels} channels (row-major order)`);

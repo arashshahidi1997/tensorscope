@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { decodeArrowSlice } from "../../api/arrow";
 import { extractHeatmapND, type HeatmapEncoding } from "../../api/heatmap";
+import { extractHeatmapNDV2, type LabeledTensor } from "../../api/v2-arrow";
 import { useAppStore } from "../../store/appStore";
 import { ColorBar } from "./ColorBar";
 import { getColormapLUT, type ColormapName } from "./colormaps";
@@ -15,11 +16,15 @@ import type { SliceViewProps } from "./viewTypes";
  * `viewId` keys the per-panel axis encoding in appStore; `defaultEncoding` sets
  * the initial axes for this view type. `colormap`/`logColor` are view defaults.
  */
-type HeatmapViewProps = SliceViewProps & {
+type HeatmapViewProps = Omit<SliceViewProps, "slice"> & {
+  slice?: SliceViewProps["slice"];
   viewId: string;
   defaultEncoding: HeatmapEncoding;
   colormap?: ColormapName;
   logColor?: boolean;
+  /** Contract-v2 source. When set, the grid is built via `extractHeatmapNDV2`
+   * and `slice` is ignored. */
+  v2?: LabeledTensor | null;
 };
 
 export function HeatmapView({
@@ -28,28 +33,43 @@ export function HeatmapView({
   defaultEncoding,
   colormap = "viridis",
   logColor = false,
+  v2 = null,
 }: HeatmapViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const stored = useAppStore((s) => s.heatmapEncodings[viewId]);
   const setHeatmapAxes = useAppStore((s) => s.setHeatmapAxes);
 
-  const decoded = useMemo(() => (slice ? decodeArrowSlice(slice) : null), [slice]);
+  const decoded = useMemo(
+    () => (!v2 && slice ? decodeArrowSlice(slice) : null),
+    [v2, slice],
+  );
+
+  // Dims available for axis assignment — `meta.dims` for v2, the long-format
+  // column set for v1.
+  const cols = useMemo(
+    () => (v2 ? v2.meta.dims : (decoded?.columns ?? [])),
+    [v2, decoded],
+  );
 
   // Effective encoding: stored per-panel axes if both still exist in the data,
   // else the view's default. Guards against a stored dim vanishing on a tensor
   // switch (e.g. AP/ML → channel).
   const encoding = useMemo<HeatmapEncoding>(() => {
-    const cols = decoded?.columns ?? [];
     if (stored && cols.includes(stored.x) && cols.includes(stored.y)) {
       return { x: stored.x, y: stored.y, reduce: defaultEncoding.reduce };
     }
     return defaultEncoding;
-  }, [stored, decoded, defaultEncoding]);
+  }, [stored, cols, defaultEncoding]);
 
   const grid = useMemo(
-    () => (decoded ? extractHeatmapND(decoded, encoding) : null),
-    [decoded, encoding],
+    () =>
+      v2
+        ? extractHeatmapNDV2(v2, encoding)
+        : decoded
+          ? extractHeatmapND(decoded, encoding)
+          : null,
+    [v2, decoded, encoding],
   );
 
   // Robust color range (2–98 pct of finite values; log10 for power-like data).

@@ -9,12 +9,11 @@
  * don't re-decode on every frame advance.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import {
-  decodeArrowSlice,
-  extractSpatialFrames,
-  type SpatialMovie,
-} from "../../api/arrow";
-import type { SelectionDTO, TensorSliceDTO } from "../../api/types";
+import type { SpatialMovie } from "../../api/arrow";
+import { api } from "../../api/client";
+import { makePropagationMovieRequest } from "../../api/queries";
+import type { SelectionDTO } from "../../api/types";
+import { decodeLabeledTensor, extractSpatialFramesV2 } from "../../api/v2-arrow";
 import { useMaskStore } from "../../store/maskStore";
 import { ChannelGridRenderer } from "./ChannelGridRenderer";
 import { ColorBar } from "./ColorBar";
@@ -100,28 +99,16 @@ export function PropagationMoviePlayer({
     if (!tensorName) return;
     const [t0, t1] = timeWindow;
     if (!Number.isFinite(t0) || !Number.isFinite(t1) || t1 <= t0) return;
+    const controller = new AbortController();
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch(`/api/v1/tensors/${tensorName}/slice`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        view_type: "propagation_movie",
-        selection: selectionRef.current,
-        time_range: [t0, t1],
-        n_frames: nFrames,
-      }),
-    })
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json() as Promise<TensorSliceDTO>;
-      })
-      .then((slice) => {
+    const request = makePropagationMovieRequest(selectionRef.current, [t0, t1], nFrames);
+    api
+      .getTensorSliceV2(tensorName, request, controller.signal)
+      .then((buf) => {
         if (cancelled) return;
-        const decoded = decodeArrowSlice(slice);
-        const m = extractSpatialFrames(decoded);
+        const m = extractSpatialFramesV2(decodeLabeledTensor(buf));
         // Pre-build the (id, apIdx, mlIdx, value) cell arrays once so the
         // RAF loop only does an O(n_cells) draw per tick — no decode.
         cellsCache.current = m.frames.map((frame) =>
@@ -136,13 +123,14 @@ export function PropagationMoviePlayer({
         setFrameIdx(0);
       })
       .catch((e) => {
-        if (!cancelled) setError(String(e));
+        if (!cancelled && e?.name !== "AbortError") setError(String(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [tensorName, timeWindow[0], timeWindow[1], nFrames]); // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -20,7 +20,8 @@ import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } f
 import { api } from "./client";
 import type { BrainstateIntervalDTO, BrainstateMetaDTO, CoordSummary, EventAverageParamsDTO, EventRecordDTO, MaskStateDTO, ProbeLayoutDTO, ProcessingParamsDTO, ScalarSeriesDTO, SelectionDTO, TensorSliceRequestDTO, TrackMetaDTO } from "./types";
 import type { WorkspaceDAGDTO } from "../types/dag";
-import type { ColumnarTimeseries, PSDHeatmapData, Spectrogram } from "./arrow";
+import type { ColumnarTimeseries, SpatialCell, Spectrogram } from "./arrow";
+import type { LabeledTensor } from "./v2-arrow";
 import { getArrowWorkerPool } from "./workerPool";
 
 export function useStateQuery() {
@@ -62,66 +63,26 @@ export function useSliceQuery(name: string | null, request: TensorSliceRequestDT
 
 // ── Contract v2 ─────────────────────────────────────────────────────────────
 //
-// Phase 1: a parallel `useV2PSDHeatmapQuery` that fetches the binary v2
-// payload, ships the ArrayBuffer to the worker pool for decode + extract,
-// and returns the same `PSDHeatmapData` shape the v1 path produces. Behind
-// `localStorage["tensorscope:v2"] === "1"`. Only PSDHeatmap migrates this
-// session; remaining views follow per the parity-gate process in
-// `docs/design/contract-v2.md` §5.
-
-export const V2_FLAG_KEY = "tensorscope:v2";
-
-export function isV2Enabled(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.localStorage?.getItem(V2_FLAG_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
+// v2 is the only wire path: each view fetches raw Arrow IPC bytes from
+// `/api/v2/tensors/{name}/slice`, ships the ArrayBuffer to the worker pool for
+// decode + extract, and gets back the same shape the v1 extractors produced.
+// `placeholderData: keepPreviousData` is the optimistic-render hook — during a
+// refetch React Query keeps the previous slice's data so the view re-renders
+// with stale-but-visible content rather than blanking. See
+// `docs/design/contract-v2.md` §0.2 / §5.
 
 // One-shot console log of the v2 payload size so we can spot regressions in
-// wire size from the console. Logged once per view-type (psd_heatmap,
-// timeseries, spectrogram_live, navigator). The v1-comparison fetch this
-// used to fire has been removed — the ~5× reduction is already measured, and
-// the comparison doubled every view's first-load traffic with a redundant v1
-// request even when v2 is the only active path.
+// wire size from the console. Logged once per view-type (timeseries,
+// spectrogram_live, navigator, psd_live, psd_average, spatial_map). The
+// v1-comparison fetch this used to fire has been removed — the ~5× reduction
+// is already measured, and the comparison doubled every view's first-load
+// traffic with a redundant v1 request even when v2 is the only active path.
 const _v2SizeLogged = new Set<string>();
 function logV2PayloadSize(viewLabel: string, v2Bytes: number): void {
   if (_v2SizeLogged.has(viewLabel)) return;
   _v2SizeLogged.add(viewLabel);
   // eslint-disable-next-line no-console
   console.info(`[contract-v2] ${viewLabel} v2 wire size: ${v2Bytes.toLocaleString()} bytes`);
-}
-
-/**
- * v2 PSDHeatmap query — raw Arrow bytes → worker decode → PSDHeatmapData.
- *
- * Returns the same shape as `extractPSDHeatmap(decoded)` from the v1 path,
- * so `PSDHeatmapView` doesn't need to know which contract supplied it.
- *
- * `placeholderData: keepPreviousData` is the optimistic-render hook —
- * during a refetch, React Query keeps the previous slice's `PSDHeatmapData`
- * in `data`, so the view re-renders with stale-but-visible content rather
- * than blanking. See `docs/design/contract-v2.md` §0.2.
- */
-export function useV2PSDHeatmapQuery(
-  name: string | null,
-  request: TensorSliceRequestDTO | null,
-) {
-  return useQuery<PSDHeatmapData>({
-    queryKey: ["slice-v2", "psd_heatmap", name, request],
-    queryFn: async ({ signal }) => {
-      const buf = await api.getTensorSliceV2(name!, request!, signal);
-      logV2PayloadSize("PSDHeatmap", buf.byteLength);
-      const pool = getArrowWorkerPool();
-      // Worker consumes the buffer (transferred); never reads from it again.
-      return pool.submit<PSDHeatmapData>(buf, "psd_heatmap");
-    },
-    enabled: Boolean(name && request),
-    placeholderData: keepPreviousData,
-    retry: false,
-  });
 }
 
 /**
@@ -171,6 +132,81 @@ export function useV2SpectrogramQuery(
       logV2PayloadSize(logLabel, buf.byteLength);
       const pool = getArrowWorkerPool();
       return pool.submit<Spectrogram>(buf, request!.view_type);
+    },
+    enabled: Boolean(name && request),
+    placeholderData: keepPreviousData,
+    retry: false,
+  });
+}
+
+/**
+ * v2 PSD-live query — one (freq, AP, ML | channel) cube that powers all three
+ * PSD-live subviews (psd_heatmap, psd_curve, psd_spatial). Returns the raw
+ * `LabeledTensor` so each subview runs its own extractor on the main thread
+ * (`extractHeatmapNDV2` / `extractPSDAverageV2` / `extractPSDSpatialV2`). The
+ * cube is freq-major and small, so main-thread extraction is negligible — and
+ * one round-trip feeds all three views (matches the v1 `psdLiveQuery` fan-out).
+ */
+export function useV2PSDLiveQuery(
+  name: string | null,
+  request: TensorSliceRequestDTO | null,
+) {
+  return useQuery<LabeledTensor>({
+    queryKey: ["slice-v2", "psd_live", name, request],
+    queryFn: async ({ signal }) => {
+      const buf = await api.getTensorSliceV2(name!, request!, signal);
+      logV2PayloadSize("PSDLive", buf.byteLength);
+      const pool = getArrowWorkerPool();
+      // psd_live falls to extractV2's default branch → returns the LabeledTensor.
+      return pool.submit<LabeledTensor>(buf, "psd_live");
+    },
+    enabled: Boolean(name && request),
+    placeholderData: keepPreviousData,
+    retry: false,
+  });
+}
+
+/**
+ * v2 standalone PSD-average query — a freq-only (or freq × spatial) tensor
+ * pre-computed server-side, distinct from the psd_live cube. Returns the
+ * `LabeledTensor`; the view derives the `{freqs, values}` curve via
+ * `extractPSDAverageV2` on the main thread.
+ */
+export function useV2PSDAverageQuery(
+  name: string | null,
+  request: TensorSliceRequestDTO | null,
+) {
+  return useQuery<LabeledTensor>({
+    queryKey: ["slice-v2", "psd_average", name, request],
+    queryFn: async ({ signal }) => {
+      const buf = await api.getTensorSliceV2(name!, request!, signal);
+      logV2PayloadSize("PSDAverage", buf.byteLength);
+      const pool = getArrowWorkerPool();
+      return pool.submit<LabeledTensor>(buf, "psd_average");
+    },
+    enabled: Boolean(name && request),
+    placeholderData: keepPreviousData,
+    retry: false,
+  });
+}
+
+/**
+ * v2 spatial-map query — decodes to `SpatialCell[]` (the same shape v1
+ * `extractSpatialCells` produces) in the worker, so `SpatialMapSliceView`
+ * doesn't need to know which contract supplied the cells.
+ */
+export function useV2SpatialQuery(
+  name: string | null,
+  request: TensorSliceRequestDTO | null,
+  logLabel = "SpatialMap",
+) {
+  return useQuery<SpatialCell[]>({
+    queryKey: ["slice-v2", "spatial_map", name, request],
+    queryFn: async ({ signal }) => {
+      const buf = await api.getTensorSliceV2(name!, request!, signal);
+      logV2PayloadSize(logLabel, buf.byteLength);
+      const pool = getArrowWorkerPool();
+      return pool.submit<SpatialCell[]>(buf, request!.view_type);
     },
     enabled: Boolean(name && request),
     placeholderData: keepPreviousData,

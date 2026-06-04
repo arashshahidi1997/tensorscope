@@ -23,18 +23,103 @@ import { resolve } from "node:path";
 import { tableFromArrays, tableToIPC } from "apache-arrow";
 import {
   decodeLabeledTensor,
+  extractHeatmapNDV2,
+  extractPSDAverageV2,
   extractPSDHeatmapV2,
+  extractPSDSpatialV2,
+  extractSpatialCellsV2,
+  extractSpatialFramesV2,
   extractSpectrogramV2,
   extractTimeseriesV2,
   type LabeledTensor,
 } from "./v2-arrow";
 import {
   decodeArrowSlice,
+  extractFreqCurve,
+  extractPSDAverage,
   extractPSDHeatmap,
+  extractPSDSpatialAtFreq,
+  extractSpatialCells,
+  extractSpatialFrames,
   extractSpectrogram,
   extractTimeseriesColumnar,
 } from "./arrow";
+import { extractHeatmapND } from "./heatmap";
 import type { TensorSliceDTO } from "./types";
+
+/** Long-format (AP, ML, value) slice for spatial_map parity checks. */
+function buildSpatialSlice(
+  apVals: number[],
+  mlVals: number[],
+  values: Float32Array,
+): TensorSliceDTO {
+  const nAP = apVals.length;
+  const nML = mlVals.length;
+  const total = nAP * nML;
+  const cAP = new Float64Array(total);
+  const cML = new Float64Array(total);
+  const cVal = new Float64Array(total);
+  let idx = 0;
+  for (let a = 0; a < nAP; a++) {
+    for (let m = 0; m < nML; m++) {
+      cAP[idx] = apVals[a];
+      cML[idx] = mlVals[m];
+      cVal[idx] = values[a * nML + m];
+      idx++;
+    }
+  }
+  const table = tableFromArrays({ AP: cAP, ML: cML, value: cVal });
+  const payload = Buffer.from(tableToIPC(table)).toString("base64");
+  return {
+    name: "test",
+    view_type: "spatial_map",
+    dims: ["AP", "ML"],
+    shape: [nAP, nML],
+    encoding: "arrow_ipc",
+    payload,
+    meta: {},
+  };
+}
+
+/** Long-format (time, AP, ML, value) slice for propagation_movie parity. */
+function buildTimeSpatialSlice(
+  times: number[],
+  apVals: number[],
+  mlVals: number[],
+  values: Float32Array,
+): TensorSliceDTO {
+  const nT = times.length;
+  const nAP = apVals.length;
+  const nML = mlVals.length;
+  const total = nT * nAP * nML;
+  const cT = new Float64Array(total);
+  const cAP = new Float64Array(total);
+  const cML = new Float64Array(total);
+  const cVal = new Float64Array(total);
+  let idx = 0;
+  for (let ti = 0; ti < nT; ti++) {
+    for (let a = 0; a < nAP; a++) {
+      for (let m = 0; m < nML; m++) {
+        cT[idx] = times[ti];
+        cAP[idx] = apVals[a];
+        cML[idx] = mlVals[m];
+        cVal[idx] = values[ti * nAP * nML + a * nML + m];
+        idx++;
+      }
+    }
+  }
+  const table = tableFromArrays({ time: cT, AP: cAP, ML: cML, value: cVal });
+  const payload = Buffer.from(tableToIPC(table)).toString("base64");
+  return {
+    name: "test",
+    view_type: "propagation_movie",
+    dims: ["time", "AP", "ML"],
+    shape: [nT, nAP, nML],
+    encoding: "arrow_ipc",
+    payload,
+    meta: {},
+  };
+}
 
 const PY_PATH = resolve(__dirname, "../../../.pixi/envs/default/bin/python");
 const PY_AVAILABLE = existsSync(PY_PATH);
@@ -456,6 +541,236 @@ sys.stdout.write(base64.b64encode(encode_arrow_v2(da)).decode("ascii"))
     for (let fi = 0; fi < v2.matrix.length; fi++) {
       for (let ci = 0; ci < v2.matrix[fi].length; ci++) {
         expect(v2.matrix[fi][ci]).toBeCloseTo(v1.matrix[fi][ci], 5);
+      }
+    }
+  });
+});
+
+describe("extractHeatmapNDV2 parity", () => {
+  // psd_heatmap's primary render is the encoding-driven HeatmapView, so its v2
+  // pivot must match v1 `extractHeatmapND` for whichever (x,y) the user picks —
+  // including the reduce-over-other-dims path.
+  const { freqs, ap, ml, values } = syntheticCube();
+  const labeled: LabeledTensor = {
+    meta: {
+      version: "2.0",
+      dims: ["freq", "AP", "ML"],
+      shape: [freqs.length, ap.length, ml.length],
+      dtype: "float32",
+      units: "uV^2/Hz",
+      attrs: {},
+      display_transforms: [],
+    },
+    data: values,
+    coords: {
+      freq: Float64Array.from(freqs),
+      AP: Float64Array.from(ap),
+      ML: Float64Array.from(ml),
+    },
+  };
+  const decoded = decodeArrowSlice(buildLongFormatSlice(freqs, ap, ml, values));
+
+  for (const encoding of [
+    { x: "freq", y: "AP" }, // reduces ML
+    { x: "AP", y: "ML" }, // reduces freq
+    { x: "freq", y: "AP", reduce: "max" as const }, // max reduction over ML
+  ]) {
+    it(`matches v1 extractHeatmapND for x=${encoding.x} y=${encoding.y} reduce=${encoding.reduce ?? "mean"}`, () => {
+      const v2 = extractHeatmapNDV2(labeled, encoding);
+      const v1 = extractHeatmapND(decoded, encoding);
+      expect(v2.xDim).toBe(v1.xDim);
+      expect(v2.yDim).toBe(v1.yDim);
+      expect(v2.xVals).toEqual(v1.xVals);
+      expect(v2.yVals).toEqual(v1.yVals);
+      expect(v2.nx).toBe(v1.nx);
+      expect(v2.ny).toBe(v1.ny);
+      expect(v2.availableDims.sort()).toEqual(v1.availableDims.sort());
+      expect(v2.reducedDims.sort()).toEqual(v1.reducedDims.sort());
+      expect(v2.values.length).toBe(v1.values.length);
+      for (let i = 0; i < v2.values.length; i++) {
+        if (Number.isNaN(v1.values[i])) expect(Number.isNaN(v2.values[i])).toBe(true);
+        else expect(v2.values[i]).toBeCloseTo(v1.values[i], 4);
+      }
+    });
+  }
+});
+
+describe("extractPSDAverageV2 parity", () => {
+  it("matches v1 extractPSDAverage on a (freq, AP, ML) cube", () => {
+    const { freqs, ap, ml, values } = syntheticCube();
+    const labeled: LabeledTensor = {
+      meta: {
+        version: "2.0",
+        dims: ["freq", "AP", "ML"],
+        shape: [freqs.length, ap.length, ml.length],
+        dtype: "float32",
+        units: "uV^2/Hz",
+        attrs: {},
+        display_transforms: [],
+      },
+      data: values,
+      coords: {
+        freq: Float64Array.from(freqs),
+        AP: Float64Array.from(ap),
+        ML: Float64Array.from(ml),
+      },
+    };
+    const v2 = extractPSDAverageV2(labeled);
+    const v1 = extractPSDAverage(decodeArrowSlice(buildLongFormatSlice(freqs, ap, ml, values)));
+
+    expect(v2.freqs).toEqual(v1.freqs);
+    expect(v2.mean.length).toBe(v1.mean.length);
+    for (let i = 0; i < v2.mean.length; i++) {
+      expect(v2.mean[i]).toBeCloseTo(v1.mean[i], 4);
+      expect(v2.std[i]).toBeCloseTo(v1.std[i], 4);
+    }
+  });
+
+  it("v2 mean drives the standalone psd_average view (extractFreqCurve parity)", () => {
+    // PSDSliceView (the `psd_average` view) consumes `extractFreqCurve` →
+    // `{freqs, values}`, where `values` is the per-freq mean over finite
+    // cells. The v2 cutover feeds it `extractPSDAverageV2(labeled).mean`, so
+    // this asserts the two means are identical before the v1 path is removed.
+    const { freqs, ap, ml, values } = syntheticCube();
+    const labeled: LabeledTensor = {
+      meta: {
+        version: "2.0",
+        dims: ["freq", "AP", "ML"],
+        shape: [freqs.length, ap.length, ml.length],
+        dtype: "float32",
+        units: "uV^2/Hz",
+        attrs: {},
+        display_transforms: [],
+      },
+      data: values,
+      coords: {
+        freq: Float64Array.from(freqs),
+        AP: Float64Array.from(ap),
+        ML: Float64Array.from(ml),
+      },
+    };
+    const v2Mean = extractPSDAverageV2(labeled).mean;
+    const v1Curve = extractFreqCurve(decodeArrowSlice(buildLongFormatSlice(freqs, ap, ml, values)));
+    expect(v2Mean.length).toBe(v1Curve.values.length);
+    for (let i = 0; i < v2Mean.length; i++) {
+      expect(v2Mean[i]).toBeCloseTo(v1Curve.values[i], 4);
+    }
+  });
+});
+
+describe("extractPSDSpatialV2 parity", () => {
+  it("matches v1 extractPSDSpatialAtFreq at the nearest freq", () => {
+    const { freqs, ap, ml, values } = syntheticCube();
+    const targetFreq = 22; // nearest is 20
+    const labeled: LabeledTensor = {
+      meta: {
+        version: "2.0",
+        dims: ["freq", "AP", "ML"],
+        shape: [freqs.length, ap.length, ml.length],
+        dtype: "float32",
+        units: "uV^2/Hz",
+        attrs: {},
+        display_transforms: [],
+      },
+      data: values,
+      coords: {
+        freq: Float64Array.from(freqs),
+        AP: Float64Array.from(ap),
+        ML: Float64Array.from(ml),
+      },
+    };
+    const v2 = extractPSDSpatialV2(labeled, targetFreq);
+    const v1 = extractPSDSpatialAtFreq(
+      decodeArrowSlice(buildLongFormatSlice(freqs, ap, ml, values)),
+      targetFreq,
+    );
+
+    expect(v2.map((c) => [c.ap, c.ml])).toEqual(v1.map((c) => [c.ap, c.ml]));
+    for (let i = 0; i < v2.length; i++) {
+      expect(v2[i].value).toBeCloseTo(v1[i].value, 4);
+    }
+  });
+});
+
+describe("extractSpatialCellsV2 parity", () => {
+  it("matches v1 extractSpatialCells on an (AP, ML) cube", () => {
+    const ap = [0, 1, 2];
+    const ml = [100, 200];
+    const values = new Float32Array(ap.length * ml.length);
+    for (let a = 0; a < ap.length; a++) {
+      for (let m = 0; m < ml.length; m++) values[a * ml.length + m] = a * 10 + m;
+    }
+    const labeled: LabeledTensor = {
+      meta: {
+        version: "2.0",
+        dims: ["AP", "ML"],
+        shape: [ap.length, ml.length],
+        dtype: "float32",
+        units: "uV",
+        attrs: {},
+        display_transforms: [],
+      },
+      data: values,
+      coords: { AP: Float64Array.from(ap), ML: Float64Array.from(ml) },
+    };
+    const v2 = extractSpatialCellsV2(labeled);
+    const v1 = extractSpatialCells(decodeArrowSlice(buildSpatialSlice(ap, ml, values)));
+
+    expect(v2.map((c) => [c.ap, c.ml])).toEqual(v1.map((c) => [c.ap, c.ml]));
+    for (let i = 0; i < v2.length; i++) {
+      expect(v2[i].value).toBeCloseTo(v1[i].value, 5);
+    }
+  });
+});
+
+describe("extractSpatialFramesV2 parity", () => {
+  it("matches v1 extractSpatialFrames on a (time, AP, ML) cube", () => {
+    const times = [0.0, 0.1, 0.2];
+    const ap = [0, 1];
+    const ml = [100, 200];
+    const nT = times.length, nAP = ap.length, nML = ml.length;
+    const values = new Float32Array(nT * nAP * nML);
+    for (let ti = 0; ti < nT; ti++) {
+      for (let a = 0; a < nAP; a++) {
+        for (let m = 0; m < nML; m++) {
+          values[ti * nAP * nML + a * nML + m] = ti * 1000 + a * 10 + m;
+        }
+      }
+    }
+    const labeled: LabeledTensor = {
+      meta: {
+        version: "2.0",
+        dims: ["time", "AP", "ML"],
+        shape: [nT, nAP, nML],
+        dtype: "float32",
+        units: "uV",
+        attrs: {},
+        display_transforms: [],
+      },
+      data: values,
+      coords: {
+        time: Float64Array.from(times),
+        AP: Float64Array.from(ap),
+        ML: Float64Array.from(ml),
+      },
+    };
+    const v2 = extractSpatialFramesV2(labeled);
+    const v1 = extractSpatialFrames(
+      decodeArrowSlice(buildTimeSpatialSlice(times, ap, ml, values)),
+    );
+
+    expect(v2.nAP).toBe(v1.nAP);
+    expect(v2.nML).toBe(v1.nML);
+    expect(v2.min).toBeCloseTo(v1.min, 5);
+    expect(v2.max).toBeCloseTo(v1.max, 5);
+    expect(v2.frames.length).toBe(v1.frames.length);
+    for (let fi = 0; fi < v2.frames.length; fi++) {
+      expect(v2.frames[fi].time).toBeCloseTo(v1.frames[fi].time, 5);
+      expect(v2.frames[fi].cells.map((c) => [c.ap, c.ml])).toEqual(
+        v1.frames[fi].cells.map((c) => [c.ap, c.ml]),
+      );
+      for (let ci = 0; ci < v2.frames[fi].cells.length; ci++) {
+        expect(v2.frames[fi].cells[ci].value).toBeCloseTo(v1.frames[fi].cells[ci].value, 5);
       }
     }
   });

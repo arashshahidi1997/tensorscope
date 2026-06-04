@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { decodeArrowSlice, extractSpatialCells } from "../../api/arrow";
+import { decodeArrowSlice, extractSpatialCells, type SpatialCell } from "../../api/arrow";
 import { buildRegionResolver } from "../../api/probeLayout";
 import { useProbeLayoutQuery } from "../../api/queries";
 import { useAppStore } from "../../store/appStore";
@@ -9,7 +9,12 @@ import { ColorBar } from "./ColorBar";
 import type { SpatialCellWithId } from "./SpatialRenderer";
 import type { SliceViewProps } from "./viewTypes";
 
-type SpatialMapProps = SliceViewProps & {
+type SpatialMapProps = Omit<SliceViewProps, "slice"> & {
+  slice?: SliceViewProps["slice"];
+  /** Contract-v2 source. When set, `slice` is ignored and these cells (already
+   * rank-indexed + sorted by (ap, ml), same shape as `extractSpatialCells`)
+   * drive the grid. */
+  v2Cells?: SpatialCell[] | null;
   onHoverElectrode?: (id: number | null) => void;
   colorScale?: "sequential" | "cyclical";
   hoveredId?: number | null;
@@ -18,6 +23,7 @@ type SpatialMapProps = SliceViewProps & {
 
 export function SpatialMapSliceView({
   slice,
+  v2Cells = null,
   selection,
   onSelectCell,
   onHoverElectrode,
@@ -56,8 +62,9 @@ export function SpatialMapSliceView({
   const maxValueRef = useRef(1);
 
   // Decode and transform SpatialCell[] → SpatialCellWithId[] outside of JSX.
-  const decoded = slice ? decodeArrowSlice(slice) : null;
-  const rawCells = decoded ? extractSpatialCells(decoded) : [];
+  // v2 supplies the cells pre-extracted; v1 decodes the long-format slice.
+  const decoded = !v2Cells && slice ? decodeArrowSlice(slice) : null;
+  const rawCells = v2Cells ?? (decoded ? extractSpatialCells(decoded) : []);
 
   if (rawCells.length > 0) {
     const nML = Math.max(...rawCells.map((c) => c.ml)) + 1;
@@ -149,7 +156,7 @@ export function SpatialMapSliceView({
       regionByFlatId: regionResolver.regionByFlatId,
       regionPalette: regionResolver.palette,
     });
-  }, [slice, colorScale, hoveredId, selectedIds, maskedArray, regionResolver]);
+  }, [slice, v2Cells, colorScale, hoveredId, selectedIds, maskedArray, regionResolver]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import type { DecodedSlice } from "../../api/arrow";
-import { extractPSDSpatialAtFreq } from "../../api/arrow";
+import { extractPSDSpatialV2, type LabeledTensor } from "../../api/v2-arrow";
 import { useAppStore } from "../../store/appStore";
 import { useMaskStore } from "../../store/maskStore";
 import { ChannelGridRenderer } from "./ChannelGridRenderer";
@@ -8,13 +7,13 @@ import { ColorBar } from "./ColorBar";
 import type { SpatialCellWithId } from "./SpatialRenderer";
 
 type PSDSpatialProps = {
-  decoded: DecodedSlice;
+  v2: LabeledTensor;
   selectedFreq: number;
   onSelectFreq: (freq: number) => void;
   onSelectCell?: (ap: number, ml: number) => void;
 };
 
-export function PSDSpatialView({ decoded, selectedFreq, onSelectFreq, onSelectCell }: PSDSpatialProps) {
+export function PSDSpatialView({ v2, selectedFreq, onSelectFreq, onSelectCell }: PSDSpatialProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<ChannelGridRenderer>(new ChannelGridRenderer());
@@ -37,8 +36,8 @@ export function PSDSpatialView({ decoded, selectedFreq, onSelectFreq, onSelectCe
 
   // Extract spatial data at selected frequency (client-side filtering)
   const rawCells = useMemo(() => {
-    return extractPSDSpatialAtFreq(decoded, selectedFreq);
-  }, [decoded, selectedFreq]);
+    return extractPSDSpatialV2(v2, selectedFreq);
+  }, [v2, selectedFreq]);
 
   if (rawCells.length > 0) {
     const nML = Math.max(...rawCells.map((c) => c.ml)) + 1;

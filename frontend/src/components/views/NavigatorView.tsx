@@ -64,7 +64,9 @@ export function NavigatorView({
   onTimeWindowChange,
   brainstateIntervals = [],
   brainstateOverlayEnabled = false,
-}: SliceViewProps & {
+}: Omit<SliceViewProps, "slice"> & {
+  /** v2-only: omitted once `v2Data` drives the view. */
+  slice?: SliceViewProps["slice"];
   onTimeWindowChange?: (window: [number, number]) => void;
   brainstateIntervals?: BrainstateIntervalDTO[];
   brainstateOverlayEnabled?: boolean;
@@ -94,7 +96,7 @@ export function NavigatorView({
 
   // ── Data decoding ────────────────────────────────────────────────────────
   const { times, meanValues } = useMemo(() => {
-    const columnar = v2Data ?? extractTimeseriesColumnar(decodeArrowSlice(slice));
+    const columnar = v2Data ?? (slice ? extractTimeseriesColumnar(decodeArrowSlice(slice)) : { times: [], series: [] });
     const ts = columnar.times;
     const series = columnar.series;
     if (ts.length === 0 || series.length === 0) {
@@ -106,7 +108,7 @@ export function NavigatorView({
     const mean = zscoredCrossChannelMean(series, ts.length);
     return { times: ts, meanValues: mean };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [v2Data, slice.payload]);
+  }, [v2Data, slice?.payload]);
 
   // ── Chart lifecycle ──────────────────────────────────────────────────────
   useEffect(() => {

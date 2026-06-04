@@ -1,5 +1,6 @@
 import { tableFromIPC, type Table } from "apache-arrow";
 import type { TensorSliceDTO } from "./types";
+import type { LabeledTensorMeta } from "./v2-arrow";
 
 export type DecodedSlice = {
   columns: string[];
@@ -14,6 +15,10 @@ export type ColumnarTimeseries = {
   // buffer zero-copy to the main thread, and so the timeseries view can hold
   // the decoded values directly instead of re-copying into a typed array.
   series: Array<{ key: string; label: string; values: Float32Array }>;
+  // v2-native: carries the slice's display_transforms/processing so the
+  // timeseries view can render fidelity badges without a v1 `slice.meta`.
+  // Absent on v1-decoded timeseries (`extractTimeseriesColumnar*`).
+  meta?: LabeledTensorMeta;
 };
 
 export type SpatialCell = {

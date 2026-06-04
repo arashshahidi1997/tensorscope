@@ -4,7 +4,13 @@ import "uplot/dist/uPlot.min.css";
 import { decodeArrowSlice, extractFreqCurve } from "../../api/arrow";
 import type { SliceViewProps } from "./viewTypes";
 
-export function PSDSliceView({ slice, selection, onSelectFreq }: SliceViewProps) {
+type PSDSliceViewProps = Omit<SliceViewProps, "slice"> & {
+  slice?: SliceViewProps["slice"];
+  /** Contract-v2 source: the per-freq mean curve. When set, `slice` is ignored. */
+  v2Data?: { freqs: number[]; values: number[] } | null;
+};
+
+export function PSDSliceView({ slice, selection, onSelectFreq, v2Data = null }: PSDSliceViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<uPlot | null>(null);
 
@@ -12,12 +18,13 @@ export function PSDSliceView({ slice, selection, onSelectFreq }: SliceViewProps)
   const onSelectFreqRef = useRef(onSelectFreq);
   useEffect(() => { onSelectFreqRef.current = onSelectFreq; });
 
-  // Decode once per payload
+  // Decode once per payload (v1) or read the pre-extracted v2 curve.
   const { freqs, values } = useMemo(() => {
-    const decoded = decodeArrowSlice(slice);
-    return extractFreqCurve(decoded);
+    if (v2Data) return v2Data;
+    if (!slice) return { freqs: [] as number[], values: [] as number[] };
+    return extractFreqCurve(decodeArrowSlice(slice));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slice.payload]);
+  }, [v2Data, slice?.payload]);
 
   useEffect(() => {
     if (!containerRef.current || freqs.length === 0) return;

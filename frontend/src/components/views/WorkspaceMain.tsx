@@ -27,22 +27,21 @@ import {
   useSliceQuery,
   useStateQuery,
   useTensorQuery,
-  useV2PSDHeatmapQuery,
+  useV2PSDAverageQuery,
+  useV2PSDLiveQuery,
+  useV2SpatialQuery,
   useV2SpectrogramQuery,
   useV2TimeseriesQuery,
-  isV2Enabled,
 } from "../../api/queries";
 import { coincidenceIndicesByStream, extractEventTimes } from "../../api/coincidence";
 import { useEventStreamsStore } from "../../store/eventStreamsStore";
 import { buildStreamColorMap } from "./eventStreamColors";
 import {
-  decodeArrowSlice,
-  extractPSDHeatmap,
-  extractPSDAverage,
   type ColumnarTimeseries,
-  type PSDHeatmapData,
+  type SpatialCell,
   type Spectrogram,
 } from "../../api/arrow";
+import { extractPSDAverageV2, type LabeledTensor } from "../../api/v2-arrow";
 import type { SelectionDTO, TensorSliceRequestDTO } from "../../api/types";
 import { resolveBand, useAppStore } from "../../store/appStore";
 import { useSelectionStore, toSelectionDTO } from "../../store/selectionStore";
@@ -53,15 +52,17 @@ import { TrackStack } from "./TrackStack";
 import { TrajectoryView } from "./TrajectoryView";
 import { NavigatorView } from "./NavigatorView";
 import { TimeScaleBar } from "./ChartToolbar";
-import { PSDHeatmapView } from "./PSDHeatmapView";
 import { PSDCurveView } from "./PSDCurveView";
 import { PSDSpatialView } from "./PSDSpatialView";
 import { PropagationController } from "./PropagationController";
 import { DepthMapSliceView } from "./DepthMapSliceView";
 import { HeatmapView } from "./HeatmapView";
 import { SpatialMapSliceView } from "./SpatialMapSliceView";
+import { PSDSliceView } from "./PSDSliceView";
 import { SpatialEventView } from "./SpatialEventView";
 import { SpectrogramView } from "./SpectrogramView";
+// PSDHeatmapView retired in the v2 cutover — psd_heatmap renders via the
+// encoding-driven HeatmapView (extractHeatmapNDV2) instead.
 import { TimeseriesSliceView } from "./TimeseriesSliceView";
 import { OrthoSlicerView } from "./OrthoSlicerView";
 import { TensorChooser } from "./TensorChooser";
@@ -331,25 +332,28 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     [focusChannel],
   );
 
-  const timeseriesSliceQuery = useSliceQuery(
+  // Contract-v2 is the only data path. Each view's query returns the
+  // pre-extracted shape the view consumes directly (no v1 long-format decode).
+  const timeseriesV2Query = useV2TimeseriesQuery(
     selectedTensor,
     hasTimeseries
       ? withFocus(makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow))
       : null,
+    "Timeseries",
   );
-  const spatialSliceQuery = useSliceQuery(
+  const spatialV2Query = useV2SpatialQuery(
     selectedTensor,
     hasSpatial ? makeDefaultSliceRequest("spatial_map", selectionDraft, safeWindow) : null,
   );
   // depth_map: linear-probe analogue of spatial_map (Neuropixels DV). Same
   // ±0.25 s instantaneous slice shape; server collapses time → (channel,)
-  // profile with the depth coord. See docs/design/neuropixels-multiprobe.md.
+  // profile with the depth coord. No v2 extractor yet → stays v1.
   const depthMapSliceQuery = useSliceQuery(
     selectedTensor,
     hasDepthMap ? makeDefaultSliceRequest("depth_map", selectionDraft, safeWindow) : null,
   );
-  // raster: channel × time amplitude heatmap over the visible window. Reuses
-  // the timeseries window + downsample budget (server returns (channel, time)).
+  // raster: channel × time amplitude heatmap over the visible window. No v2
+  // extractor yet → stays v1.
   const rasterSliceQuery = useSliceQuery(
     selectedTensor,
     hasRaster ? makeDefaultSliceRequest("raster", selectionDraft, safeWindow) : null,
@@ -357,19 +361,27 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   // trajectory: full-session position path (time, axis). Pinned full-range
   // request (like the navigator) so the whole arena is visible and the query
   // key doesn't churn on cursor moves — the marker tracks selection.time.
+  // No v2 extractor yet → stays v1.
   const trajectorySliceQuery = useSliceQuery(
     selectedTensor,
     hasTrajectory && timeCoord ? makeTrajectoryRequest(selectionDraft, timeCoord) : null,
   );
-  const psdSliceQuery = useSliceQuery(
+  // Standalone psd_average — a pre-computed freq-only (or freq × spatial)
+  // tensor. The view derives its `{freqs, values}` curve via extractPSDAverageV2.
+  const psdAverageV2Query = useV2PSDAverageQuery(
     selectedTensor,
     hasPSD ? makeDefaultSliceRequest("psd_average", selectionDraft, safeWindow) : null,
   );
+  // Precomputed spectrogram (4D ortho path). No v2 extractor for the ortho
+  // slicer yet → stays v1.
   const spectrogramSliceQuery = useSliceQuery(
     selectedTensor,
     hasSpectrogram ? makeDefaultSliceRequest("spectrogram", selectionDraft, safeWindow) : null,
   );
-  const psdLiveQuery = useSliceQuery(
+  // PSD-live cube — one (freq, AP, ML | channel) tensor feeds all three
+  // subviews (psd_heatmap via extractHeatmapNDV2, psd_curve via
+  // extractPSDAverageV2, psd_spatial via extractPSDSpatialV2).
+  const psdLiveV2Query = useV2PSDLiveQuery(
     selectedTensor,
     hasPSDLive
       ? makePSDLiveRequest(
@@ -381,81 +393,32 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         )
       : null,
   );
-
-  // Contract-v2 PSDHeatmap path. Behind localStorage["tensorscope:v2"]==="1".
-  // Reads via the worker pool — main-thread blocking goes from ~150 ms (v1
-  // long-format decode) to ~1 ms (postMessage round-trip). The flag is read
-  // every render so a tab toggling it picks up on the next React Query
-  // refetch — but `useV2PSDHeatmapQuery` keys off `request === null` to
-  // gate the actual fetch, so a flag flip during navigation is harmless.
-  const v2Enabled = isV2Enabled();
-  const psdLiveV2Query = useV2PSDHeatmapQuery(
-    selectedTensor,
-    hasPSDLive && v2Enabled
-      ? makePSDLiveRequest(
-          selectionDraft,
-          psdWindowS,
-          timeCoord,
-          { NW: psdNW, fmax: psdFmax },
-          lockedEventTimeRange,
-        )
-      : null,
-  );
   // Spectrogram live — multitaper spectrogram on the visible window. Server
   // defaults are sleep-band tuned (Prerau-style baseline subtraction); the
-  // frontend doesn't currently expose a knob panel for these, but the
   // request shape forwards any params on the wire. We pass `safeWindow`
   // (already clamped against the tensor's time coord) so the heatmap's
   // x-axis tracks the timeseries / navigator visible range.
-  const spectrogramLiveQuery = useSliceQuery(
-    selectedTensor,
-    hasSpectrogramLive
-      ? withFocus(makeSpectrogramLiveRequest(selectionDraft, safeWindow))
-      : null,
-  );
-  // The v1 navigator query stays ON even in v2 mode. Gating it off here (the
-  // original N1 attempt, to avoid the double full-session fetch) blanks the
-  // navigator: the render path guards on the v1 `navigatorData` and never falls
-  // back to v2 data. The proper de-dup belongs in the v2 cutover (N4), which
-  // unifies the navigator's data source. The real N1 win — skipping the
-  // full-session z-score on the server — is unaffected and stays.
-  const navigatorSliceQuery = useSliceQuery(
-    selectedTensor,
-    hasNavigator && timeCoord ? makeNavigatorRequest(selectionDraft, timeCoord) : null,
-  );
-
-  // Contract-v2 parallel queries for timeseries / spectrogram_live / navigator.
-  // Same gating pattern as `psdLiveV2Query`: only fire when the v2 flag is on
-  // and the corresponding v1 query would have fired. Each worker call returns
-  // a pre-extracted shape the view consumes directly via `v2Data`.
-  const timeseriesV2Query = useV2TimeseriesQuery(
-    selectedTensor,
-    hasTimeseries && v2Enabled
-      ? withFocus(makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow))
-      : null,
-    "Timeseries",
-  );
   const spectrogramLiveV2Query = useV2SpectrogramQuery(
     selectedTensor,
-    hasSpectrogramLive && v2Enabled
+    hasSpectrogramLive
       ? withFocus(makeSpectrogramLiveRequest(selectionDraft, safeWindow))
       : null,
     "SpectrogramLive",
   );
   const navigatorV2Query = useV2TimeseriesQuery(
     selectedTensor,
-    hasNavigator && timeCoord && v2Enabled
+    hasNavigator && timeCoord
       ? makeNavigatorRequest(selectionDraft, timeCoord)
       : null,
     "Navigator",
   );
 
   // Filtered-band overlay (G1, `docs/design/filtered-band-overlay.md`).
-  // Fires only when a band preset is active AND v2 is on. Reuses the
-  // timeseries shape — server applies `bandpass` after slicing.
+  // Fires only when a band preset is active. Reuses the timeseries shape —
+  // server applies `bandpass` after slicing.
   const activeBand = resolveBand(bandPreset, bandCustom);
   const bandpassRequest =
-    hasTimeseries && v2Enabled && activeBand
+    hasTimeseries && activeBand
       ? withFocus({
           ...makeDefaultSliceRequest("timeseries", selectionDraft, safeWindow),
           bandpass: { lo_hz: activeBand[0], hi_hz: activeBand[1] },
@@ -478,37 +441,26 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   );
   const brainstateIntervals = brainstateIntervalsQuery.data ?? [];
 
-  // Keep the last successfully-received slice for each view so that a transient
-  // query error (e.g. zooming between two samples → 400 "no data") does not blank
-  // the panel.  The ref is updated on every successful data arrival.
-  const lastTimeseries = useRef(timeseriesSliceQuery.data ?? null);
-  const lastNavigator = useRef(navigatorSliceQuery.data ?? null);
-  if (timeseriesSliceQuery.data) lastTimeseries.current = timeseriesSliceQuery.data;
-  if (navigatorSliceQuery.data) lastNavigator.current = navigatorSliceQuery.data;
-  const timeseriesData = timeseriesSliceQuery.data ?? lastTimeseries.current;
-  const navigatorData = navigatorSliceQuery.data ?? lastNavigator.current;
-
-  // Same optimistic-render pattern for the v2 PSDHeatmap path. Combined
-  // with `placeholderData: keepPreviousData` on the v2 query, this means
-  // the canvas keeps painting the previous slice through any brief
-  // window where the new fetch is in flight or has errored. Per
-  // `docs/design/contract-v2.md` §0.2 (Neuroglancer "render whatever's
-  // in GPU memory immediately" + HiGlass "old tiles remain visible").
-  const lastPsdHeatmapV2 = useRef<PSDHeatmapData | null>(null);
-  if (psdLiveV2Query.data) lastPsdHeatmapV2.current = psdLiveV2Query.data;
-  const v2HeatmapData = psdLiveV2Query.data ?? lastPsdHeatmapV2.current;
-
-  // Same sticky-ref optimistic render for v2 timeseries / spectrogram /
-  // navigator. Each view falls back to `last…V2.current` when its v2 query
-  // is in flight, so the canvas never blanks during a drag.
+  // Keep the last successfully-received result for each v2 view so a transient
+  // query error (e.g. zooming between two samples → 400 "no data") doesn't blank
+  // the panel. Combined with `placeholderData: keepPreviousData`, the canvas
+  // keeps painting the previous slice through an in-flight or errored fetch.
+  // Per docs/design/contract-v2.md §0.2 (Neuroglancer "render whatever's in GPU
+  // memory immediately" + HiGlass "old tiles remain visible").
   const lastTimeseriesV2 = useRef<ColumnarTimeseries | null>(null);
   const lastSpectrogramV2 = useRef<Spectrogram | null>(null);
   const lastNavigatorV2 = useRef<ColumnarTimeseries | null>(null);
   const lastBandpassV2 = useRef<ColumnarTimeseries | null>(null);
+  const lastSpatialV2 = useRef<SpatialCell[] | null>(null);
+  const lastPsdLiveV2 = useRef<LabeledTensor | null>(null);
+  const lastPsdAverageV2 = useRef<LabeledTensor | null>(null);
   if (timeseriesV2Query.data) lastTimeseriesV2.current = timeseriesV2Query.data;
   if (spectrogramLiveV2Query.data) lastSpectrogramV2.current = spectrogramLiveV2Query.data;
   if (navigatorV2Query.data) lastNavigatorV2.current = navigatorV2Query.data;
   if (timeseriesBandpassQuery.data) lastBandpassV2.current = timeseriesBandpassQuery.data;
+  if (spatialV2Query.data) lastSpatialV2.current = spatialV2Query.data;
+  if (psdLiveV2Query.data) lastPsdLiveV2.current = psdLiveV2Query.data;
+  if (psdAverageV2Query.data) lastPsdAverageV2.current = psdAverageV2Query.data;
   // When the user toggles bandpass off, clear the sticky ref so the
   // filtered overlay disappears immediately instead of lingering as a
   // stale series.
@@ -519,6 +471,9 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const v2BandpassData = activeBand
     ? (timeseriesBandpassQuery.data ?? lastBandpassV2.current)
     : null;
+  const v2SpatialData = spatialV2Query.data ?? lastSpatialV2.current;
+  const v2PsdLiveData = psdLiveV2Query.data ?? lastPsdLiveV2.current;
+  const v2PsdAverageData = psdAverageV2Query.data ?? lastPsdAverageV2.current;
 
   // Multi-stream event window for the timeseries markers (G5). The
   // `pinnedStreams`/`eventsByStream` declarations live above (alongside the
@@ -547,7 +502,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   }, [pinnedStreams, eventsByStream, eventStreamsList, coincidenceWindow]);
 
   const SpatialMapComponent = viewRegistry.spatial_map as typeof SpatialMapSliceView;
-  const PSDComponent = viewRegistry.psd_average;
+  const PSDComponent = viewRegistry.psd_average as typeof PSDSliceView;
   const SpectrogramComponent = viewRegistry.spectrogram;
 
   // ── Lift navigator to bottom panel via render prop ──────────────────────
@@ -566,12 +521,11 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const timeWindowHi = timeWindow[1];
 
   const navigatorElement = useMemo<ReactNode>(() => {
-    if (!navigatorData) return null;
+    if (!v2NavigatorData) return null;
     return (
       <>
         <NavigatorView
-          slice={navigatorData}
-          v2Data={v2Enabled ? v2NavigatorData : null}
+          v2Data={v2NavigatorData}
           selection={selectionDraft}
           onSelectTime={(t) => commitSelectionRef.current({ ...selectionDraft, time: t })}
           onTimeWindowChange={setTimeWindow}
@@ -592,7 +546,6 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       </>
     );
   }, [
-    navigatorData,
     selectionDraft,
     setTimeWindow,
     brainstateIntervals,
@@ -602,7 +555,6 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     setDuration,
     timeWindowLo,
     timeWindowHi,
-    v2Enabled,
     v2NavigatorData,
   ]);
 
@@ -618,18 +570,18 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   // (last fetch failed → showing stale-and-known-bad data), isPlaceholderData
   // (showing previous-window data while the new fetch is in flight).
   const { fetchingByView, erroredByView, staleByView } = buildViewQueryStatusMaps({
-    timeseries: timeseriesSliceQuery,
-    spatial_map: spatialSliceQuery,
+    timeseries: timeseriesV2Query,
+    spatial_map: spatialV2Query,
     depth_map: depthMapSliceQuery,
     raster: rasterSliceQuery,
     trajectory: trajectorySliceQuery,
-    psd_average: psdSliceQuery,
+    psd_average: psdAverageV2Query,
     spectrogram: spectrogramSliceQuery,
-    spectrogram_live: spectrogramLiveQuery,
-    navigator: navigatorSliceQuery,
-    psd_heatmap: psdLiveQuery,
-    psd_curve: psdLiveQuery,
-    psd_spatial: psdLiveQuery,
+    spectrogram_live: spectrogramLiveV2Query,
+    navigator: navigatorV2Query,
+    psd_heatmap: psdLiveV2Query,
+    psd_curve: psdLiveV2Query,
+    psd_spatial: psdLiveV2Query,
   });
 
   // ── Build view elements map ────────────────────────────────────────────
@@ -640,10 +592,9 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       typeof timeCoord?.min === "number" && typeof timeCoord?.max === "number"
         ? [timeCoord.min, timeCoord.max]
         : undefined;
-    viewElements["timeseries"] = timeseriesData ? (
+    viewElements["timeseries"] = v2TimeseriesData ? (
       <TimeseriesSliceView
-        slice={timeseriesData}
-        v2Data={v2Enabled ? v2TimeseriesData : null}
+        v2Data={v2TimeseriesData}
         v2BandpassData={v2BandpassData}
         bandPreset={bandPreset}
         bandActive={activeBand}
@@ -666,9 +617,9 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   }
 
   if (hasSpatial) {
-    viewElements["spatial_map"] = spatialSliceQuery.data ? (
+    viewElements["spatial_map"] = v2SpatialData ? (
       <SpatialMapComponent
-        slice={spatialSliceQuery.data}
+        v2Cells={v2SpatialData}
         selection={selectionDraft}
         onSelectCell={(ap, ml) => {
           // Drilling down: enter focus mode AND move the cursor. The
@@ -776,19 +727,18 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     // over per-channel ghostipy calls — sequential on the numpy path).
     // Render an explicit "Computing…" placeholder while the slice is in
     // flight so the slot doesn't read as broken / empty.
-    viewElements["spectrogram_live"] = spectrogramLiveQuery.data ? (
+    viewElements["spectrogram_live"] = v2SpectrogramData ? (
       <SpectrogramView
-        slice={spectrogramLiveQuery.data}
-        v2Data={v2Enabled ? v2SpectrogramData : null}
+        v2Data={v2SpectrogramData}
         selection={selectionDraft}
         onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
         onSelectFreq={handleSelectFreq}
         onTimeWindowChange={setTimeWindow}
         timeWindow={timeWindow}
       />
-    ) : spectrogramLiveQuery.isError ? (
+    ) : spectrogramLiveV2Query.isError ? (
       <div className="placeholder placeholder--error">
-        spectrogram_live failed: {String(spectrogramLiveQuery.error ?? "unknown")}
+        spectrogram_live failed: {String(spectrogramLiveV2Query.error ?? "unknown")}
       </div>
     ) : (
       <div className="placeholder placeholder--computing">
@@ -797,10 +747,11 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     );
   }
 
-  if (hasPSD && psdSliceQuery.data) {
+  if (hasPSD && v2PsdAverageData) {
+    const psdAvg = extractPSDAverageV2(v2PsdAverageData);
     viewElements["psd_average"] = (
       <PSDComponent
-        slice={psdSliceQuery.data}
+        v2Data={{ freqs: psdAvg.freqs, values: psdAvg.mean }}
         selection={selectionDraft}
         onSelectFreq={handleSelectFreq}
       />
@@ -808,31 +759,26 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   }
 
   if (hasPSDLive) {
-    // Heatmap data routing: when the v2 dev flag is on AND the worker has
-    // already returned a slice (live or sticky), feed the v2 result to
-    // PSDHeatmapView. Otherwise fall back to the v1 long-format extractor
-    // off `psdLiveQuery.data`. PSDCurve / PSDSpatial stay on v1 in this
-    // session — those views migrate per the parity-gate process in
-    // `docs/design/contract-v2.md` §5.
-    const heatmapFromV2 = v2Enabled ? v2HeatmapData : null;
+    // All three PSD-live subviews are fed from one v2 cube (LabeledTensor):
+    // psd_heatmap via the encoding-driven HeatmapView, psd_curve via the
+    // mean±std curve from extractPSDAverageV2, and psd_spatial via the
+    // rank-indexed spatial extractor. One server round-trip, three views.
+    const avgData = v2PsdLiveData ? extractPSDAverageV2(v2PsdLiveData) : null;
 
-    if (psdLiveQuery.data) {
-      const decoded = decodeArrowSlice(psdLiveQuery.data);
-      const avgData = extractPSDAverage(decoded);
-
+    if (v2PsdLiveData && avgData) {
       // Encoding-driven heatmap: freq on X, channel/spatial dim on Y so
       // depth/channel reads vertically. The y-dim defaults to whichever
       // channel-like dim the PSD cube carries (`channel` for linear probes,
       // else `AP`). Remaining dims (e.g. ML) are mean-reduced; the user can
       // reassign axes live. See docs/design/encoding-heatmap.md.
-      const psdYDim = decoded.columns.includes("channel")
+      const psdYDim = v2PsdLiveData.meta.dims.includes("channel")
         ? "channel"
-        : decoded.columns.includes("AP")
+        : v2PsdLiveData.meta.dims.includes("AP")
           ? "AP"
-          : decoded.columns.find((c) => c !== "freq" && c !== "value") ?? "channel";
+          : v2PsdLiveData.meta.dims.find((c) => c !== "freq") ?? "channel";
       viewElements["psd_heatmap"] = (
         <HeatmapView
-          slice={psdLiveQuery.data}
+          v2={v2PsdLiveData}
           viewId="psd_heatmap"
           defaultEncoding={{ x: "freq", y: psdYDim }}
           colormap="inferno"
@@ -849,7 +795,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       );
       viewElements["psd_spatial"] = (
         <PSDSpatialView
-          decoded={decoded}
+          v2={v2PsdLiveData}
           selectedFreq={selectionDraft.freq}
           onSelectFreq={handleSelectFreq}
           onSelectCell={(ap, ml) => {
@@ -864,31 +810,16 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     } else {
       // Loading / error placeholders for the three PSD-live subviews so
       // each slot signals work-in-flight rather than rendering empty.
-      const placeholder = psdLiveQuery.isError ? (
+      const placeholder = psdLiveV2Query.isError ? (
         <div className="placeholder placeholder--error">
-          psd_live failed: {String(psdLiveQuery.error ?? "unknown")}
+          psd_live failed: {String(psdLiveV2Query.error ?? "unknown")}
         </div>
       ) : (
         <div className="placeholder placeholder--computing">
           <span className="spinner" aria-hidden="true" /> Computing PSD…
         </div>
       );
-      // Optimistic-render edge case: the v2 heatmap path may have a result
-      // before v1 returns (worker decode is faster, or v1 errored). Show
-      // it instead of a placeholder so the canvas keeps content during the
-      // window where only one path has data.
-      if (heatmapFromV2) {
-        viewElements["psd_heatmap"] = (
-          <PSDHeatmapView
-            data={heatmapFromV2}
-            selectedFreq={selectionDraft.freq}
-            onSelectFreq={handleSelectFreq}
-            freqLogScale={freqLogScale}
-          />
-        );
-      } else {
-        viewElements["psd_heatmap"] = placeholder;
-      }
+      viewElements["psd_heatmap"] = placeholder;
       viewElements["psd_curve"] = placeholder;
       viewElements["psd_spatial"] = placeholder;
     }
@@ -930,11 +861,10 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       ) : null}
 
       {/* Navigator inline fallback — shown when no bottom panel render prop */}
-      {!renderNavigator && navigatorData && (
+      {!renderNavigator && v2NavigatorData && (
         <>
           <NavigatorView
-            slice={navigatorData}
-            v2Data={v2Enabled ? v2NavigatorData : null}
+            v2Data={v2NavigatorData}
             selection={selectionDraft}
             onSelectTime={(t) => onCommitSelection({ ...selectionDraft, time: t })}
             onTimeWindowChange={setTimeWindow}
