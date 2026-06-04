@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
@@ -51,6 +52,12 @@ _INLINE_COORD_LIMIT = 32
 # min-max envelope. ~64 distinct (view, window, params) entries is generous for
 # interactive navigation while keeping the per-session footprint bounded.
 _VIEW_RESULT_CACHE_MAX = 64
+# P2: fixed LOD ladder (target point-counts, ascending = increasing resolution)
+# for the Tier-0 time views (timeseries / navigator). A wide zoomed-out window
+# slices from the coarsest level whose in-window samples still support the point
+# budget, instead of min/max-enveloping a 150k×256 full-rate window every
+# request. Levels coarser than the tensor (target >= time length) are skipped.
+_LOD_LEVELS: tuple[int, ...] = (4_000, 16_000, 64_000)
 _VIEW_REGISTRY: dict[frozenset[str], list[str]] = {
     frozenset({"time", "AP", "ML"}): ["timeseries", "spatial_map", "raster", "propagation_frame", "propagation_movie", "navigator", "psd_live", "spectrogram_live", "event_average"],
     frozenset({"time", "channel"}): ["timeseries", "raster", "navigator", "psd_live", "spectrogram_live", "event_average"],
@@ -106,6 +113,11 @@ class ServerState:
     # the v1 and v2 encoders without recomputing. Initialized in __post_init__ so
     # each per-session deepcopy gets its own dict (matches _processed_cache).
     _view_result_cache: OrderedDict = None  # type: ignore[assignment]
+    # P2: per-session LOD ladder cache, keyed (tensor, processing_dump, target)
+    # → a min/max-envelope decimation of the *processed* full tensor. Built
+    # lazily (only when a wide window actually warrants it) and cleared whenever
+    # processing changes. Initialized in __post_init__ for deepcopy isolation.
+    _lod_cache: dict = None  # type: ignore[assignment]
     _subscribers: list[_Subscriber] = field(default_factory=list)
     # Per-tensor channel masks (flat channel ids: ap*n_ml+ml for grid, or channel idx).
     # Stored as sorted lists rather than sets so deepcopy + JSON round-trip is stable.
@@ -121,6 +133,8 @@ class ServerState:
             self._processed_cache = {}
         if self._view_result_cache is None:
             self._view_result_cache = OrderedDict()
+        if self._lod_cache is None:
+            self._lod_cache = {}
         if self.transform_registry is None:
             self.transform_registry = TransformRegistry()
             register_builtins(self.transform_registry)
@@ -219,6 +233,7 @@ class ServerState:
         # Invalidate cache — will be lazily rebuilt on next slice request
         self._processed_cache.clear()
         self._view_result_cache.clear()  # P1: per-view results depend on processing
+        self._lod_cache.clear()  # P2: LOD levels are built from the processed tensor
         self._processed_params_hash = None
         self._processing_errors.clear()
         return self.processing
@@ -337,6 +352,7 @@ class ServerState:
         if self._processed_params_hash != params_hash:
             self._processed_cache.clear()
             self._view_result_cache.clear()  # P1: processing changed → drop stale views
+            self._lod_cache.clear()  # P2: LOD ladder is processed-tensor-derived
             self._processed_params_hash = params_hash
 
         if name not in self._processed_cache:
@@ -352,6 +368,35 @@ class ServerState:
             self._processed_cache[name] = processed
 
         return self._processed_cache[name]
+
+    def _get_lod_levels(
+        self, name: str, data: xr.DataArray
+    ) -> list[tuple[int, xr.DataArray]]:
+        """Lazily build & cache the P2 min/max-envelope LOD ladder.
+
+        ``data`` is the *processed* (or raw) full tensor — the same array that
+        :meth:`_prepare_slice_uncached` feeds to :func:`apply_slice_request`, so
+        the levels honour the active processing. Returns ``(target, level)``
+        pairs ascending by resolution (each level coarser than the source);
+        levels whose target point-count is >= the tensor length are skipped.
+        Keyed by the processing dump so a processing change rebuilds them
+        (``set_processing`` / the hash-drift path also clear ``_lod_cache``).
+        """
+        time_len = int(data.sizes.get("time", 0))
+        proc_key = self.processing.model_dump_json()
+        levels: list[tuple[int, xr.DataArray]] = []
+        for target in _LOD_LEVELS:
+            if target >= time_len:
+                continue
+            ck = (name, proc_key, target)
+            level = self._lod_cache.get(ck)
+            if level is None:
+                level = downsample_time_axis(
+                    data, target, DownsampleMethod.MINMAX
+                )
+                self._lod_cache[ck] = level
+            levels.append((target, level))
+        return levels
 
     def _view_cache_key(
         self, name: str, request: TensorSliceRequestDTO
@@ -432,7 +477,17 @@ class ServerState:
                 "event_average": extra_provenance,
             }
             return node.data, sliced, processing_meta, slice_provenance
-        sliced = apply_slice_request(data, request, processing=None, masked_ids=masked_ids)
+        # P2: hand the Tier-0 time views a lazy LOD provider. apply_slice_request
+        # only invokes it when the windowed full-rate sample count dwarfs the
+        # point budget; bandpass overlays need true sample spacing so they keep
+        # the full-rate path (provider withheld).
+        lod_provider = None
+        if request.view_type in {"timeseries", "navigator"} and request.bandpass is None:
+            lod_provider = lambda: self._get_lod_levels(name, data)  # noqa: E731
+        sliced = apply_slice_request(
+            data, request, processing=None, masked_ids=masked_ids,
+            lod_provider=lod_provider,
+        )
         # Bandpass is applied inside apply_slice_request (before downsample /
         # zscore); it stashes its provenance here. Pop so it never leaks to
         # the client in the Arrow attrs.
@@ -874,6 +929,7 @@ def apply_slice_request(
     request: TensorSliceRequestDTO,
     processing: ProcessingParamsDTO | None = None,
     masked_ids: list[int] | None = None,
+    lod_provider: Callable[[], list[tuple[int, xr.DataArray]]] | None = None,
 ) -> xr.DataArray:
     """Apply selection/windowing/downsampling to a tensor.
 
@@ -885,6 +941,12 @@ def apply_slice_request(
     tensors it's the channel index. The mask is applied AFTER processing
     (so CMR/notch/etc. still see the full grid) but is honoured by the
     downstream FFT and reduction paths via NaN substitution.
+
+    ``lod_provider`` (P2) is an optional zero-arg callable returning the LOD
+    ladder ``[(target_points, decimated_array), …]`` ascending by resolution.
+    For the Tier-0 time views it is consulted only when the windowed full-rate
+    sample count dwarfs ``max_points`` — the window is then sliced from a coarse
+    level instead of enveloping the full-rate window. ``None`` ⇒ full-rate path.
     """
     sliced = data
 
@@ -893,6 +955,36 @@ def apply_slice_request(
         sliced = sliced.sel(time=slice(float(request.time_range[0]), float(request.time_range[1])))
     if request.freq_range is not None and "freq" in sliced.dims:
         sliced = sliced.sel(freq=slice(float(request.freq_range[0]), float(request.freq_range[1])))
+
+    # 1a. LOD selection for Tier-0 time views (P2). When the windowed full-rate
+    # sample count is much larger than the point budget, re-slice the SAME time
+    # window from the coarsest precomputed level that still has >= 2x the budget
+    # in-window, so the final min/max decimation envelopes a few-thousand-point
+    # array rather than ~150k. Narrow windows fall through to the full-rate path
+    # unchanged (the spike-preservation tolerance test pins this). See
+    # docs/design/perf-navigation-plan.md P2.
+    if (
+        lod_provider is not None
+        and request.view_type in {"timeseries", "navigator"}
+        and request.bandpass is None
+        and request.max_points is not None
+        and request.time_range is not None
+        and "time" in sliced.dims
+    ):
+        window_n = int(sliced.sizes.get("time", 0))
+        budget = int(request.max_points)
+        if window_n > 4 * budget:
+            t0 = float(request.time_range[0])
+            t1 = float(request.time_range[1])
+            for _target, level_arr in lod_provider():  # ascending resolution
+                win = level_arr.sel(time=slice(t0, t1))
+                if int(win.sizes.get("time", 0)) >= 2 * budget:
+                    # Coarsest acceptable level — take it and stop. Still
+                    # coarser than the full-rate window (guarded), so the final
+                    # decimation below shrinks it to exactly the budget.
+                    if int(win.sizes.get("time", 0)) < window_n:
+                        sliced = win
+                    break
 
     # 2. Apply processing pipeline on the windowed data (not the full recording).
     # A ValueError here (e.g. signal too short for the requested filter) is
