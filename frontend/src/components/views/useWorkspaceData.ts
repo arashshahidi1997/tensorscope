@@ -17,6 +17,23 @@ import {
 import type { CoordSummary, SelectionDTO, TensorSliceRequestDTO } from "../../api/types";
 import { buildViewQueryStatusMaps } from "./viewQueryStatus";
 
+/**
+ * Resolve the tensor a given panel/slot should fetch against (Track C1).
+ * A per-slot `panelTensorOverrides` entry wins over the global navigation
+ * tensor — so a panel routed to "neuropixels" fetches npx data while the rest
+ * stay on the ecog grid. React Query keys already include the tensor name, so
+ * two tensors fetch + cache independently with zero collision; only the call
+ * site binds. Shared by `useWorkspaceData` (the data) and `ViewGrid` (the
+ * chrome) so they never disagree.
+ */
+export function resolveTensorForSlot(
+  panelTensorOverrides: Record<string, string>,
+  selectedTensor: string | null,
+  slotId: string,
+): string | null {
+  return panelTensorOverrides[slotId] ?? selectedTensor;
+}
+
 /** Which view slots are live this render — gates each query's request to null. */
 export type WorkspaceViewFlags = {
   hasTimeseries: boolean;
@@ -33,6 +50,8 @@ export type WorkspaceViewFlags = {
 
 export type WorkspaceDataParams = {
   selectedTensor: string | null;
+  /** Per-slot tensor overrides (Track C). Empty = every view uses selectedTensor. */
+  panelTensorOverrides: Record<string, string>;
   selectionDraft: SelectionDTO;
   safeWindow: [number, number];
   /** Tile-snapped overscan buffer feeding the timeseries fetch (P7). Held
@@ -86,6 +105,7 @@ function useStickyData<T>(value: T | null | undefined, keep = true): T | null {
 export function useWorkspaceData(params: WorkspaceDataParams) {
   const {
     selectedTensor,
+    panelTensorOverrides,
     selectionDraft,
     safeWindow,
     timeseriesFetchWindow,
@@ -100,10 +120,18 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
     timeseriesPixelWidth,
   } = params;
 
+  // Per-slot tensor routing (Track C1): each query fetches against its panel's
+  // resolved tensor (`panelTensorOverrides[slot] ?? selectedTensor`). With no
+  // overrides this is `selectedTensor` for every view (single-probe, unchanged).
+  // For TTL-aligned co-recordings the shared time window/timeCoord is correct
+  // for both tensors; non-zero slice offsets are out of scope (C6 deferred).
+  const tensorFor = (slotId: string) =>
+    resolveTensorForSlot(panelTensorOverrides, selectedTensor, slotId);
+
   // Contract-v2 is the only data path. Each view's query returns the
   // pre-extracted shape the view consumes directly (no v1 long-format decode).
   const timeseriesV2Query = useV2TimeseriesQuery(
-    selectedTensor,
+    tensorFor("timeseries"),
     flags.hasTimeseries
       ? withFocus(
           makeDefaultSliceRequest("timeseries", selectionDraft, timeseriesFetchWindow, timeseriesPixelWidth),
@@ -112,20 +140,20 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
     "Timeseries",
   );
   const spatialV2Query = useV2SpatialQuery(
-    selectedTensor,
+    tensorFor("spatial_map"),
     flags.hasSpatial ? makeDefaultSliceRequest("spatial_map", selectionDraft, safeWindow) : null,
   );
   // depth_map: linear-probe analogue of spatial_map (Neuropixels DV). Same
   // ±0.25 s instantaneous slice shape; server collapses time → (channel,)
   // profile with the depth coord. No v2 extractor yet → stays v1.
   const depthMapSliceQuery = useSliceQuery(
-    selectedTensor,
+    tensorFor("depth_map"),
     flags.hasDepthMap ? makeDefaultSliceRequest("depth_map", selectionDraft, safeWindow) : null,
   );
   // raster: channel × time amplitude heatmap over the visible window. No v2
   // extractor yet → stays v1.
   const rasterSliceQuery = useSliceQuery(
-    selectedTensor,
+    tensorFor("raster"),
     flags.hasRaster ? makeDefaultSliceRequest("raster", selectionDraft, safeWindow) : null,
   );
   // trajectory: full-session position path (time, axis). Pinned full-range
@@ -133,19 +161,19 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
   // key doesn't churn on cursor moves — the marker tracks selection.time.
   // No v2 extractor yet → stays v1.
   const trajectorySliceQuery = useSliceQuery(
-    selectedTensor,
+    tensorFor("trajectory"),
     flags.hasTrajectory && timeCoord ? makeTrajectoryRequest(selectionDraft, timeCoord) : null,
   );
   // Standalone psd_average — a pre-computed freq-only (or freq × spatial)
   // tensor. The view derives its `{freqs, values}` curve via extractPSDAverageV2.
   const psdAverageV2Query = useV2PSDAverageQuery(
-    selectedTensor,
+    tensorFor("psd_average"),
     flags.hasPSD ? makeDefaultSliceRequest("psd_average", selectionDraft, safeWindow) : null,
   );
   // Precomputed spectrogram (4D ortho path). No v2 extractor for the ortho
   // slicer yet → stays v1.
   const spectrogramSliceQuery = useSliceQuery(
-    selectedTensor,
+    tensorFor("spectrogram"),
     flags.hasSpectrogram ? makeDefaultSliceRequest("spectrogram", selectionDraft, safeWindow) : null,
   );
   // Tier-2 deprioritization gate (P5): hold the expensive spectral queries
@@ -161,7 +189,9 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
   // subviews (psd_heatmap via extractHeatmapNDV2, psd_curve via
   // extractPSDAverageV2, psd_spatial via extractPSDSpatialV2).
   const psdLiveV2Query = useV2PSDLiveQuery(
-    selectedTensor,
+    // psd_live is one cube feeding three sub-views (heatmap/curve/spatial); they
+    // must share a tensor, so it routes off the heatmap slot's override.
+    tensorFor("psd_heatmap"),
     flags.hasPSDLive && !tier0Pending
       ? makePSDLiveRequest(
           selectionDraft,
@@ -179,7 +209,7 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
   // compute on the final position; the heatmap's x-axis still tracks the
   // timeseries / navigator visible range once it settles.
   const spectrogramLiveV2Query = useV2SpectrogramQuery(
-    selectedTensor,
+    tensorFor("spectrogram_live"),
     flags.hasSpectrogramLive
       ? withFocus(
           makeSpectrogramLiveRequest(selectionDraft, expensiveSafeWindow, {
@@ -192,7 +222,7 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
     "SpectrogramLive",
   );
   const navigatorV2Query = useV2TimeseriesQuery(
-    selectedTensor,
+    tensorFor("navigator"),
     flags.hasNavigator && timeCoord
       ? makeNavigatorRequest(selectionDraft, timeCoord)
       : null,
@@ -210,7 +240,7 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
         })
       : null;
   const timeseriesBandpassQuery = useV2TimeseriesQuery(
-    selectedTensor,
+    tensorFor("timeseries"),
     bandpassRequest,
     "TimeseriesBandpass",
   );

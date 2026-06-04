@@ -10,6 +10,7 @@ import { useLayoutStore } from "../../store/layoutStore";
 import { useAppStore } from "../../store/appStore";
 import { VIEW_DESCRIPTORS } from "../../registry/viewRegistry";
 import { DEFAULT_SLOT_LAYOUT, isRowActive, getOverflowViews } from "./viewGridLayout";
+import { resolveTensorForSlot } from "./useWorkspaceData";
 import { ViewPanel } from "./ViewPanel";
 
 type ViewGridProps = {
@@ -61,9 +62,9 @@ export function ViewGrid({
 
   const activeSet = useMemo(() => new Set(activeViewIds), [activeViewIds]);
 
-  /** Resolve the tensor name for a given view slot. */
+  /** Resolve the tensor name for a given view slot (shared with useWorkspaceData). */
   const resolveTensor = useCallback(
-    (viewId: string): string => panelTensorOverrides[viewId] ?? globalTensor,
+    (viewId: string): string => resolveTensorForSlot(panelTensorOverrides, globalTensor, viewId) ?? globalTensor,
     [panelTensorOverrides, globalTensor],
   );
 

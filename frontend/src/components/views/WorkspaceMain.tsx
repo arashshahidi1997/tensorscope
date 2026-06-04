@@ -103,6 +103,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
 
   const {
     selectedTensor,
+    panelTensorOverrides,
     activeViews,
     setSelectedTensor,
     toggleView,
@@ -335,6 +336,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     staleByView,
   } = useWorkspaceData({
     selectedTensor,
+    panelTensorOverrides,
     selectionDraft,
     safeWindow,
     timeseriesFetchWindow,
