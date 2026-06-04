@@ -20,6 +20,8 @@ import { useGestureShortcuts } from "./components/views/useGestureShortcuts";
 import { buildStreamColorMap } from "./components/views/eventStreamColors";
 import { useAppStore } from "./store/appStore";
 import { useEventStreamsStore } from "./store/eventStreamsStore";
+import { useEventFilterStore } from "./store/eventFilterStore";
+import { applyEventFilters } from "./components/views/eventFilterLogic";
 import { useSelectionStore, toSelectionDTO } from "./store/selectionStore";
 
 function App() {
@@ -123,6 +125,14 @@ function App() {
   // WorkspaceMain's parallel call hits the same cache entries (React Query
   // dedupes by ["events-window", name, selection, halfWindow]).
   const eventsByStream = useEventWindowQueries(pinnedStreams, selectionDraft, 2);
+  // E1: apply the per-stream property filters once. The table, coincidence,
+  // and counts all read the surviving population; the raw map stays available
+  // for the filter UI's distribution histograms (E2).
+  const eventFilters = useEventFilterStore((s) => s.filters);
+  const filteredEventsByStream = useMemo(
+    () => applyEventFilters(eventsByStream, eventFilters),
+    [eventsByStream, eventFilters],
+  );
 
   const streamColors = useMemo(() => buildStreamColorMap(pinnedStreams), [pinnedStreams]);
 
@@ -132,7 +142,7 @@ function App() {
     if (pinnedStreams.length < 2) return [];
     const byStream = new Map<string, ReturnType<typeof extractEventTimes>>();
     for (const name of pinnedStreams) {
-      const recs = eventsByStream.get(name);
+      const recs = filteredEventsByStream.get(name);
       const meta = eventStreams.find((s) => s.name === name) ?? null;
       if (!recs) continue;
       byStream.set(name, extractEventTimes(recs, meta));
@@ -145,7 +155,7 @@ function App() {
       for (const i of set) times.push(evs[i].t);
     }
     return times;
-  }, [pinnedStreams, eventsByStream, eventStreams, coincidenceWindow]);
+  }, [pinnedStreams, filteredEventsByStream, eventStreams, coincidenceWindow]);
 
   // Prev/next navigation jumps to the nearest event in the ACTIVE stream
   // and updates the event identity.
@@ -225,7 +235,7 @@ function App() {
                 pinnedStreams={pinnedStreams}
                 activeStreamName={activeStreamName}
                 streamColors={streamColors}
-                eventsByStream={eventsByStream}
+                eventsByStream={filteredEventsByStream}
                 coincidenceWindow={coincidenceWindow}
                 selectedTime={selectionState.timeCursor}
                 selectedEventId={eventNav.selectedEventId}

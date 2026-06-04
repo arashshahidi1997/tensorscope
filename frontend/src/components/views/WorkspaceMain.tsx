@@ -21,6 +21,8 @@ import {
 } from "../../api/queries";
 import { coincidenceIndicesByStream, extractEventTimes } from "../../api/coincidence";
 import { useEventStreamsStore } from "../../store/eventStreamsStore";
+import { useEventFilterStore } from "../../store/eventFilterStore";
+import { applyEventFilters } from "./eventFilterLogic";
 import { buildStreamColorMap } from "./eventStreamColors";
 import type { SelectionDTO, TensorSliceRequestDTO } from "../../api/types";
 import { resolveBand, useAppStore } from "../../store/appStore";
@@ -249,6 +251,14 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const eventStreamsList = stateQuery.data?.events ?? [];
   const { pinnedStreams, coincidenceWindow } = useEventStreamsStore();
   const eventsByStream = useEventWindowQueries(pinnedStreams, selectionDraft, 2);
+  // E1: filter once at the data seam — the overlay, coincidence, and counts
+  // all read the surviving population. The raw `eventsByStream` is kept for the
+  // PSD-lock ID lookup below (a selected-then-filtered event must still lock).
+  const eventFilters = useEventFilterStore((s) => s.filters);
+  const filteredEventsByStream = useMemo(
+    () => applyEventFilters(eventsByStream, eventFilters),
+    [eventsByStream, eventFilters],
+  );
 
   const lockedEventTimeRange = useMemo<[number, number] | null>(() => {
     if (!psdLockToEvent || selectedEventId == null || !selectedStreamName) return null;
@@ -361,7 +371,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     if (pinnedStreams.length < 2) return [];
     const byStream = new Map<string, ReturnType<typeof extractEventTimes>>();
     for (const name of pinnedStreams) {
-      const recs = eventsByStream.get(name);
+      const recs = filteredEventsByStream.get(name);
       const meta = eventStreamsList.find((s) => s.name === name) ?? null;
       if (!recs) continue;
       byStream.set(name, extractEventTimes(recs, meta));
@@ -374,7 +384,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       for (const i of set) times.push(evs[i].t);
     }
     return times;
-  }, [pinnedStreams, eventsByStream, eventStreamsList, coincidenceWindow]);
+  }, [pinnedStreams, filteredEventsByStream, eventStreamsList, coincidenceWindow]);
 
   const SpatialMapComponent = viewRegistry.spatial_map as typeof SpatialMapSliceView;
   const PSDComponent = viewRegistry.psd_average as typeof PSDSliceView;
@@ -454,7 +464,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         focusChannel={focusChannel}
         onClearFocusChannel={() => setFocusChannel(null)}
         selection={selectionDraft}
-        eventsByStream={eventsByStream}
+        eventsByStream={filteredEventsByStream}
         streamColors={streamColorsMap}
         coincidentTimes={coincidentTimes}
         brainstateIntervals={brainstateIntervals}
