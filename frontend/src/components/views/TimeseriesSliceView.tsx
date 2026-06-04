@@ -16,6 +16,7 @@ import type { GestureTool, YMode } from "./useChartTools";
 import { makeBrainstateDrawHook } from "./brainstateOverlay";
 import { TimeseriesNavStrip } from "./TimeseriesNavStrip";
 import { COINCIDENCE_COLOR } from "./eventStreamColors";
+import { resolveEventSpan } from "./eventFilterLogic";
 import { restackBandpassToRawMean } from "./timeseriesBandpass";
 
 const COLORS = ["#d3ff68", "#73d2de", "#ff9770", "#c492ff", "#f4d35e", "#8bd450", "#ff6b9d", "#a8e6cf"];
@@ -707,6 +708,30 @@ export function TimeseriesSliceView({
                   // event per stream. Falls back to the single-stream
                   // `events` prop when no multi-stream data was passed.
                   if (byStream && byStream.size > 0 && colors) {
+                    const plotLeft = u.bbox.left;
+                    const plotRight = u.bbox.left + u.bbox.width;
+
+                    // Pass 1 (E3): faint [t0,t1] interval shading per event, in
+                    // the stream color, UNDER the peak ticks. Skips point events
+                    // (no resolvable span). See event-filtering-plan.md E3.
+                    ctx.save();
+                    ctx.globalAlpha = 0.12;
+                    for (const [name, evs] of byStream) {
+                      ctx.fillStyle = colors.get(name) ?? "rgba(255,180,50,0.7)";
+                      for (const ev of evs) {
+                        const span = resolveEventSpan(ev.record as Record<string, unknown>);
+                        if (!span) continue;
+                        const xa = u.valToPos(span.t0, "x", true);
+                        const xb = u.valToPos(span.t1, "x", true);
+                        const left = Math.max(plotLeft, Math.min(xa, xb));
+                        const right = Math.min(plotRight, Math.max(xa, xb));
+                        if (right < plotLeft || left > plotRight) continue;
+                        ctx.fillRect(left, u.bbox.top, Math.max(1, right - left), u.bbox.height);
+                      }
+                    }
+                    ctx.restore();
+
+                    // Pass 2: colored peak tick per event.
                     ctx.save();
                     ctx.lineWidth = 1;
                     ctx.setLineDash([4, 3]);
@@ -716,7 +741,7 @@ export function TimeseriesSliceView({
                         const t = Number((ev.record as Record<string, unknown>).t ?? NaN);
                         if (!Number.isFinite(t)) continue;
                         const x = Math.round(u.valToPos(t, "x", true));
-                        if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) continue;
+                        if (x < plotLeft || x > plotRight) continue;
                         ctx.beginPath();
                         ctx.moveTo(x, u.bbox.top);
                         ctx.lineTo(x, u.bbox.top + u.bbox.height);
@@ -1021,6 +1046,47 @@ export function TimeseriesSliceView({
       />
         {timeWindow && (
           <CrosshairOverlay tLo={timeWindow[0]} tHi={timeWindow[1]} />
+        )}
+        {eventsByStream && eventsByStream.size > 0 && streamColors && (
+          <div
+            className="ts-event-legend"
+            aria-label="Event stream legend"
+            style={{
+              position: "absolute",
+              top: 4,
+              right: 6,
+              display: "flex",
+              flexDirection: "column",
+              gap: 2,
+              padding: "3px 6px",
+              borderRadius: 4,
+              background: "rgba(13,17,23,0.66)",
+              pointerEvents: "none",
+              fontSize: 10,
+              maxWidth: 180,
+            }}
+          >
+            {Array.from(eventsByStream.keys()).map((name) => (
+              <span
+                key={name}
+                style={{ display: "flex", alignItems: "center", gap: 5, color: "#c9d1d9" }}
+                title={name}
+              >
+                <span
+                  style={{
+                    width: 9,
+                    height: 9,
+                    borderRadius: 2,
+                    background: streamColors.get(name) ?? "#ffb432",
+                    flex: "0 0 auto",
+                  }}
+                />
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {name}
+                </span>
+              </span>
+            ))}
+          </div>
         )}
       </div>
       {dataRange && timeWindow && selection && (
