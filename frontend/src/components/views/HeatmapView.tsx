@@ -147,8 +147,12 @@ export function HeatmapView({
   const swap = () => setHeatmapAxes(viewId, grid.yDim, grid.xDim);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      {/* Axis encoding controls */}
+    // `position: relative` anchors the absolutely-positioned `.ts-toolbar`
+    // (top/right) to THIS panel — without it the encoding control escaped to
+    // the viewport's top-right corner, overlapping the topbar/inspector and
+    // stacking with other heatmap panels' toolbars.
+    <div style={{ position: "relative", display: "flex", flexDirection: "column", height: "100%" }}>
+      {/* Axis encoding controls — float over the heatmap's top-right corner. */}
       <div className="ts-toolbar" style={{ gap: 6, fontSize: 11 }}>
         <label style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
           Y
