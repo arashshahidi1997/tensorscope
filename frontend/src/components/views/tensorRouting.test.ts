@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { resolveTensorForSlot } from "./useWorkspaceData";
-import { PROBE_LANES_LAYOUT, slotKey } from "./viewGridLayout";
+import {
+  PROBE_LANES_LAYOUT,
+  slotKey,
+  GRID_LAYOUTS,
+  GRID_LAYOUT_OPTIONS,
+  layoutViewIds,
+} from "./viewGridLayout";
 import { PROBE_LANES_OVERRIDES } from "../../store/appStore";
 
 describe("resolveTensorForSlot (Track C1 per-slot tensor routing)", () => {
@@ -44,5 +50,37 @@ describe("probe-lanes layout (Track C2/C3)", () => {
     expect(resolveTensorForSlot(PROBE_LANES_OVERRIDES, "ecog", "spectrogram_live")).toBe("ecog");
     expect(resolveTensorForSlot(PROBE_LANES_OVERRIDES, "ecog", "spectrogram_npx")).toBe("neuropixels");
     expect(resolveTensorForSlot(PROBE_LANES_OVERRIDES, "ecog", "depth_map")).toBe("neuropixels");
+  });
+});
+
+describe("GRID_LAYOUTS (panel-layout redesign)", () => {
+  it("every layout has collision-free slot keys", () => {
+    for (const [id, layout] of Object.entries(GRID_LAYOUTS)) {
+      const keys = layout.rows.flatMap((r) => r.slots).map(slotKey);
+      expect(new Set(keys).size, `duplicate slot key in ${id}`).toBe(keys.length);
+    }
+  });
+
+  it("every picker option maps to a real layout", () => {
+    for (const o of GRID_LAYOUT_OPTIONS) {
+      expect(GRID_LAYOUTS[o.id], `missing layout ${o.id}`).toBeDefined();
+    }
+  });
+
+  it("prunes the PSD trio from the default but keeps the spatial frequency view", () => {
+    const overview = layoutViewIds("default");
+    // psd_spatial earns its place (it's spatial); the heatmap/curve do not.
+    expect(overview.has("psd_spatial")).toBe(true);
+    expect(overview.has("psd_heatmap")).toBe(false);
+    expect(overview.has("psd_curve")).toBe(false);
+    // spatial map is present (co-equal with the timeseries).
+    expect(overview.has("spatial_map")).toBe(true);
+  });
+
+  it("confines the full PSD set to the spectral preset", () => {
+    const spectral = layoutViewIds("spectral");
+    expect(spectral.has("psd_heatmap")).toBe(true);
+    expect(spectral.has("psd_curve")).toBe(true);
+    expect(spectral.has("psd_spatial")).toBe(true);
   });
 });

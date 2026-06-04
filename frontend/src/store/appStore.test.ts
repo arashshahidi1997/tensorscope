@@ -41,7 +41,7 @@ describe("selectedTensor", () => {
   });
 });
 
-describe("multi-probe layout (Track C3/C5)", () => {
+describe("grid layouts + multi-probe (C3/C5 + layout redesign)", () => {
   it("setGridLayout('probe_lanes') seeds npx overrides + flips multiProbeMode", () => {
     getStore().setGridLayout("probe_lanes");
     const s = getStore();
@@ -53,7 +53,8 @@ describe("multi-probe layout (Track C3/C5)", () => {
       timeseries_npx: "neuropixels",
       spectrogram_npx: "neuropixels",
     });
-    expect(s.activeViews).toEqual(["timeseries", "spatial_map", "depth_map", "spectrogram_live"]);
+    // activeViews reset to [] → WorkspaceMain derives the set from the layout's slots.
+    expect(s.activeViews).toEqual([]);
   });
 
   it("in multi-probe mode, switching the nav tensor preserves the per-lane overrides (C5)", () => {
@@ -63,18 +64,20 @@ describe("multi-probe layout (Track C3/C5)", () => {
     expect(s.selectedTensor).toBe("ecog");
     // The fixed layout + per-slot map survive — NOT cleared as in single-probe.
     expect(s.multiProbeMode).toBe(true);
+    expect(s.gridLayout).toBe("probe_lanes");
     expect(s.panelTensorOverrides.timeseries_npx).toBe("neuropixels");
-    expect(s.activeViews.length).toBeGreaterThan(0);
   });
 
-  it("setGridLayout('default') exits multi-probe and clears overrides", () => {
+  it("non-probe presets set the layout, clear overrides, and leave single-probe mode", () => {
     getStore().setGridLayout("probe_lanes");
-    getStore().setGridLayout("default");
-    const s = getStore();
-    expect(s.gridLayout).toBe("default");
-    expect(s.multiProbeMode).toBe(false);
-    expect(s.panelTensorOverrides).toEqual({});
-    expect(s.activeViews).toEqual([]);
+    for (const id of ["default", "signal_space", "spectral", "events"] as const) {
+      getStore().setGridLayout(id);
+      const s = getStore();
+      expect(s.gridLayout).toBe(id);
+      expect(s.multiProbeMode).toBe(false);
+      expect(s.panelTensorOverrides).toEqual({});
+      expect(s.activeViews).toEqual([]);
+    }
   });
 });
 

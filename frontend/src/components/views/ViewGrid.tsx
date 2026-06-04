@@ -9,7 +9,7 @@ import { useCallback, useMemo, type ReactNode } from "react";
 import { useLayoutStore } from "../../store/layoutStore";
 import { useAppStore } from "../../store/appStore";
 import { VIEW_DESCRIPTORS } from "../../registry/viewRegistry";
-import { DEFAULT_SLOT_LAYOUT, PROBE_LANES_LAYOUT, isRowActive, getOverflowViews, slotKey } from "./viewGridLayout";
+import { GRID_LAYOUTS, DEFAULT_SLOT_LAYOUT, isRowActive, getOverflowViews, slotKey } from "./viewGridLayout";
 import { resolveTensorForSlot } from "./useWorkspaceData";
 import { ViewPanel } from "./ViewPanel";
 
@@ -48,7 +48,7 @@ export function ViewGrid({
   const { maximizedView, toggleMaximizeView } = useLayoutStore();
   const { toggleView, panelTensorOverrides, setPanelTensor, clearPanelTensor, gridLayout } = useAppStore();
 
-  const layout = gridLayout === "probe_lanes" ? PROBE_LANES_LAYOUT : DEFAULT_SLOT_LAYOUT;
+  const layout = GRID_LAYOUTS[gridLayout] ?? DEFAULT_SLOT_LAYOUT;
 
   const overflow = useMemo(
     () => getOverflowViews(activeViewIds, layout),

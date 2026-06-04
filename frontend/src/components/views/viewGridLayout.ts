@@ -9,7 +9,12 @@ import type { ViewSlotLayout, ViewRow, ViewSlot } from "../../store/layoutStore"
 export type { ViewSlotLayout, ViewRow, ViewSlot };
 
 /**
- * Default slot assignments — three rows covering signal, PSD, and spectrogram layers.
+ * Overview layout (the default) — the rebalanced "see the tensor spatially AND
+ * temporally" arrangement (docs/design/panel-layout-redesign.md). Signal row
+ * gives the spatial map near-equal weight (40%, was 25%); the spectral row
+ * pairs the spectrogram with the *spatial* frequency view (psd_spatial) instead
+ * of the full PSD trio (that lives in the `spectral` preset). raster / event /
+ * trajectory rows auto-collapse when their data is absent.
  */
 export const DEFAULT_SLOT_LAYOUT: ViewSlotLayout = {
   rows: [
@@ -17,64 +22,125 @@ export const DEFAULT_SLOT_LAYOUT: ViewSlotLayout = {
       id: "signal",
       label: "Signal",
       slots: [
-        { viewId: "timeseries", region: "left", widthFraction: 0.75 },
-        { viewId: "spatial_map", region: "right", widthFraction: 0.25 },
+        { viewId: "timeseries", region: "left", widthFraction: 0.6 },
+        { viewId: "spatial_map", region: "right", widthFraction: 0.4 },
         // depth_map is the linear-probe (Neuropixels) analogue of spatial_map;
         // a tensor is grid OR linear, so they never both appear — share the slot.
-        { viewId: "depth_map", region: "right", widthFraction: 0.25 },
+        { viewId: "depth_map", region: "right", widthFraction: 0.4 },
       ],
       minHeight: 260,
     },
     {
-      id: "psd",
-      label: "PSD",
+      id: "spectral",
+      label: "Spectral",
       slots: [
-        { viewId: "psd_heatmap", region: "left", widthFraction: 0.45 },
-        { viewId: "psd_curve", region: "center", widthFraction: 0.3 },
-        { viewId: "psd_spatial", region: "right", widthFraction: 0.25 },
+        // Precomputed `spectrogram` (4-D) OR live multitaper `spectrogram_live`
+        // (3-D LFP) — mutually exclusive, share the left slot.
+        { viewId: "spectrogram", region: "left", widthFraction: 0.65 },
+        { viewId: "spectrogram_live", region: "left", widthFraction: 0.65 },
+        // The *spatial* frequency view sits beside the spectrogram so frequency
+        // and space are read together (the full PSD trio is in the `spectral` preset).
+        { viewId: "psd_spatial", region: "right", widthFraction: 0.35 },
       ],
-      minHeight: 220,
-    },
-    {
-      id: "spectrogram",
-      label: "Spectrogram",
-      slots: [
-        // Either the precomputed `spectrogram` (4-D tensors w/ a freq dim)
-        // OR the live multitaper `spectrogram_live` (3-D LFP, computed
-        // server-side via ghostipy + np.apply_along_axis). Both occupy
-        // the same row-left slot — they're mutually exclusive at the
-        // tensor level so only one is populated per render.
-        { viewId: "spectrogram", region: "left", widthFraction: 0.75 },
-        { viewId: "spectrogram_live", region: "left", widthFraction: 0.75 },
-        { viewId: "propagation_frame", region: "right", widthFraction: 0.25 },
-      ],
-      minHeight: 220,
+      minHeight: 240,
     },
     {
       id: "raster",
       label: "Raster",
-      slots: [
-        // channel × time amplitude heatmap — full width, its own row.
-        { viewId: "raster", region: "left", widthFraction: 1.0 },
-      ],
+      slots: [{ viewId: "raster", region: "left", widthFraction: 1.0 }],
       minHeight: 220,
     },
     {
       id: "event",
       label: "Event",
-      slots: [
-        { viewId: "event_average", region: "left", widthFraction: 1.0 },
-      ],
+      slots: [{ viewId: "event_average", region: "left", widthFraction: 1.0 }],
       minHeight: 220,
     },
     {
       id: "trajectory",
       label: "Trajectory",
-      slots: [
-        // 2-D behavioral position path (time, axis) — its own row.
-        { viewId: "trajectory", region: "left", widthFraction: 1.0 },
-      ],
+      slots: [{ viewId: "trajectory", region: "left", widthFraction: 1.0 }],
       minHeight: 260,
+    },
+  ],
+};
+
+/**
+ * Signal + Space — spatial emphasis: traces and the electrode map near-equal,
+ * with the propagation *movie* (spatial dynamics over time) below.
+ */
+export const SIGNAL_SPACE_LAYOUT: ViewSlotLayout = {
+  rows: [
+    {
+      id: "signal",
+      label: "Signal",
+      slots: [
+        { viewId: "timeseries", region: "left", widthFraction: 0.55 },
+        { viewId: "spatial_map", region: "right", widthFraction: 0.45 },
+        { viewId: "depth_map", region: "right", widthFraction: 0.45 },
+      ],
+      minHeight: 280,
+    },
+    {
+      id: "dynamics",
+      label: "Spatial dynamics",
+      slots: [{ viewId: "propagation_frame", region: "left", widthFraction: 1.0 }],
+      minHeight: 280,
+    },
+  ],
+};
+
+/**
+ * Spectral — the frequency deep-dive; the only place the full PSD trio
+ * (heatmap + curve + spatial) and the precomputed `psd_average` live.
+ */
+export const SPECTRAL_LAYOUT: ViewSlotLayout = {
+  rows: [
+    {
+      id: "tf",
+      label: "Time–frequency",
+      slots: [
+        { viewId: "spectrogram", region: "left", widthFraction: 1.0 },
+        { viewId: "spectrogram_live", region: "left", widthFraction: 1.0 },
+      ],
+      minHeight: 240,
+    },
+    {
+      id: "psd",
+      label: "PSD",
+      slots: [
+        { viewId: "psd_heatmap", region: "left", widthFraction: 0.5 },
+        // psd_curve (live) and psd_average (precomputed) are mutually exclusive
+        // power-vs-freq curves — share the center slot.
+        { viewId: "psd_curve", region: "center", widthFraction: 0.25 },
+        { viewId: "psd_average", region: "center", widthFraction: 0.25 },
+        { viewId: "psd_spatial", region: "right", widthFraction: 0.25 },
+      ],
+      minHeight: 240,
+    },
+  ],
+};
+
+/**
+ * Events — review/triggered-stats: traces with the event overlay, plus the
+ * event-triggered average beside the raster.
+ */
+export const EVENTS_LAYOUT: ViewSlotLayout = {
+  rows: [
+    {
+      id: "signal",
+      label: "Signal",
+      slots: [{ viewId: "timeseries", region: "left", widthFraction: 1.0 }],
+      minHeight: 260,
+    },
+    {
+      id: "triggered",
+      label: "Triggered",
+      slots: [
+        { viewId: "event_average", region: "left", widthFraction: 0.6 },
+        { viewId: "raster", region: "right", widthFraction: 0.4 },
+      ],
+      minHeight: 240,
     },
   ],
 };
@@ -121,6 +187,33 @@ export const PROBE_LANES_LAYOUT: ViewSlotLayout = {
 /** Resolve a slot's stable identity (defaults to its viewId). */
 export function slotKey(slot: ViewSlot): string {
   return slot.slotId ?? slot.viewId;
+}
+
+/**
+ * The selectable grid layouts (docs/design/panel-layout-redesign.md). Keyed by
+ * `GridLayoutId` (appStore). `ViewGrid` renders `GRID_LAYOUTS[gridLayout]`; the
+ * active-view set is scoped to the chosen layout's slots in WorkspaceMain.
+ */
+export const GRID_LAYOUTS: Record<string, ViewSlotLayout> = {
+  default: DEFAULT_SLOT_LAYOUT,
+  signal_space: SIGNAL_SPACE_LAYOUT,
+  spectral: SPECTRAL_LAYOUT,
+  events: EVENTS_LAYOUT,
+  probe_lanes: PROBE_LANES_LAYOUT,
+};
+
+/** Human labels + descriptions for the layout picker. `probe_lanes` is gated on ≥2 tensors. */
+export const GRID_LAYOUT_OPTIONS: { id: string; label: string; description: string; multiProbe?: boolean }[] = [
+  { id: "default", label: "Overview", description: "Signal + spatial map + spectrogram & spatial PSD." },
+  { id: "signal_space", label: "Signal + Space", description: "Traces and electrode map co-equal, plus the propagation movie." },
+  { id: "spectral", label: "Spectral", description: "Spectrogram + the full PSD set (heatmap / curve / spatial)." },
+  { id: "events", label: "Events", description: "Traces with event overlay + event-triggered average & raster." },
+  { id: "probe_lanes", label: "Probe lanes", description: "ECoG + Neuropixels on a shared time axis (multi-probe).", multiProbe: true },
+];
+
+/** View ids slotted by a layout, intersected with availability → the active set for that preset. */
+export function layoutViewIds(layoutId: string): Set<string> {
+  return getSlottedViewIds(GRID_LAYOUTS[layoutId] ?? DEFAULT_SLOT_LAYOUT);
 }
 
 /**

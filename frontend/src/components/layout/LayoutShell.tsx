@@ -3,7 +3,7 @@ import type { LayoutDTO } from "../../api/types";
 import { useLayoutStore } from "../../store/layoutStore";
 import { ResizeHandle } from "./ResizeHandle";
 import { LayoutPresetPicker } from "./LayoutPresetPicker";
-import { ProbeLanesToggle } from "./ProbeLanesToggle";
+import { GridLayoutPicker } from "./GridLayoutPicker";
 import { useLayoutShortcuts } from "./useLayoutShortcuts";
 
 type LayoutShellProps = PropsWithChildren<{
@@ -120,7 +120,7 @@ export function LayoutShell({
         <span className="topbar-title">{title}</span>
         <div className="topbar-actions">
           <LayoutPresetPicker />
-          <ProbeLanesToggle />
+          <GridLayoutPicker />
           <span className="topbar-chip muted">{sessionId.slice(0, 8)}</span>
           <button
             className="collapse-toggle bottom-toggle"

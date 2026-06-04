@@ -136,8 +136,8 @@ type AppStore = {
   setFocusChannel: (coord: { ap: number; ml: number } | null) => void;
 };
 
-/** View-grid layout id (Track C3). */
-export type GridLayoutId = "default" | "probe_lanes";
+/** View-grid layout id (Track C3 + the layout-redesign presets). */
+export type GridLayoutId = "default" | "signal_space" | "spectral" | "events" | "probe_lanes";
 
 /**
  * Default per-slot tensor routing for the "Probe lanes" layout (Track C3):
@@ -191,16 +191,17 @@ export const useAppStore = create<AppStore>((set) => ({
     ),
   setGridLayout: (layout) =>
     set(() =>
+      // activeViews reset to [] → WorkspaceMain scopes the active set to the
+      // chosen layout's slots ∩ availability (no overflow). Only probe_lanes
+      // carries per-slot tensor overrides + multiProbeMode.
       layout === "probe_lanes"
         ? {
             gridLayout: "probe_lanes",
             multiProbeMode: true,
             panelTensorOverrides: { ...PROBE_LANES_OVERRIDES },
-            // Scope active views to the probe lanes so the focused 3-row layout
-            // doesn't dump every other view into the overflow area.
-            activeViews: ["timeseries", "spatial_map", "depth_map", "spectrogram_live"],
+            activeViews: [],
           }
-        : { gridLayout: "default", multiProbeMode: false, panelTensorOverrides: {}, activeViews: [] },
+        : { gridLayout: layout, multiProbeMode: false, panelTensorOverrides: {}, activeViews: [] },
     ),
   setPanelTensor: (slotId, tensorName) =>
     set((s) => ({ panelTensorOverrides: { ...s.panelTensorOverrides, [slotId]: tensorName } })),

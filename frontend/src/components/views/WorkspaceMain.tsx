@@ -30,6 +30,7 @@ import { useViewportStore } from "../../store/viewportStore";
 import { useTimeNavigation } from "./useTimeNavigation";
 import { resolveTensorForSlot, useWorkspaceData } from "./useWorkspaceData";
 import { getAvailableViews, getOrthoPair, viewRegistry } from "../../registry/viewRegistry";
+import { layoutViewIds } from "./viewGridLayout";
 import { EventAverageView } from "./EventAverageView";
 import { TrackStack } from "./TrackStack";
 import { TrajectoryView } from "./TrajectoryView";
@@ -202,7 +203,15 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   // so they appear in available/active views automatically.
   const rawAvailableViews = tensorQuery.data?.available_views ?? earlyAvailableViews;
   const availableViews = expandPSDLive(rawAvailableViews);
-  const effectiveActiveViews = activeViews.length === 0 ? availableViews : activeViews;
+  // Scope the active set to the chosen grid layout's slots (panel-layout
+  // redesign). With no explicit toggles, a preset shows exactly its slotted +
+  // available views (no overflow); once the user toggles views by hand
+  // (activeViews non-empty) we respect that explicit set instead.
+  const gridSlotViews = layoutViewIds(gridLayout);
+  const effectiveActiveViews =
+    activeViews.length === 0
+      ? availableViews.filter((v) => gridSlotViews.has(v))
+      : activeViews.filter((v) => availableViews.includes(v));
   const hasTimeseries = effectiveActiveViews.includes("timeseries");
   const hasSpatial = effectiveActiveViews.includes("spatial_map");
   const hasDepthMap = effectiveActiveViews.includes("depth_map");
