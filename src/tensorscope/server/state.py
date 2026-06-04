@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import logging
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
@@ -44,6 +45,12 @@ from tensorscope.server.models import (
 
 
 _INLINE_COORD_LIMIT = 32
+# P1: bound on the per-session per-view result cache (LRU). Returning to a
+# previously-seen window (scrub back, panel toggle, re-open) serves the cached
+# sliced DataArray instead of recomputing the multitaper PSD / spectrogram /
+# min-max envelope. ~64 distinct (view, window, params) entries is generous for
+# interactive navigation while keeping the per-session footprint bounded.
+_VIEW_RESULT_CACHE_MAX = 64
 _VIEW_REGISTRY: dict[frozenset[str], list[str]] = {
     frozenset({"time", "AP", "ML"}): ["timeseries", "spatial_map", "raster", "propagation_frame", "propagation_movie", "navigator", "psd_live", "spectrogram_live", "event_average"],
     frozenset({"time", "channel"}): ["timeseries", "raster", "navigator", "psd_live", "spectrogram_live", "event_average"],
@@ -94,6 +101,11 @@ class ServerState:
     _dag: WorkspaceDAG = None  # type: ignore[assignment]
     _processed_cache: dict = None  # type: ignore[assignment]  # {tensor_name: xr.DataArray}
     _processed_params_hash: str | None = None
+    # P1: per-view result cache (LRU). Keyed by (tensor, request, mask, processing)
+    # → the post-compute `_prepare_slice` tuple, so a revisited window serves both
+    # the v1 and v2 encoders without recomputing. Initialized in __post_init__ so
+    # each per-session deepcopy gets its own dict (matches _processed_cache).
+    _view_result_cache: OrderedDict = None  # type: ignore[assignment]
     _subscribers: list[_Subscriber] = field(default_factory=list)
     # Per-tensor channel masks (flat channel ids: ap*n_ml+ml for grid, or channel idx).
     # Stored as sorted lists rather than sets so deepcopy + JSON round-trip is stable.
@@ -107,6 +119,8 @@ class ServerState:
             self.processing = ProcessingParamsDTO()
         if self._processed_cache is None:
             self._processed_cache = {}
+        if self._view_result_cache is None:
+            self._view_result_cache = OrderedDict()
         if self.transform_registry is None:
             self.transform_registry = TransformRegistry()
             register_builtins(self.transform_registry)
@@ -204,6 +218,7 @@ class ServerState:
         self.processing = params
         # Invalidate cache — will be lazily rebuilt on next slice request
         self._processed_cache.clear()
+        self._view_result_cache.clear()  # P1: per-view results depend on processing
         self._processed_params_hash = None
         self._processing_errors.clear()
         return self.processing
@@ -222,6 +237,10 @@ class ServerState:
             self.channel_masks[tensor_name] = deduped
         else:
             self.channel_masks.pop(tensor_name, None)
+        # P1: cached per-view results are mask-dependent (the mask NaN-fills
+        # cells before the FFT / reductions). The key includes the mask too, so
+        # this is belt-and-suspenders that also bounds the LRU.
+        self._view_result_cache.clear()
         return self.channel_mask_for(tensor_name)
 
     def probe_layout_dto(self) -> ProbeLayoutDTO | None:
@@ -317,6 +336,7 @@ class ServerState:
 
         if self._processed_params_hash != params_hash:
             self._processed_cache.clear()
+            self._view_result_cache.clear()  # P1: processing changed → drop stale views
             self._processed_params_hash = params_hash
 
         if name not in self._processed_cache:
@@ -333,16 +353,54 @@ class ServerState:
 
         return self._processed_cache[name]
 
+    def _view_cache_key(
+        self, name: str, request: TensorSliceRequestDTO
+    ) -> tuple[str, str, tuple[int, ...], str]:
+        """Stable key for the P1 per-view result cache.
+
+        Built from the full request dump (so every field that influences the
+        sliced output — view_type, windows, selection, params, max_points,
+        downsample — participates; conservative misses, never a false hit), the
+        per-tensor channel mask, and the processing params. ``set_processing`` /
+        ``set_channel_mask`` also clear the cache, so this key only needs to
+        distinguish entries that legitimately coexist within one epoch.
+        """
+        masked = tuple(self.channel_masks.get(name, []))
+        return (
+            name,
+            request.model_dump_json(),
+            masked,
+            self.processing.model_dump_json(),
+        )
+
     def _prepare_slice(
         self, name: str, request: TensorSliceRequestDTO
     ) -> tuple[xr.DataArray, xr.DataArray, dict[str, Any], dict[str, Any]]:
-        """Run the slice handler and assemble v1/v2 metadata blobs.
+        """Run the slice handler (P1-cached) and assemble v1/v2 metadata blobs.
 
         Returns ``(source_tensor, sliced, processing_meta, slice_provenance)``.
-        Factored out of :meth:`tensor_slice` so the v2 raw-bytes endpoint can
-        reuse the same handler chain (processing cache → apply_slice_request →
-        mask) without re-serialising through the v1 long-format encoder.
+        This is the single shared seam for both the v1 long-format encoder
+        (:meth:`tensor_slice`) and the v2 raw-bytes encoder
+        (:meth:`tensor_slice_v2_bytes`); caching here means one compute serves
+        both. A hit returns the previously-computed tuple (read-only downstream
+        — both encoders copy attrs and never mutate the sliced array).
         """
+        key = self._view_cache_key(name, request)
+        cached = self._view_result_cache.get(key)
+        if cached is not None:
+            self._view_result_cache.move_to_end(key)
+            return cached
+        result = self._prepare_slice_uncached(name, request)
+        self._view_result_cache[key] = result
+        self._view_result_cache.move_to_end(key)
+        while len(self._view_result_cache) > _VIEW_RESULT_CACHE_MAX:
+            self._view_result_cache.popitem(last=False)
+        return result
+
+    def _prepare_slice_uncached(
+        self, name: str, request: TensorSliceRequestDTO
+    ) -> tuple[xr.DataArray, xr.DataArray, dict[str, Any], dict[str, Any]]:
+        """Compute one slice from scratch (the P1 cache-miss path)."""
         node = self.get_node(name)
         processing_requested = bool(self.processing and self.processing.has_any_active())
         if processing_requested:
