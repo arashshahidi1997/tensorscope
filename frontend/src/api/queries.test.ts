@@ -63,6 +63,16 @@ describe("makeDefaultSliceRequest", () => {
     expect(req.max_points).toBeUndefined();
   });
 
+  it("pins selection to a constant for psd_average (cursor-key invariance)", () => {
+    // The server collapses time → mean and reads no `selection` field for
+    // psd_average, so a pure cursor move (time OR freq) must not re-key the
+    // query. Two different cursor positions produce identical requests.
+    const a = makeDefaultSliceRequest("psd_average", { ...SEL, time: 9.2, freq: 12 });
+    const b = makeDefaultSliceRequest("psd_average", { ...SEL, time: 30.7, freq: 80 });
+    expect(a.selection).toEqual({ time: 0, freq: 0, ap: 0, ml: 0, channel: null });
+    expect(a).toEqual(b);
+  });
+
   it("navigator uses the passed-in full-range window", () => {
     const req = makeDefaultSliceRequest("navigator", SEL, [0, 50]);
     expect(req.time_range).toEqual([0, 50]);

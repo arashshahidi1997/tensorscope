@@ -449,10 +449,15 @@ export function makeDefaultSliceRequest(
 
     case "psd_average":
       // psd_average on a pre-computed freq-only tensor needs no time_range.
-      // The server also accepts time_range when the tensor has a time dim.
+      // The server collapses time → mean and reads NO field of `selection`
+      // (verified — state.py consumes selection.time only for
+      // spatial_map/depth_map). Pin selection to a constant so a pure cursor
+      // move (time OR freq) doesn't re-key this query and trigger a wasted
+      // refetch + recompute. The psd_curve highlight reads the live freq from
+      // its own prop, not from this request. See ADR-0008 §5.
       return {
         view_type: viewType,
-        selection,
+        selection: { time: 0, freq: 0, ap: 0, ml: 0, channel: null },
       };
 
     case "navigator": {
