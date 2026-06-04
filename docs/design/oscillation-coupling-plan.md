@@ -33,8 +33,17 @@ block that today, all confirmed in code this session:
 
 Perf context (this session): the spindle-review flow is already smooth on narrow
 event windows (timeseries 73 ms, psd 227 ms, **TF spectrogram ~1.6–2.1 s cold / 16 ms
-warm via the P1 cache**). The TF spectrogram is the one wait — Track B both speeds it
-(wavelet, no 200-segment multitaper) and makes it band-correct.
+warm via the P1 cache**). **The ghostipy multitaper is already fast** (the original
+code note: 22 s dask → ~150 ms; threaded fan-out ~3×) — so Track B is **not** a speed
+fix, and CWT is in fact *heavier* than mtm. Two honest clarifications:
+- **Ripple *viewability* is a freq-range plumbing problem (Track A's A1), NOT a
+  wavelet problem.** The multitaper handles 100–250 Hz fine with a raised `fmax_hz` +
+  short `nperseg` — it just has no frontend control today (hardwired 0.5–30 Hz). A1
+  alone unblocks ripple TF, with the fast mtm.
+- **Track B's real value is JOINT multi-band resolution** (constant-Q): seeing SO
+  (0.5–4 Hz), spindle (11–16 Hz), and ripple (100–250 Hz) structure *together* with
+  appropriate time/freq resolution at each band, which a single fixed-window mtm can't.
+  It's an analysis enhancement for coupling, not a bottleneck fix.
 
 ---
 
@@ -67,7 +76,11 @@ the shared axis). Measurement harness for the wavelet cost: `/tmp/pwdbg/spec-cle
 
 ---
 
-## Track B — Wavelet / multi-resolution spectrogram (do FIRST; enables ripple TF)
+## Track B — Wavelet / multi-resolution spectrogram (joint multi-band resolution)
+
+> Note: the multitaper is already fast; this track is the **joint-resolution analysis
+> feature** (constant-Q across SO→ripple), not a speed fix and not what unblocks ripple
+> viewing (that's A1's freq-range plumbing). CWT is heavier than mtm — see the cost note.
 
 A `method` field on the spectrogram params DTO, NOT a new view_type — it rides the
 existing view registry, query builder, v2 extractor, canvas view, and P1 cache
@@ -241,23 +254,20 @@ add a multi-probe layout. This is `neuropixels-multiprobe.md` Phase 3.
 
 ---
 
-## Tier 3 — DECIDE before running (science/product calls; not swarm work)
+## Tier 3 — decisions (CONFIRMED 2026-06-04; the swarm uses these as decided values)
 
-- **D-PROFILE · the profile values.** Starting recommendation (confirm/tune):
+- **D-PROFILE · the profile values.** ✅ DECIDED (use as-is): single profile each —
   SO/Delta = band 0.5–4 Hz, spec 0.3–6 Hz, window ~15 s, wavelet, detector `cogpy_threshold`(banded);
   Spindle = 11–16 Hz, spec 8–20 Hz, window ~2.5 s, multitaper-ok, detector `cogpy_spindle`;
   Ripple = 100–250 Hz, spec 80–300 Hz, window ~0.6 s, **wavelet**, detector `cogpy_ripple`.
-  Open: split SO (0.5–1.5) vs Delta (1–4) into two profiles? Exact ripple window?
-- **D-LAYOUT · what the multi-probe layout shows.** Recommendation: row 1 ecog timeseries
+  (SO-vs-Delta split deferred — one SO/Delta profile for now.)
+- **D-LAYOUT · what the multi-probe layout shows.** ✅ DECIDED (3-row): row 1 ecog timeseries
   (spindle band) + spindle/SO event lanes; row 2 npx depth_map + npx ripple-band timeseries;
-  row 3 ecog spectrogram + npx spectrogram, both on the shared window. Confirm the exact
-  view set + which probe gets which spectral view.
-- **D-WAVELET · default wavelet + voices.** Recommendation: Morse (ghostipy default
-  γ=3, β=20), `voices_per_octave=10`. Superlet (sharper, heavier) is a future option — not in
-  ghostipy directly; Morse CWT is the pragmatic first cut. Confirm.
-- **D-MULTIPROBE-MODE · UX of entering multi-probe** (a layout preset vs an explicit mode
-  toggle) — informs C5. Recommendation: a "Probe lanes" entry in the layout picker that also
-  flips `multiProbeMode`.
+  row 3 ecog spectrogram + npx spectrogram, both on the shared window.
+- **D-WAVELET · default wavelet + voices.** ✅ DECIDED: Morse (ghostipy default γ=3, β=20),
+  `voices_per_octave=10`. Superlet is a future option (not in ghostipy directly); Morse CWT is the first cut.
+- **D-MULTIPROBE-MODE · UX of entering multi-probe.** ✅ DECIDED: a "Probe lanes" entry in the
+  layout picker that also flips `multiProbeMode` (informs C5).
 
 ---
 
