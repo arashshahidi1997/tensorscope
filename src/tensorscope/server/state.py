@@ -1268,7 +1268,13 @@ def apply_slice_request(
     # agnostic. Output is (channel, time); the trailing downsample step thins the
     # time axis to max_points. A `depth` coord (linear probes) rides along so the
     # frontend can order rows by depth. See docs/design/neuropixels-multiprobe.md.
-    if request.view_type == "raster" and "time" in sliced.dims:
+    # raster + depth_map share one shape: a (channel, time) amplitude image. The
+    # trailing downsample (below) thins the time axis to max_points; the frontend
+    # orders rows by the per-channel `depth` coord (dorsal→ventral) when present.
+    # depth_map is the linear-probe (Neuropixels) framing of the same image,
+    # windowed so a SWR / spindle event can be read across depth over time — NOT
+    # an instantaneous profile. See docs/design/neuropixels-multiprobe.md.
+    if request.view_type in ("raster", "depth_map") and "time" in sliced.dims:
         if "AP" in sliced.dims and "ML" in sliced.dims:
             # Row-major flatten to a plain (channel,) axis. `.stack` makes a
             # MultiIndex channel coord which doesn't serialize cleanly, so drop
@@ -1282,7 +1288,7 @@ def apply_slice_request(
                 f"got dims {tuple(sliced.dims)}"
             )
         sliced = sliced.transpose("channel", "time")
-        sliced = sliced.assign_attrs({**dict(sliced.attrs), "view_type": "raster"})
+        sliced = sliced.assign_attrs({**dict(sliced.attrs), "view_type": request.view_type})
 
     if request.view_type == "spatial_map" and "time" in sliced.dims:
         target_time = float(request.selection.time)
@@ -1292,23 +1298,6 @@ def apply_slice_request(
                 {
                     **dict(sliced.attrs),
                     "selected_time": _scalar_or_none(sliced.coords["time"].values),
-                }
-            )
-
-    # depth_map: the linear-probe analogue of spatial_map. Collapse time to the
-    # selected instant → (channel,) profile; the per-channel ``depth`` coord
-    # rides along so the frontend orders the strip dorsal→ventral. Channels are
-    # NOT reordered here (keeps channel ids / masks stable). See
-    # docs/design/neuropixels-multiprobe.md.
-    if request.view_type == "depth_map" and "time" in sliced.dims:
-        target_time = float(request.selection.time)
-        sliced = sliced.sel(time=target_time, method="nearest")
-        if "time" in sliced.coords:
-            sliced = sliced.assign_attrs(
-                {
-                    **dict(sliced.attrs),
-                    "selected_time": _scalar_or_none(sliced.coords["time"].values),
-                    "view_type": "depth_map",
                 }
             )
 

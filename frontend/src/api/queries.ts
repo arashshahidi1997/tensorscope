@@ -503,10 +503,10 @@ export function makeDefaultSliceRequest(
   switch (viewType) {
     case "spatial_map":
     case "psd_spatial":
-    case "depth_map":
-      // depth_map is the linear-probe analogue of spatial_map: an instantaneous
-      // per-channel profile at the cursor time. Same narrow window + no time
-      // downsample (the server collapses time → (channel,)).
+      // Instantaneous per-channel spatial snapshot at the cursor: a narrow
+      // window the server collapses to a single frame. (depth_map is NOT here —
+      // it's a windowed depth×time image, so it falls through to the raster
+      // branch below. See docs/design/neuropixels-multiprobe.md.)
       return {
         view_type: viewType,
         selection,
@@ -572,12 +572,12 @@ export function makeDefaultSliceRequest(
       };
     }
 
-    default: // raster, and anything else purely window-based
+    default: // raster, depth_map, and anything else purely window-based
       return {
         view_type: viewType,
         // Pin time to the window start — same window-bound invariant as the
-        // spectrogram branch above (raster data depends on the window, not
-        // the cursor). Keeps the key stable under cursor moves.
+        // spectrogram branch above (raster/depth_map data depend on the window,
+        // not the cursor). Keeps the key stable under cursor moves.
         selection: { ...selection, time: timeWindow[0] },
         time_range: timeWindow,
         max_points: 2000,

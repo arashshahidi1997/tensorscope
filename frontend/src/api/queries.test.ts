@@ -64,6 +64,16 @@ describe("makeDefaultSliceRequest", () => {
     }
   });
 
+  it("makes depth_map a windowed depth×time image (not an instantaneous profile)", () => {
+    // depth_map now falls through to the window-based raster branch so the
+    // server returns (channel, time) — a SWR can be read across depth over time.
+    const req = makeDefaultSliceRequest("depth_map", SEL, [9, 11]);
+    expect(req.time_range).toEqual([9, 11]);
+    expect(req.max_points).toBe(2000);
+    expect(req.downsample).toBe("minmax");
+    expect(req.selection.time).toBe(9); // pinned to window start (cursor-key invariance)
+  });
+
   it("omits time_range entirely for psd_average", () => {
     const req = makeDefaultSliceRequest("psd_average", SEL);
     expect(req.time_range).toBeUndefined();

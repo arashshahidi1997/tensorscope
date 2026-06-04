@@ -167,8 +167,10 @@ export const PROBE_LANES_LAYOUT: ViewSlotLayout = {
       id: "hippocampus",
       label: "Hippocampus (Neuropixels)",
       slots: [
-        { slotId: "depth_map", viewId: "depth_map", region: "left", widthFraction: 0.35 },
-        { slotId: "timeseries_npx", viewId: "timeseries", region: "right", widthFraction: 0.65 },
+        // depth_map is now a depth × time image (not a thin instantaneous
+        // column), so it earns the wider half of the lane.
+        { slotId: "depth_map", viewId: "depth_map", region: "left", widthFraction: 0.55 },
+        { slotId: "timeseries_npx", viewId: "timeseries", region: "right", widthFraction: 0.45 },
       ],
       minHeight: 240,
     },

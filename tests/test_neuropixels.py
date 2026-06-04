@@ -63,8 +63,10 @@ def test_flat_tensor_without_depth_has_no_depth_map() -> None:
     assert "depth_map" not in available_views(da)
 
 
-def test_depth_map_slice_returns_channel_profile() -> None:
-    da = _np_probe()
+def test_depth_map_slice_returns_depth_time_image() -> None:
+    # depth_map is a WINDOWED depth × time image (so a SWR/spindle can be read
+    # across depth over time), not an instantaneous (channel,) profile.
+    da = _np_probe(nt=100)
     req = TensorSliceRequestDTO(
         view_type="depth_map",
         selection=SelectionDTO(time=0.5, freq=10.0, ap=0, ml=0),
@@ -72,12 +74,27 @@ def test_depth_map_slice_returns_channel_profile() -> None:
         max_points=2000,
     )
     sliced = apply_slice_request(da, req)
-    assert sliced.dims == ("channel",)
-    # Channels are NOT reordered; the depth coord rides along for the frontend.
-    assert "depth" in sliced.coords
+    assert set(sliced.dims) == {"channel", "time"}
     assert sliced.sizes["channel"] == da.sizes["channel"]
-    assert "selected_time" in sliced.attrs
+    # The per-channel depth coord rides along so the frontend orders rows
+    # dorsal→ventral; channels are NOT reordered server-side (mask ids stable).
+    assert "depth" in sliced.coords
     assert sliced.attrs.get("view_type") == "depth_map"
+
+
+def test_depth_map_downsamples_time_to_max_points() -> None:
+    da = _np_probe(nt=5000)
+    req = TensorSliceRequestDTO(
+        view_type="depth_map",
+        selection=SelectionDTO(time=0.5, freq=10.0, ap=0, ml=0),
+        time_range=(0.0, 50.0),
+        max_points=400,
+        downsample="minmax",
+    )
+    sliced = apply_slice_request(da, req)
+    assert set(sliced.dims) == {"channel", "time"}
+    # Thinned to fit the budget (fine for short windows, bounded for long ones).
+    assert sliced.sizes["time"] <= 800  # minmax may emit up to 2× the bucket count
 
 
 def test_electrode_layout_reports_linear_geometry() -> None:
