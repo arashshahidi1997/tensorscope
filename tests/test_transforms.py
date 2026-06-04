@@ -712,7 +712,13 @@ class TestCogpyDetectors:
         from tensorscope.core.events import list_detectors
 
         names = {d.name for d in list_detectors()}
-        assert {"cogpy_ripple", "cogpy_spindle", "cogpy_burst", "cogpy_threshold"} <= names
+        assert {
+            "cogpy_ripple",
+            "cogpy_spindle",
+            "cogpy_slowwave",
+            "cogpy_burst",
+            "cogpy_threshold",
+        } <= names
 
     def test_cogpy_threshold_detects(self):
         from tensorscope.core.events import get_detector
@@ -724,3 +730,38 @@ class TestCogpyDetectors:
         )
         assert stream.name.startswith("cogpy_thresh")
         assert len(stream) >= 1
+
+    def _slow_wave_signal(self, fs: float = 200.0, dur: float = 20.0) -> xr.DataArray:
+        # A clean 1 Hz oscillation drives the SO detector's zero-crossing
+        # segmentation; large amplitude clears the peak-to-peak percentile gate.
+        t = np.arange(0.0, dur, 1.0 / fs)
+        y = 80.0 * np.sin(2.0 * np.pi * 1.0 * t)
+        y += 2.0 * np.random.default_rng(0).standard_normal(t.size)
+        return xr.DataArray(y, dims=("time",), coords={"time": t}, attrs={"fs": fs})
+
+    def test_cogpy_slowwave_registers_and_emits_properties(self):
+        from tensorscope.core.events import get_detector
+
+        det = get_detector("cogpy_slowwave")
+        assert det is not None
+        stream = det.detect(self._slow_wave_signal(), {})
+        assert stream.name.startswith("slowwave")
+        assert len(stream) >= 1
+        # E4: the SO detector must surface filterable numeric properties.
+        cols = set(stream.df.columns)
+        assert {"amplitude", "duration"} <= cols
+
+    def test_cogpy_spindle_enriched_emits_frequency(self):
+        from tensorscope.core.events import get_detector
+
+        # A 13 Hz sigma burst inside the spindle band; enrichment is on by
+        # default (E4) so the catalog must carry the `frequency` column.
+        fs = 500.0
+        t = np.arange(0.0, 10.0, 1.0 / fs)
+        y = 2.0 * np.random.default_rng(1).standard_normal(t.size)
+        burst = (t > 4.0) & (t < 5.0)
+        y[burst] += 40.0 * np.sin(2.0 * np.pi * 13.0 * t[burst])
+        da = xr.DataArray(y, dims=("time",), coords={"time": t}, attrs={"fs": fs})
+
+        stream = get_detector("cogpy_spindle").detect(da, {})
+        assert "frequency" in stream.df.columns

@@ -5,6 +5,7 @@ from tensorscope.core.events.registry import EventRegistry
 from tensorscope.core.events.detectors import (
     CogpyBurstDetector,
     CogpyRippleDetector,
+    CogpySlowWaveDetector,
     CogpySpindleDetector,
     CogpyThresholdDetector,
     DetectorParamSpec,
@@ -24,6 +25,7 @@ __all__ = [
     "ThresholdDetector",
     "CogpyBurstDetector",
     "CogpyRippleDetector",
+    "CogpySlowWaveDetector",
     "CogpySpindleDetector",
     "CogpyThresholdDetector",
     "get_detector",

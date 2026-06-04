@@ -253,6 +253,13 @@ class CogpySpindleDetector(EventDetector):
         "min_duration": DetectorParamSpec(dtype="float", default=0.5, description="Minimum duration (s)", min_value=0.0),
         "max_duration": DetectorParamSpec(dtype="float", default=3.0, description="Maximum duration (s)", min_value=0.0),
         "filter_order": DetectorParamSpec(dtype="int", default=4, description="Butterworth order", min_value=1, max_value=8),
+        # Enrichment: emit extra per-event properties (peak frequency, relative
+        # band power, waveform symmetry) so the event-filter UI has more numeric
+        # columns to threshold on. On by default — spindles are sparse so the
+        # added cost is negligible. See event-filtering-plan.md E4.
+        "compute_frequency": DetectorParamSpec(dtype="bool", default=True, description="Emit per-event peak frequency (Hz)."),
+        "compute_rel_power": DetectorParamSpec(dtype="bool", default=True, description="Emit relative sigma-band power."),
+        "compute_symmetry": DetectorParamSpec(dtype="bool", default=True, description="Emit waveform symmetry."),
     }
 
     def detect(self, data: xr.DataArray, params: dict[str, Any]) -> EventStream:
@@ -268,8 +275,56 @@ class CogpySpindleDetector(EventDetector):
             min_duration=float(params.get("min_duration", 0.5)),
             max_duration=float(params.get("max_duration", 3.0)),
             filter_order=int(params.get("filter_order", 4)),
+            compute_frequency=bool(params.get("compute_frequency", True)),
+            compute_rel_power=bool(params.get("compute_rel_power", True)),
+            compute_symmetry=bool(params.get("compute_symmetry", True)),
         )
         return _catalog_to_stream(det.detect(_ensure_fs(data)), name_prefix="spindle", color="#b388ff")
+
+
+class CogpySlowWaveDetector(EventDetector):
+    """Slow-wave / SO detector (``cogpy.detect.SlowWaveDetector``).
+
+    Negative-going cortical slow waves (down-states) detected by zero-crossing
+    segmentation + amplitude/duration criteria. Emits a rich set of filterable
+    properties (``amplitude``, ``duration``, ``duration_neg``, ``frequency``,
+    ``val_trough``, ``val_peak``, ``state``) — the canonical SO source that was
+    missing from the in-repo detectors. See event-filtering-plan.md E4.
+    """
+
+    name = "cogpy_slowwave"
+    description = "Cortical slow waves / SO via cogpy (0.5–4 Hz, amplitude + duration criteria)."
+    param_schema = {
+        "freq_lo": DetectorParamSpec(dtype="float", default=0.5, description="Bandpass low (Hz)", min_value=0.01),
+        "freq_hi": DetectorParamSpec(dtype="float", default=4.0, description="Bandpass high (Hz)", min_value=0.1),
+        "dur_neg_lo": DetectorParamSpec(dtype="float", default=0.08, description="Min negative-deflection duration (s)", min_value=0.0),
+        "dur_neg_hi": DetectorParamSpec(dtype="float", default=1.0, description="Max negative-deflection duration (s)", min_value=0.0),
+        "dur_cycle_lo": DetectorParamSpec(dtype="float", default=0.3, description="Min full-cycle duration (s)", min_value=0.0),
+        "dur_cycle_hi": DetectorParamSpec(dtype="float", default=1.5, description="Max full-cycle duration (s)", min_value=0.0),
+        "amp_ptp_percentile": DetectorParamSpec(dtype="float", default=25.0, description="Peak-to-peak amplitude percentile gate", min_value=0.0, max_value=100.0),
+        "filter_order": DetectorParamSpec(dtype="int", default=4, description="Butterworth order", min_value=1, max_value=8),
+    }
+
+    def detect(self, data: xr.DataArray, params: dict[str, Any]) -> EventStream:
+        from cogpy.detect import SlowWaveDetector
+
+        det = SlowWaveDetector(
+            freq_range=(
+                float(params.get("freq_lo", 0.5)),
+                float(params.get("freq_hi", 4.0)),
+            ),
+            dur_neg=(
+                float(params.get("dur_neg_lo", 0.08)),
+                float(params.get("dur_neg_hi", 1.0)),
+            ),
+            dur_cycle=(
+                float(params.get("dur_cycle_lo", 0.3)),
+                float(params.get("dur_cycle_hi", 1.5)),
+            ),
+            amp_ptp_percentile=float(params.get("amp_ptp_percentile", 25.0)),
+            filter_order=int(params.get("filter_order", 4)),
+        )
+        return _catalog_to_stream(det.detect(_ensure_fs(data)), name_prefix="slowwave", color="#26a69a")
 
 
 class CogpyBurstDetector(EventDetector):
@@ -360,5 +415,6 @@ def list_detectors() -> list[EventDetector]:
 register_detector(ThresholdDetector())
 register_detector(CogpyRippleDetector())
 register_detector(CogpySpindleDetector())
+register_detector(CogpySlowWaveDetector())
 register_detector(CogpyBurstDetector())
 register_detector(CogpyThresholdDetector())
