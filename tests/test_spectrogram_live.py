@@ -215,41 +215,123 @@ def test_spectrogram_live_requires_time_range() -> None:
 
 
 def test_spectrogram_live_too_narrow_window_raises() -> None:
-    """Sub-64-sample windows can't host a usable multitaper segment → 400."""
-    signal = _make_signal(n_time=4000, fs=1000.0)
+    """A window can't host a usable multitaper segment even after padding → 400.
+
+    Spectral-window decoupling pads the compute window by ±nperseg/2 from the
+    full tensor, so a narrow *visible* window is normally fine. The hard reject
+    now fires only when even the padded slice is sub-64 samples — i.e. the whole
+    tensor is shorter than 64 samples — so use a 40-sample tensor here.
+    """
+    signal = _make_signal(n_time=40, fs=1000.0)
     state = create_server_state(signal, tensor_name="lfp")
-    # 50 samples at 1 kHz = 0.05 s; below the 64-sample floor.
     request = TensorSliceRequestDTO(
         view_type="spectrogram_live",
-        selection=SelectionDTO(time=0.025, freq=10.0, ap=0, ml=0),
-        time_range=(0.0, 0.05),
+        selection=SelectionDTO(time=0.02, freq=10.0, ap=0, ml=0),
+        time_range=(0.0, 0.039),
     )
     with pytest.raises(ValueError, match="window too narrow"):
         state.tensor_slice("lfp", request)
 
 
-def test_spectrogram_live_auto_shrinks_nperseg_in_meta() -> None:
-    """If the requested nperseg exceeds the visible window, the server shrinks
-    it to fit (above the bandwidth-driven minimum) and reports the effective
-    value via tensor attrs — useful for any future 'computed at nperseg=Xs'
-    chrome.  Use bandwidth_hz=8 here so the NW≥2 minimum (250 samples)
-    stays below our 0.3 s window (300 samples)."""
+def test_spectrogram_live_resolution_fixed_across_zoom() -> None:
+    """Spectral-window decoupling: the segment length (hence frequency
+    resolution) is set by `nperseg_s` and stays constant as the user zooms,
+    rather than shrinking to fit a narrow visible window. The compute window is
+    padded by ±nperseg/2 from the full tensor so a 0.3 s view still runs the full
+    1 s segment.  Use a mid-tensor window so the pad isn't truncated at an edge."""
+    signal = _make_signal(n_time=4000, fs=1000.0)
+    from tensorscope.server.state import apply_slice_request
+
+    def _nperseg(t_range: tuple[float, float]) -> int:
+        req = TensorSliceRequestDTO(
+            view_type="spectrogram_live",
+            selection=SelectionDTO(time=0.5 * (t_range[0] + t_range[1]), freq=10.0, ap=0, ml=0),
+            time_range=t_range,
+            spectrogram_live_params=SpectrogramLiveParamsDTO(
+                nperseg_s=1.0,     # asks for 1000 samples
+                bandwidth_hz=8.0,  # NW≥2 minimum = 250 samples, well below 1000
+            ),
+        )
+        return int(apply_slice_request(signal, req).attrs["spectrogram_live_nperseg"])
+
+    narrow = _nperseg((1.5, 1.8))   # 0.3 s visible window
+    wide = _nperseg((0.6, 3.4))     # 2.8 s visible window
+    # Both honour the requested 1 s / 1000-sample segment — NOT shrunk to the
+    # 301-sample narrow window (the pre-decoupling behaviour).
+    assert narrow == 1000
+    assert wide == 1000
+    assert narrow == wide
+
+
+def test_spectrogram_live_narrow_window_spans_visible_range() -> None:
+    """A narrow mid-tensor window yields a spectrogram whose segments span the
+    *visible* [t0, t1] (cropped back from the padded compute window) — and more
+    than one segment, since nperseg no longer swallows the whole window."""
     signal = _make_signal(n_time=4000, fs=1000.0)
     from tensorscope.server.state import apply_slice_request
     request = TensorSliceRequestDTO(
         view_type="spectrogram_live",
-        selection=SelectionDTO(time=0.15, freq=10.0, ap=0, ml=0),
-        time_range=(0.0, 0.3),
+        selection=SelectionDTO(time=1.65, freq=10.0, ap=0, ml=0),
+        time_range=(1.5, 1.8),
+        spectrogram_live_params=SpectrogramLiveParamsDTO(nperseg_s=1.0, noverlap_pct=95.0),
+    )
+    da = apply_slice_request(signal, request)
+    seg_times = np.asarray(da.coords["time"].values, dtype=float)
+    assert seg_times.min() >= 1.5
+    assert seg_times.max() <= 1.8
+    # Pre-decoupling this window collapsed to a single shrunk segment; now the
+    # full 1 s segment runs over the padded window and several segments land
+    # inside the 0.3 s view.
+    assert da.sizes["time"] > 1
+
+
+def test_spectrogram_live_noverlap_param_respected() -> None:
+    """noverlap_pct is honoured (cap disabled): higher overlap → smaller hop →
+    more segments, and the effective-overlap attr round-trips the request."""
+    signal = _make_signal(n_time=4000, fs=1000.0)
+    from tensorscope.server.state import apply_slice_request
+
+    def _run(pct: float):
+        req = TensorSliceRequestDTO(
+            view_type="spectrogram_live",
+            selection=SelectionDTO(time=2.0, freq=10.0, ap=0, ml=0),
+            time_range=(1.0, 3.0),
+            spectrogram_live_params=SpectrogramLiveParamsDTO(
+                nperseg_s=1.0, noverlap_pct=pct, max_time_segments=None,
+            ),
+        )
+        return apply_slice_request(signal, req)
+
+    lo = _run(50.0)
+    hi = _run(90.0)
+    assert int(hi.attrs["spectrogram_live_n_time_segments"]) > int(
+        lo.attrs["spectrogram_live_n_time_segments"]
+    )
+    # No cap → effective overlap equals the request.
+    assert lo.attrs["spectrogram_live_segment_cap_active"] is False
+    assert hi.attrs["spectrogram_live_segment_cap_active"] is False
+    assert lo.attrs["spectrogram_live_noverlap_pct_effective"] == pytest.approx(50.0, abs=0.5)
+    assert hi.attrs["spectrogram_live_noverlap_pct_effective"] == pytest.approx(90.0, abs=0.5)
+
+
+def test_spectrogram_live_effective_overlap_attrs_when_cap_active() -> None:
+    """When max_time_segments widens the hop, the effective overlap drops below
+    the request and the cap-active flag flips — so the frontend can surface
+    'effective overlap X% (capped from Y%)'."""
+    signal = _make_signal(n_time=40_000, fs=1000.0)
+    from tensorscope.server.state import apply_slice_request
+    request = TensorSliceRequestDTO(
+        view_type="spectrogram_live",
+        selection=SelectionDTO(time=20.0, freq=10.0, ap=0, ml=0),
+        time_range=(0.0, 40.0),
         spectrogram_live_params=SpectrogramLiveParamsDTO(
-            nperseg_s=1.0,    # asks for 1000 samples
-            bandwidth_hz=8.0,  # min = ceil(2 * 1000 / 8) = 250 samples
+            nperseg_s=1.0, noverlap_pct=95.0, max_time_segments=200,
         ),
     )
     da = apply_slice_request(signal, request)
-    # xarray's label-slice is inclusive of both endpoints, so a [0.0, 0.3]
-    # window at 1 kHz selects 301 samples — nperseg shrinks to fill all of
-    # them rather than the round-1000 the user asked for.
-    assert da.attrs["spectrogram_live_nperseg"] == 301
+    assert da.attrs["spectrogram_live_segment_cap_active"] is True
+    assert da.attrs["spectrogram_live_noverlap_pct_requested"] == pytest.approx(95.0)
+    assert da.attrs["spectrogram_live_noverlap_pct_effective"] < 95.0
     # Effective fs round-trips through the meta so frontends can render
     # "computed at" chrome without re-deriving from the time coord.
     assert da.attrs["spectrogram_live_fs"] == pytest.approx(1000.0)

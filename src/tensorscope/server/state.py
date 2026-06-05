@@ -992,7 +992,27 @@ def apply_slice_request(
 
     # 1. Window by time + freq first (cheap, reduces data before processing).
     if request.time_range is not None and "time" in sliced.dims:
-        sliced = sliced.sel(time=slice(float(request.time_range[0]), float(request.time_range[1])))
+        t0 = float(request.time_range[0])
+        t1 = float(request.time_range[1])
+        if request.view_type == "spectrogram_live":
+            # Spectral-window decoupling: pad the compute window by half the
+            # spectral window on each side so the FFT segments that straddle the
+            # visible edges have full support. We slice this wider window from the
+            # full `data` here (the *early* windowing), then crop the spectrogram
+            # back to [t0, t1] after compute (segment centres land on the visible
+            # edges because pad == nperseg/2 samples). This keeps the frequency
+            # resolution fixed by `nperseg_s`, independent of the view zoom —
+            # instead of shrinking nperseg to fit a narrow window. Pad by the
+            # larger of nperseg_s and the bandwidth-driven minimum (2/bandwidth
+            # seconds ≈ nperseg_min) so the pad always supports the segment length
+            # that actually runs. See docs/design/multichannel-display-fixes-plan.md.
+            from tensorscope.server.models import SpectrogramLiveParamsDTO
+
+            _sp = request.spectrogram_live_params or SpectrogramLiveParamsDTO()
+            pad_s = 0.5 * max(float(_sp.nperseg_s), 2.0 / float(_sp.bandwidth_hz))
+            sliced = sliced.sel(time=slice(t0 - pad_s, t1 + pad_s))
+        else:
+            sliced = sliced.sel(time=slice(t0, t1))
     if request.freq_range is not None and "freq" in sliced.dims:
         sliced = sliced.sel(freq=slice(float(request.freq_range[0]), float(request.freq_range[1])))
 
@@ -1148,7 +1168,13 @@ def apply_slice_request(
         # (computed from time-coord diffs, lands at e.g. 1249.999_999_998).
         nperseg_min = max(64, int(round(2.0 * fs / bandwidth_eff)))
         nperseg_request = int(round(spec_params.nperseg_s * fs))
-        nperseg = max(nperseg_min, min(nperseg_request, n_samples))
+        # Spectral-window decoupling: the segment length is fixed by `nperseg_s`,
+        # NOT the view zoom. The compute window was padded by ±nperseg/2 in step 1
+        # so a narrow visible window still gets the full requested segment length.
+        # We clamp only to the *padded* sample count, which bites solely at the
+        # tensor's absolute time edges (where the pad gets truncated), so ghostipy
+        # never receives nperseg > available samples.
+        nperseg = min(max(nperseg_min, nperseg_request), n_samples)
         noverlap = int(round(nperseg * spec_params.noverlap_pct / 100.0))
         noverlap = max(0, min(noverlap, nperseg - 1))
 
@@ -1160,6 +1186,8 @@ def apply_slice_request(
         # alone runs ~16 s. Increasing the hop trades temporal resolution
         # for a tractable payload while keeping freq + spatial detail intact.
         cap = spec_params.max_time_segments
+        noverlap_requested = noverlap  # before the cap may widen the hop
+        segment_cap_active = False
         if cap is not None and n_samples > nperseg:
             hop = nperseg - noverlap
             n_segs = (n_samples - nperseg) // hop + 1
@@ -1167,6 +1195,7 @@ def apply_slice_request(
                 hop_for_cap = -(-(n_samples - nperseg) // (cap - 1))  # ceil-div
                 hop_for_cap = max(hop, hop_for_cap)
                 noverlap = max(0, nperseg - hop_for_cap)
+                segment_cap_active = noverlap < noverlap_requested
 
         non_time_dims = [d for d in sliced.dims if d != "time"]
         if non_time_dims:
@@ -1229,6 +1258,25 @@ def apply_slice_request(
         if row_masked.any():
             mtspec[row_masked] = np.nan
 
+        # Spectral-window decoupling: crop the padded compute window back to the
+        # visible [t0, t1]. The pad (±nperseg/2 samples added in step 1) gave the
+        # segments straddling the visible edges full FFT support; their centres
+        # land on the visible edges, so keeping centres within [t0, t1] yields a
+        # time-aligned spectrogram at the requested resolution. For a window
+        # narrower than one hop the crop would be empty, so fall back to the
+        # single segment nearest the window centre (≥1 segment always returned).
+        if request.time_range is not None:
+            vis_t0 = float(request.time_range[0])
+            vis_t1 = float(request.time_range[1])
+            seg_global = t_centers + window_t0
+            keep = (seg_global >= vis_t0) & (seg_global <= vis_t1)
+            if not keep.any():
+                keep = np.zeros(seg_global.shape, dtype=bool)
+                keep[int(np.argmin(np.abs(seg_global - 0.5 * (vis_t0 + vis_t1))))] = True
+            if not keep.all():
+                mtspec = mtspec[:, :, keep]
+                t_centers = t_centers[keep]
+
         # Clip freq window. searchsorted(side="right") for the upper bound
         # so an exact-match fmax_hz is included.
         lo = int(np.searchsorted(freqs, spec_params.fmin_hz, side="left"))
@@ -1282,7 +1330,14 @@ def apply_slice_request(
             attrs={
                 **dict(sliced.attrs),
                 "spectrogram_live_nperseg": int(nperseg),
+                "spectrogram_live_nperseg_s_effective": float(nperseg / fs) if fs else 0.0,
                 "spectrogram_live_noverlap": int(noverlap),
+                "spectrogram_live_noverlap_requested": int(noverlap_requested),
+                "spectrogram_live_noverlap_pct_requested": float(spec_params.noverlap_pct),
+                "spectrogram_live_noverlap_pct_effective": (
+                    float(100.0 * noverlap / nperseg) if nperseg else 0.0
+                ),
+                "spectrogram_live_segment_cap_active": bool(segment_cap_active),
                 "spectrogram_live_n_time_segments": int(len(t_centers)),
                 "spectrogram_live_fs": float(fs),
                 "spectrogram_live_bandwidth_hz": float(bandwidth_eff),
