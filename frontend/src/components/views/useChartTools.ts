@@ -85,13 +85,16 @@ export function useChartTools(
     [setScroll, scroll],
   );
 
-  const [yMode, setYMode] = useState<YMode>("auto");
+  // Default "fit": scale once to fit all channels, then HOLD across pan/zoom so
+  // amplitude stays comparable as you navigate (fix #2). "auto" (per-window
+  // adaptive fill) remains opt-in via the toolbar.
+  const [yMode, setYMode] = useState<YMode>("fit");
 
   // Mirror state into refs so gesture handlers always read current values
   // without requiring chart recreation when tool changes.
   const toolRef = useRef<GestureTool>(activeTool);
   const wheelZoomRef = useRef(wheelZoom);
-  const yModeRef = useRef<YMode>("auto");
+  const yModeRef = useRef<YMode>("fit");
   useEffect(() => { toolRef.current = activeTool; }, [activeTool]);
   useEffect(() => { wheelZoomRef.current = wheelZoom; }, [wheelZoom]);
   useEffect(() => { yModeRef.current = yMode; }, [yMode]);

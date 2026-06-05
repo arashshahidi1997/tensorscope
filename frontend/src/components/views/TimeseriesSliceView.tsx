@@ -297,6 +297,11 @@ export function TimeseriesSliceView({
   const selectionTimeRef = useRef<number | null>(null);
   const yLockedRef = useRef<[number, number] | null>(null);
   const gainMultiplierRef = useRef(1);
+  // Fix #2: in "fit" mode the gain is computed ONCE and held across navigation
+  // so amplitude doesn't "breathe". This latch tracks whether the current fit
+  // has been applied; it is re-armed on mode (re)selection and on a structural
+  // (new-channel-set) change.
+  const gainFittedRef = useRef(false);
   const rawDataRef = useRef<{ times: Float64Array; seriesArrays: Float32Array[]; offsets: number[] } | null>(null);
   const structuralKeyRef = useRef<string | null>(null);
 
@@ -306,8 +311,14 @@ export function TimeseriesSliceView({
   const streamColorsRef = useRef(streamColors);
   const coincidentTimesRef = useRef(coincidentTimes);
   const onTimeWindowChangeRef = useRef(onTimeWindowChange);
+  // Live window, mirrored into a ref so the async chart-creation path can seed a
+  // freshly-built chart with the CURRENT window (the viewport-sync effect bails
+  // while chartRef is null, so a chart created after the window settled would
+  // otherwise stay at its initial data-extent until the next window change).
+  const timeWindowRef = useRef(timeWindow);
   const brainstateIntervalsRef = useRef(brainstateIntervals);
   const brainstateEnabledRef = useRef(brainstateOverlayEnabled);
+  useEffect(() => { timeWindowRef.current = timeWindow; });
   useEffect(() => { onSelectTimeRef.current = onSelectTime; });
   useEffect(() => { eventsRef.current = events; });
   useEffect(() => { eventsByStreamRef.current = eventsByStream; });
@@ -324,9 +335,13 @@ export function TimeseriesSliceView({
   // tensor and a (time,AP,ML) tensor both get the same lookup behaviour.
   const { data: probeLayout } = useProbeLayoutQuery();
 
-  // Channel viewport (G2). nVisible is fixed at 32 in v0; perf-tune to
-  // raise the cap is v0.1 work. See `docs/design/channel-viewport.md`.
-  const N_VISIBLE = 32;
+  // Channel viewport (G2). Default 16 (was 32) — a NeuroScope2-style
+  // "tall/few traces" default: at ~32 channels in a typical ~150px canvas
+  // each trace got only ~4-5px of vertical space and read as a flat line.
+  // 16 channels + the taller signal row (viewGridLayout) give each trace
+  // enough px to show structure. Scroll with [ / ] to page through the rest.
+  // See `docs/design/channel-viewport.md`.
+  const N_VISIBLE = 16;
   const tsFirstChannel = useAppStore((s) => s.tsFirstChannel);
   // We don't yet know totalChannels at this point in the hook order — the
   // shortcut handler uses the slice's series length when it fires.
@@ -495,9 +510,15 @@ export function TimeseriesSliceView({
 
   const buildChartData = (): [Float64Array, ...Float32Array[]] | null => {
     if (times.length === 0 || series.length === 0) return null;
-    // In auto-gain mode, recompute the optimal gain for each new data payload
+    // "auto": re-fit the gain to every payload (per-window adaptive fill).
+    // "fit": fit ONCE (the first payload, or after a re-arm), then hold the
+    // multiplier across navigation so amplitude stays comparable (fix #2).
+    // "fixed": never auto-fit — the user owns the multiplier.
     if (tools.yModeRef.current === "auto") {
       gainMultiplierRef.current = computeAutoGain(series);
+    } else if (tools.yModeRef.current === "fit" && !gainFittedRef.current) {
+      gainMultiplierRef.current = computeAutoGain(series);
+      gainFittedRef.current = true;
     }
     return buildScaledData(times, series, gainMultiplierRef.current);
   };
@@ -538,7 +559,7 @@ export function TimeseriesSliceView({
       const range = xRangeRef.current;
       withSuppressedWindowPublish(() => {
         chart.setSize(size);
-        if (range) chart.setScale("x", { min: range[0], max: range[1] });
+        if (range) chart.batch(() => chart.setScale("x", { min: range[0], max: range[1] }));
       });
     }
 
@@ -565,7 +586,11 @@ export function TimeseriesSliceView({
     const range = xRangeRef.current;
     withSuppressedWindowPublish(() => {
       chart.setData(data as uPlot.AlignedData, false);
-      if (range) chart.setScale("x", { min: range[0], max: range[1] });
+      // uPlot only commits a `setScale` from inside a batch() when idle (a bare
+      // setScale silently no-ops unless an active drag's redraw loop is running)
+      // — so external window changes (event nav) wouldn't move the x-axis. See
+      // the live-debug finding in the handoff. batch() forces the commit.
+      if (range) chart.batch(() => chart.setScale("x", { min: range[0], max: range[1] }));
     });
     chart.redraw();
   };
@@ -832,9 +857,14 @@ export function TimeseriesSliceView({
           chart.destroy();
         };
 
-        if (xRangeRef.current) {
+        // Seed the new chart's x-scale from the live window (preferred) so it
+        // matches the navigator/spectrogram on first paint; fall back to the
+        // last cached range, then to the data extent.
+        const initRange = timeWindowRef.current ?? xRangeRef.current;
+        if (initRange) {
+          xRangeRef.current = [initRange[0], initRange[1]];
           withSuppressedWindowPublish(() => {
-            chart.setScale("x", { min: xRangeRef.current![0], max: xRangeRef.current![1] });
+            chart.batch(() => chart.setScale("x", { min: initRange[0], max: initRange[1] }));
           });
         } else {
           const { min, max } = chart.scales.x;
@@ -885,6 +915,7 @@ export function TimeseriesSliceView({
       destroyChart();
       yLockedRef.current = null;
       gainMultiplierRef.current = 1;
+      gainFittedRef.current = false;  // #2: re-fit "fit" mode for the new channel set
     };
   }, [structuralKey]);
 
@@ -903,7 +934,11 @@ export function TimeseriesSliceView({
     // visible window still carries too many samples for stable rendering.
     withSuppressedWindowPublish(() => {
       chart.setData(data as uPlot.AlignedData, false);
-      if (range) chart.setScale("x", { min: range[0], max: range[1] });
+      // uPlot only commits a `setScale` from inside a batch() when idle (a bare
+      // setScale silently no-ops unless an active drag's redraw loop is running)
+      // — so external window changes (event nav) wouldn't move the x-axis. See
+      // the live-debug finding in the handoff. batch() forces the commit.
+      if (range) chart.batch(() => chart.setScale("x", { min: range[0], max: range[1] }));
     });
     reconcileChartSize();
     chart.redraw();
@@ -916,13 +951,20 @@ export function TimeseriesSliceView({
     chart.over.style.cursor = tools.activeTool === "pan" ? "grab" : "crosshair";
   }, [tools.activeTool]);
 
-  // When switching to auto/fit mode, immediately recompute and apply the optimal gain
+  // When the user (re)selects a Y-mode, re-arm the one-shot fit latch and apply
+  // the gain immediately for the current view. Deps are [tools.yMode] ONLY —
+  // NOT `series` — so navigation does not re-fit; "fit" holds and only "auto"
+  // re-adapts (handled per-payload in buildChartData). This is the fix-#2
+  // amplitude-stability change; the prior effect re-fit on every `series` change.
   useEffect(() => {
+    gainFittedRef.current = false;
     if (tools.yMode !== "auto" && tools.yMode !== "fit") return;
     if (series.length === 0) return;
     gainMultiplierRef.current = computeAutoGain(series);
+    gainFittedRef.current = true;
     applyGain();
-  }, [tools.yMode, series]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tools.yMode]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -959,7 +1001,7 @@ export function TimeseriesSliceView({
     if (cur && cur[0] === timeWindow[0] && cur[1] === timeWindow[1]) return;
     xRangeRef.current = [timeWindow[0], timeWindow[1]];
     withSuppressedWindowPublish(() => {
-      chart.setScale("x", { min: timeWindow[0], max: timeWindow[1] });
+      chart.batch(() => chart.setScale("x", { min: timeWindow[0], max: timeWindow[1] }));
     });
     chart.redraw();
   }, [timeWindow?.[0], timeWindow?.[1]]);

@@ -67,6 +67,36 @@ describe("setTimeWindow", () => {
   });
 });
 
+describe("recenterWindowOn", () => {
+  it("ALWAYS centers on t (preserving width), even when t is inside the window", () => {
+    // The bug it fixes: event nav to an in-window event left the window put.
+    useSelectionStore.setState({ timeWindow: [10, 20] }); // width 10, t=14 is inside
+    getStore().recenterWindowOn(14);
+    expect(getStore().timeWindow[0]).toBeCloseTo(9);
+    expect(getStore().timeWindow[1]).toBeCloseTo(19); // centered on 14, width 10 preserved
+  });
+
+  it("centers on a far t and preserves width", () => {
+    useSelectionStore.setState({ timeWindow: [0, 2] }); // width 2
+    getStore().recenterWindowOn(100);
+    expect(getStore().timeWindow[0]).toBeCloseTo(99);
+    expect(getStore().timeWindow[1]).toBeCloseTo(101);
+  });
+
+  it("clamps at the t=0 edge without shrinking the width", () => {
+    useSelectionStore.setState({ timeWindow: [50, 56] }); // width 6
+    getStore().recenterWindowOn(0.3);
+    expect(getStore().timeWindow[0]).toBe(0);
+    expect(getStore().timeWindow[1]).toBeCloseTo(6);
+  });
+
+  it("does not move the cursor", () => {
+    useSelectionStore.setState({ timeCursor: 5, timeWindow: [0, 10] });
+    getStore().recenterWindowOn(8);
+    expect(getStore().timeCursor).toBe(5); // window action only
+  });
+});
+
 describe("patchSpatial", () => {
   it("merges partial spatial update", () => {
     useSelectionStore.setState({ spatial: { ap: 2, ml: 3, channel: null, hoveredId: null, selectedIds: [] } });

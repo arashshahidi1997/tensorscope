@@ -178,6 +178,13 @@ function App() {
         if (!Number.isFinite(t)) return;
         const eventId = record[meta.id_col] as string | number | undefined;
         if (eventId != null) eventNav.selectEvent(eventId, activeStreamName);
+        // Center the visible window on the event so the timeseries scrolls to
+        // bring it into view. Without this, navigating to an event already
+        // inside the current window only moves the cursor — the window (and the
+        // timeseries data) stays put (selectionStore.patchFromDTO re-centers
+        // ONLY when the cursor leaves the window). Event review expects each
+        // event centered.
+        selectionState.recenterWindowOn(t);
         commitSelection({ ...selectionDraft, time: t });
       });
     },

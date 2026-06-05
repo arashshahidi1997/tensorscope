@@ -16,6 +16,14 @@ type SelectionStore = SelectionState & {
   setDuration: (seconds: number) => void;
   setTimeCursor: (t: number) => void;
   setTimeWindow: (w: TimeWindow) => void;
+  /**
+   * Re-center the visible window on time `t`, preserving the current width.
+   * Unlike `setTimeCursor` (which only re-centers when the cursor leaves the
+   * window), this ALWAYS centers — for "jump to time" actions like event
+   * navigation, where the target must be brought into view even if it's
+   * already inside the current window.
+   */
+  recenterWindowOn: (t: number) => void;
   setSpatial: (s: SpatialSelection) => void;
   patchSpatial: (p: Partial<SpatialSelection>) => void;
   /**
@@ -97,6 +105,9 @@ export const useSelectionStore = create<SelectionStore>((set) => ({
     })),
 
   setTimeWindow: (timeWindow) => set({ timeWindow }),
+
+  recenterWindowOn: (t) =>
+    set((s) => ({ timeWindow: centeredWindow(t, windowDuration(s.timeWindow)) })),
 
   setSpatial: (spatial) => set({ spatial }),
 

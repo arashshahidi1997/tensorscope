@@ -19,26 +19,29 @@ function makeChartStub(initMin = 0, initMax = 10): uPlot {
 }
 
 describe("useChartTools", () => {
-  it("initialises with zoom tool, wheel zoom on, and auto y-mode", () => {
+  it("initialises with zoom tool, wheel zoom on, and fit y-mode", () => {
     const chartRef = { current: null as uPlot | null };
     const { result } = renderHook(() => useChartTools(chartRef));
     expect(result.current.activeTool).toBe("zoom");
     expect(result.current.wheelZoom).toBe(true);
-    expect(result.current.yMode).toBe("auto");
+    // Default is "fit" (scale once, then hold) so amplitude is comparable
+    // across navigation — see fix #2.
+    expect(result.current.yMode).toBe("fit");
   });
 
-  it("cycles through y-modes: auto → fixed → fit", () => {
+  it("cycles through y-modes: fit → fixed → auto", () => {
     const chartRef = { current: null as uPlot | null };
     const { result } = renderHook(() => useChartTools(chartRef));
-    expect(result.current.yMode).toBe("auto");
+    expect(result.current.yMode).toBe("fit");
     act(() => result.current.setYMode("fixed"));
     expect(result.current.yMode).toBe("fixed");
     expect(result.current.yModeRef.current).toBe("fixed");
+    act(() => result.current.setYMode("auto"));
+    expect(result.current.yMode).toBe("auto");
+    expect(result.current.yModeRef.current).toBe("auto");
     act(() => result.current.setYMode("fit"));
     expect(result.current.yMode).toBe("fit");
     expect(result.current.yModeRef.current).toBe("fit");
-    act(() => result.current.setYMode("auto"));
-    expect(result.current.yMode).toBe("auto");
   });
 
   it("switches tool via setActiveTool", () => {
