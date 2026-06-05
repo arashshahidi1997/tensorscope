@@ -25,6 +25,10 @@ type HeatmapViewProps = Omit<SliceViewProps, "slice"> & {
   /** Contract-v2 source. When set, the grid is built via `extractHeatmapNDV2`
    * and `slice` is ignored. */
   v2?: LabeledTensor | null;
+  /** Lock the axes to `defaultEncoding` and hide the X/Y/swap controls — for
+   * views with a fixed, meaningful orientation (e.g. the raster: time on X,
+   * channel on Y; no axis-swap). */
+  lockAxes?: boolean;
 };
 
 export function HeatmapView({
@@ -34,6 +38,7 @@ export function HeatmapView({
   colormap = "viridis",
   logColor = false,
   v2 = null,
+  lockAxes = false,
 }: HeatmapViewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -56,11 +61,12 @@ export function HeatmapView({
   // else the view's default. Guards against a stored dim vanishing on a tensor
   // switch (e.g. AP/ML → channel).
   const encoding = useMemo<HeatmapEncoding>(() => {
+    if (lockAxes) return defaultEncoding;
     if (stored && cols.includes(stored.x) && cols.includes(stored.y)) {
       return { x: stored.x, y: stored.y, reduce: defaultEncoding.reduce };
     }
     return defaultEncoding;
-  }, [stored, cols, defaultEncoding]);
+  }, [lockAxes, stored, cols, defaultEncoding]);
 
   const grid = useMemo(
     () =>
@@ -152,7 +158,9 @@ export function HeatmapView({
     // the viewport's top-right corner, overlapping the topbar/inspector and
     // stacking with other heatmap panels' toolbars.
     <div style={{ position: "relative", display: "flex", flexDirection: "column", height: "100%" }}>
-      {/* Axis encoding controls — float over the heatmap's top-right corner. */}
+      {/* Axis encoding controls — float over the heatmap's top-right corner.
+          Hidden when `lockAxes` (the orientation is fixed, e.g. the raster). */}
+      {!lockAxes && (
       <div className="ts-toolbar" style={{ gap: 6, fontSize: 11 }}>
         <label style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
           Y
@@ -188,6 +196,7 @@ export function HeatmapView({
           </span>
         )}
       </div>
+      )}
 
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
         <div className="axis-canvas-wrap" style={{ flex: 1, minHeight: 0 }}>

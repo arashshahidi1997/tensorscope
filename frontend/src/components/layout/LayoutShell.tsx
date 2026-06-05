@@ -104,7 +104,12 @@ export function LayoutShell({
     <div
       className="app-shell"
       style={{
-        gridTemplateRows: `36px 1fr ${effectiveBottomHeight}px`,
+        // Rows: topbar / workspace (fills) / resize-handle (auto ~4px) /
+        // bottom-panel. The handle needs its OWN row — without it the 4-child
+        // grid put the handle in the bottom-height row and pushed the panel
+        // into an implicit row, wasting ~bottomHeight px of empty space above
+        // the navigator (the workspace couldn't grow into it).
+        gridTemplateRows: `36px 1fr auto ${effectiveBottomHeight}px`,
       }}
     >
       <header className="topbar">

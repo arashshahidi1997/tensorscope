@@ -28,26 +28,32 @@ export const DEFAULT_SLOT_LAYOUT: ViewSlotLayout = {
         // a tensor is grid OR linear, so they never both appear — share the slot.
         { viewId: "depth_map", region: "right", widthFraction: 0.4 },
       ],
-      minHeight: 260,
+      // Tall enough that 16 stacked traces each get readable vertical space
+      // (NeuroScope2-style); see N_VISIBLE in TimeseriesSliceView.
+      minHeight: 360,
     },
     {
       id: "spectral",
       label: "Spectral",
       slots: [
         // Precomputed `spectrogram` (4-D) OR live multitaper `spectrogram_live`
-        // (3-D LFP) — mutually exclusive, share the left slot.
-        { viewId: "spectrogram", region: "left", widthFraction: 0.65 },
-        { viewId: "spectrogram_live", region: "left", widthFraction: 0.65 },
+        // (3-D LFP) — mutually exclusive, share the left slot. Width matches the
+        // signal-row timeseries (0.6) so the two time axes line up vertically.
+        { viewId: "spectrogram", region: "left", widthFraction: 0.6 },
+        { viewId: "spectrogram_live", region: "left", widthFraction: 0.6 },
         // The *spatial* frequency view sits beside the spectrogram so frequency
-        // and space are read together (the full PSD trio is in the `spectral` preset).
-        { viewId: "psd_spatial", region: "right", widthFraction: 0.35 },
+        // and space are read together (the full PSD trio is in the `spectral`
+        // preset). Width matches the signal-row spatial_map (0.4).
+        { viewId: "psd_spatial", region: "right", widthFraction: 0.4 },
       ],
       minHeight: 240,
     },
     {
       id: "raster",
       label: "Raster",
-      slots: [{ viewId: "raster", region: "left", widthFraction: 1.0 }],
+      // 0.6 (left) so the raster's time axis lines up with the timeseries /
+      // spectrogram above — all three share the same time x-axis.
+      slots: [{ viewId: "raster", region: "left", widthFraction: 0.6 }],
       minHeight: 220,
     },
     {
@@ -79,7 +85,7 @@ export const SIGNAL_SPACE_LAYOUT: ViewSlotLayout = {
         { viewId: "spatial_map", region: "right", widthFraction: 0.45 },
         { viewId: "depth_map", region: "right", widthFraction: 0.45 },
       ],
-      minHeight: 280,
+      minHeight: 360,
     },
     {
       id: "dynamics",
@@ -131,7 +137,7 @@ export const EVENTS_LAYOUT: ViewSlotLayout = {
       id: "signal",
       label: "Signal",
       slots: [{ viewId: "timeseries", region: "left", widthFraction: 1.0 }],
-      minHeight: 260,
+      minHeight: 360,
     },
     {
       id: "triggered",
@@ -161,7 +167,7 @@ export const PROBE_LANES_LAYOUT: ViewSlotLayout = {
         { slotId: "timeseries", viewId: "timeseries", region: "left", widthFraction: 0.65 },
         { slotId: "spatial_map", viewId: "spatial_map", region: "right", widthFraction: 0.35 },
       ],
-      minHeight: 240,
+      minHeight: 300,
     },
     {
       id: "hippocampus",
@@ -172,7 +178,7 @@ export const PROBE_LANES_LAYOUT: ViewSlotLayout = {
         { slotId: "depth_map", viewId: "depth_map", region: "left", widthFraction: 0.55 },
         { slotId: "timeseries_npx", viewId: "timeseries", region: "right", widthFraction: 0.45 },
       ],
-      minHeight: 240,
+      minHeight: 300,
     },
     {
       id: "spectra",

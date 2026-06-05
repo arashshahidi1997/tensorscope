@@ -554,6 +554,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         viewId="raster"
         defaultEncoding={{ x: "time", y: "channel" }}
         colormap="viridis"
+        lockAxes
       />
     ) : (
       <div className="placeholder">Loading…</div>
