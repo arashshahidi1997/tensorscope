@@ -61,6 +61,14 @@ export type SpatialRenderOptions = {
    */
   showCellBorders?: boolean;
   /**
+   * Equal-aspect mode: render the grid with SQUARE cells (cell side =
+   * min(width/nML, height/nAP)), centered with letterbox margins, so AP and ML
+   * — which share a physical unit — appear at equal scaling (aspect ratio 1).
+   * When false/unset, cells stretch to fill the canvas (the legacy behaviour,
+   * correct for non-isotropic layouts like depth×time `depth_map`).
+   */
+  squareCells?: boolean;
+  /**
    * G7: per-cell region annotation. Keyed by flat id (apIdx * nML + mlIdx).
    * When present, the renderer draws a small region-coloured corner tab on
    * each annotated cell. Cells without an entry render unchanged.

@@ -130,6 +130,7 @@ export function SpatialMapSliceView({
         maskedIds: maskedSet,
         colormap: "jet",
         smoothing: true,
+        squareCells: true,
         regionByFlatId: regionResolver.regionByFlatId,
         regionPalette: regionResolver.palette,
       });
@@ -158,6 +159,7 @@ export function SpatialMapSliceView({
       maskedIds: maskedSet,
       colormap: "jet",
       smoothing: false,
+      squareCells: true,
       regionByFlatId: regionResolver.regionByFlatId,
       regionPalette: regionResolver.palette,
     });

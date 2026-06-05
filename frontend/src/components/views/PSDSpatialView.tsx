@@ -73,6 +73,9 @@ export function PSDSpatialView({ v2, selectedFreq, onSelectFreq, onSelectCell, t
       // Match PSD heatmap so power maps look consistent across panels.
       colormap: "inferno",
       smoothing: false,
+      // Equal-aspect: AP and ML share a physical unit → square cells, matching
+      // the signal-row spatial_map so the two spatial panels read consistently.
+      squareCells: true,
       maskedIds: maskedSet,
     });
   }, [maskedSet]);

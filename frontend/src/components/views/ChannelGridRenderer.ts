@@ -50,6 +50,10 @@ export class ChannelGridRenderer implements SpatialRendererBackend {
   private height = 0;
   private cellW = 0;
   private cellH = 0;
+  // Letterbox offset (px) of the grid within the canvas — non-zero only in
+  // square-cell / equal-aspect mode, where the grid is centered.
+  private offsetX = 0;
+  private offsetY = 0;
   private nAP = 0;
   private nML = 0;
   /** Map from electrode id → its cell rect for hit-testing. */
@@ -77,6 +81,7 @@ export class ChannelGridRenderer implements SpatialRendererBackend {
       colormap = "sequential",
       smoothing = false,
       showCellBorders = false,
+      squareCells = false,
       regionByFlatId,
       regionPalette,
     } = options;
@@ -88,8 +93,23 @@ export class ChannelGridRenderer implements SpatialRendererBackend {
     // is a nearest-neighbor upscale (smoothing=false) — matplotlib `imshow`'s
     // default look: crisp tiles, no visible 1-pixel gaps between cells. Pass
     // smoothing=true for bilinear blending across neighbours.
-    this.cellW = this.width / nML;
-    this.cellH = this.height / nAP;
+    //
+    // Equal-aspect mode (squareCells): AP and ML share a physical unit, so the
+    // cells must be SQUARE — cell side = min(width/nML, height/nAP) — and the
+    // grid centered with letterbox margins, giving aspect ratio 1. Otherwise
+    // cells stretch to fill the canvas (correct for non-isotropic layouts).
+    if (squareCells) {
+      const cell = Math.min(this.width / nML, this.height / nAP);
+      this.cellW = cell;
+      this.cellH = cell;
+      this.offsetX = (this.width - cell * nML) / 2;
+      this.offsetY = (this.height - cell * nAP) / 2;
+    } else {
+      this.cellW = this.width / nML;
+      this.cellH = this.height / nAP;
+      this.offsetX = 0;
+      this.offsetY = 0;
+    }
 
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.width, this.height);
@@ -158,7 +178,10 @@ export class ChannelGridRenderer implements SpatialRendererBackend {
         | null;
       if (offCtx) {
         offCtx.putImageData(img, 0, 0);
-        ctx.drawImage(off as CanvasImageSource, 0, 0, this.width, this.height);
+        ctx.drawImage(
+          off as CanvasImageSource,
+          this.offsetX, this.offsetY, this.cellW * nML, this.cellH * nAP,
+        );
       }
     } else {
       // Last-resort: putImageData at native res then drawImage upscale via
@@ -171,7 +194,7 @@ export class ChannelGridRenderer implements SpatialRendererBackend {
       const tmpCtx = tmp.getContext("2d");
       if (tmpCtx) {
         tmpCtx.putImageData(img, 0, 0);
-        ctx.drawImage(tmp, 0, 0, this.width, this.height);
+        ctx.drawImage(tmp, this.offsetX, this.offsetY, this.cellW * nML, this.cellH * nAP);
       }
     }
 
@@ -183,8 +206,8 @@ export class ChannelGridRenderer implements SpatialRendererBackend {
     for (let ap = 0; ap < nAP; ap++) {
       for (let ml = 0; ml < nML; ml++) {
         const flatId = ap * nML + ml;
-        const x = ml * this.cellW;
-        const y = ap * this.cellH;
+        const x = this.offsetX + ml * this.cellW;
+        const y = this.offsetY + ap * this.cellH;
         const isMasked = maskSet ? maskSet.has(flatId) : false;
         const cell = cellByPos.get(flatId);
 
@@ -252,8 +275,9 @@ export class ChannelGridRenderer implements SpatialRendererBackend {
     if (this.nAP === 0 || this.nML === 0 || this.cellW <= 0 || this.cellH <= 0) {
       return null;
     }
-    const mlIdx = Math.floor(x / this.cellW);
-    const apIdx = Math.floor(y / this.cellH);
+    // Account for the letterbox offset (square-cell mode); 0 otherwise.
+    const mlIdx = Math.floor((x - this.offsetX) / this.cellW);
+    const apIdx = Math.floor((y - this.offsetY) / this.cellH);
     if (mlIdx < 0 || mlIdx >= this.nML || apIdx < 0 || apIdx >= this.nAP) return null;
     return apIdx * this.nML + mlIdx;
   }
