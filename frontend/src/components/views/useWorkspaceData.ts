@@ -69,8 +69,8 @@ export type WorkspaceDataParams = {
   /** Adds `ap_range`/`ml_range` when the reviewer has drilled into one cell. */
   withFocus: <T extends TensorSliceRequestDTO | null>(req: T) => T;
   psd: { nw: number; fmax: number; windowS: number };
-  /** Spectrogram-live freq range + window (A1) → spectrogram_live_params. */
-  spec: { fmin: number; fmax: number; npersegS: number };
+  /** Spectrogram-live freq range + window + overlap → spectrogram_live_params. */
+  spec: { fmin: number; fmax: number; npersegS: number; noverlapPct: number };
   /** Event-locked PSD window ([t0,t1] extended by margin) or null. */
   lockedEventTimeRange: [number, number] | null;
   /** Active filtered-band preset ([lo,hi]) or null when the overlay is off. */
@@ -220,6 +220,7 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
             fmin_hz: spec.fmin,
             fmax_hz: spec.fmax,
             nperseg_s: spec.npersegS,
+            noverlap_pct: spec.noverlapPct,
           }),
         )
       : null,
@@ -267,6 +268,7 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
           fmin_hz: spec.fmin,
           fmax_hz: spec.fmax,
           nperseg_s: spec.npersegS,
+          noverlap_pct: spec.noverlapPct,
         })
       : null,
     "SpectrogramNpx",

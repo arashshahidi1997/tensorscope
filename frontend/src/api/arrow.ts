@@ -53,6 +53,18 @@ export type Spectrogram = {
   freqs: number[];
   /** Row-major: values[timeIndex][freqIndex] */
   values: number[][];
+  /**
+   * Effective spectral params surfaced from the server (spectrogram_live only).
+   * `overlapPctEffective` may be below `overlapPctRequested` when the
+   * `max_time_segments` cap widens the hop (`capActive`). Undefined for the
+   * v1 precomputed `spectrogram` path. See spectral-window decoupling.
+   */
+  specMeta?: {
+    npersegS?: number;
+    overlapPctEffective?: number;
+    overlapPctRequested?: number;
+    capActive?: boolean;
+  };
 };
 
 export type Raster = {

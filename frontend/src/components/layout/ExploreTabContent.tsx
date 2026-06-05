@@ -63,9 +63,11 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
     specFmin,
     specFmax,
     specNpersegS,
+    specNoverlapPct,
     setSpecFmin,
     setSpecFmax,
     setSpecNpersegS,
+    setSpecNoverlapPct,
   } = useAppStore();
 
   // Pull bounds for the SelectionPanel sliders from the active tensor's
@@ -262,6 +264,28 @@ export function ExploreTabContent({ onCommitSelection }: ExploreTabContentProps)
               style={{ width: 60, fontSize: 12 }}
             />
           </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+            Overlap (%)
+            <input
+              type="number"
+              min={0}
+              max={99}
+              step={5}
+              value={specNoverlapPct}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (Number.isFinite(v) && v >= 0 && v < 100) setSpecNoverlapPct(v);
+              }}
+              style={{ width: 60, fontSize: 12 }}
+              data-testid="spec-noverlap"
+            />
+          </label>
+          <div style={{ fontSize: 11, color: "#8b949e", lineHeight: 1.4 }}>
+            The window length sets the frequency resolution and now stays fixed as
+            you zoom (the compute window is padded, then cropped back). On wide
+            views the segment cap can lower the <em>effective</em> overlap — shown
+            in the TF panel.
+          </div>
         </div>
       </CollapsibleSection>
 

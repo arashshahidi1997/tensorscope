@@ -417,6 +417,62 @@ describe("extractSpectrogramV2", () => {
     ]);
   });
 
+  it("surfaces effective spectral params (specMeta) from the metadata attrs", () => {
+    const times = [1.0, 1.05];
+    const freqs = [10, 20];
+    const data = new Float32Array(times.length * freqs.length);
+    const labeled: LabeledTensor = {
+      meta: {
+        version: "2.0",
+        dims: ["time", "freq"],
+        shape: [times.length, freqs.length],
+        dtype: "float32",
+        units: "uV^2/Hz",
+        attrs: {
+          spectrogram_live_nperseg_s_effective: 1.0,
+          spectrogram_live_noverlap_pct_effective: 73.0,
+          spectrogram_live_noverlap_pct_requested: 95.0,
+          spectrogram_live_segment_cap_active: true,
+        },
+        display_transforms: [],
+      },
+      data,
+      coords: { time: Float64Array.from(times), freq: Float64Array.from(freqs) },
+    };
+    const v2 = extractSpectrogramV2(labeled);
+    expect(v2.specMeta).toEqual({
+      npersegS: 1.0,
+      overlapPctEffective: 73.0,
+      overlapPctRequested: 95.0,
+      capActive: true,
+    });
+  });
+
+  it("leaves specMeta fields undefined when the attrs are absent", () => {
+    const times = [0.0, 0.5];
+    const freqs = [10];
+    const labeled: LabeledTensor = {
+      meta: {
+        version: "2.0",
+        dims: ["time", "freq"],
+        shape: [2, 1],
+        dtype: "float32",
+        units: null,
+        attrs: {},
+        display_transforms: [],
+      },
+      data: new Float32Array([0, 1]),
+      coords: { time: Float64Array.from(times), freq: Float64Array.from(freqs) },
+    };
+    const v2 = extractSpectrogramV2(labeled);
+    expect(v2.specMeta).toEqual({
+      npersegS: undefined,
+      overlapPctEffective: undefined,
+      overlapPctRequested: undefined,
+      capActive: undefined,
+    });
+  });
+
   it("averages over collapsed dims on (time, freq, AP, ML)", () => {
     // Build a cube where every spatial cell is the mean of its (a*10 + m)
     // contribution + a (t, f)-only base. Average across AP*ML should

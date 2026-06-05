@@ -206,6 +206,47 @@ export function SpectrogramView({
           aria-label="Toggle log frequency"
           aria-pressed={freqLogScale}
         >log</button>
+        {/* Effective spectral params (spectral-window decoupling). The window
+            length fixes the frequency resolution and stays constant across zoom;
+            the segment cap can lower the *effective* overlap on wide views, shown
+            amber with the requested value so it doesn't look like the control was
+            ignored. */}
+        {(() => {
+          const sm = v2Data?.specMeta;
+          if (!sm) return null;
+          const ov = sm.overlapPctEffective;
+          const req = sm.overlapPctRequested;
+          const win = sm.npersegS;
+          const capped = sm.capActive === true && ov != null && req != null;
+          const parts: string[] = [];
+          if (win != null) parts.push(`win ${win >= 1 ? win.toFixed(1) : win.toFixed(2)}s`);
+          if (ov != null) {
+            parts.push(`ov ${Math.round(ov)}%${capped && req != null ? ` (req ${Math.round(req)}%)` : ""}`);
+          }
+          if (parts.length === 0) return null;
+          let title = "Spectral window length (sets frequency resolution) · inter-segment overlap";
+          if (capped && ov != null && req != null) {
+            title =
+              `Segment cap widened the hop: effective overlap ${Math.round(ov)}% ` +
+              `(requested ${Math.round(req)}%)` +
+              (win != null ? `. Frequency resolution still reflects the ${win.toFixed(2)} s window.` : ".");
+          }
+          return (
+            <span
+              style={{
+                marginLeft: "auto",
+                fontSize: 11,
+                color: capped ? "#d29922" : "#8b949e",
+                whiteSpace: "nowrap",
+                paddingRight: 4,
+              }}
+              title={title}
+              data-testid="spec-effective-overlap"
+            >
+              {parts.join(" · ")}
+            </span>
+          );
+        })()}
       </div>
 
       {/* Spectrogram with axes */}

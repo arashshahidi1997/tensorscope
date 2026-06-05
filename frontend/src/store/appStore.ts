@@ -75,6 +75,14 @@ type AppStore = {
   specFmax: number;
   specNpersegS: number;
   /**
+   * Spectrogram-live inter-window overlap (% of nperseg). Higher = a smoother
+   * time axis (more segments). The server's `max_time_segments` cap can widen
+   * the hop and lower the *effective* overlap on wide windows (surfaced in the
+   * TF panel chrome). Default mirrors the server DTO (95%). Threaded into
+   * `makeSpectrogramLiveRequest` via `useWorkspaceData`, like the band/window.
+   */
+  specNoverlapPct: number;
+  /**
    * Per-view bandpass overlay (timeseries view). Controls the
    * filtered-band feature from `docs/design/filtered-band-overlay.md`.
    * `preset === "off"` disables the overlay entirely.
@@ -123,6 +131,7 @@ type AppStore = {
   setSpecFmin: (value: number) => void;
   setSpecFmax: (value: number) => void;
   setSpecNpersegS: (value: number) => void;
+  setSpecNoverlapPct: (value: number) => void;
   setBandPreset: (preset: BandPreset) => void;
   setBandCustom: (lo: number, hi: number) => void;
   /**
@@ -254,6 +263,7 @@ export const useAppStore = create<AppStore>((set) => ({
   specFmin: 0.5,
   specFmax: 30,
   specNpersegS: 1.0,
+  specNoverlapPct: 95,
   setPsdFmax: (value) => set({ psdFmax: value }),
   setPsdNW: (value) => set({ psdNW: value }),
   setPsdWindowS: (value) => set({ psdWindowS: value }),
@@ -262,6 +272,7 @@ export const useAppStore = create<AppStore>((set) => ({
   setSpecFmin: (value) => set({ specFmin: value }),
   setSpecFmax: (value) => set({ specFmax: value }),
   setSpecNpersegS: (value) => set({ specNpersegS: value }),
+  setSpecNoverlapPct: (value) => set({ specNoverlapPct: value }),
   bandPreset: "off",
   bandCustom: [11, 16],
   setBandPreset: (preset) => set({ bandPreset: preset }),

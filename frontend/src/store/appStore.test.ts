@@ -25,6 +25,15 @@ beforeEach(() => {
     specFmin: 0.5,
     specFmax: 30,
     specNpersegS: 1.0,
+    specNoverlapPct: 95,
+  });
+});
+
+describe("spectrogram overlap control", () => {
+  it("defaults to 95% and setSpecNoverlapPct updates it", () => {
+    expect(getStore().specNoverlapPct).toBe(95);
+    getStore().setSpecNoverlapPct(50);
+    expect(getStore().specNoverlapPct).toBe(50);
   });
 });
 

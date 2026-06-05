@@ -450,7 +450,23 @@ export function extractSpectrogramV2(t: LabeledTensor): Spectrogram {
     values[ti] = row;
   }
 
-  return { times, freqs, values };
+  // Surface the effective spectral params (spectral-window decoupling). These
+  // ride in the metadata blob; numbers come through JSON already typed, but
+  // guard with Number.isFinite per the no-`as number` convention.
+  const a = (meta.attrs ?? {}) as Record<string, unknown>;
+  const num = (v: unknown): number | undefined =>
+    typeof v === "number" && Number.isFinite(v) ? v : undefined;
+  const specMeta = {
+    npersegS: num(a["spectrogram_live_nperseg_s_effective"]),
+    overlapPctEffective: num(a["spectrogram_live_noverlap_pct_effective"]),
+    overlapPctRequested: num(a["spectrogram_live_noverlap_pct_requested"]),
+    capActive:
+      typeof a["spectrogram_live_segment_cap_active"] === "boolean"
+        ? (a["spectrogram_live_segment_cap_active"] as boolean)
+        : undefined,
+  };
+
+  return { times, freqs, values, specMeta };
 }
 
 // ── Row-major helpers ───────────────────────────────────────────────────────
