@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import logging
+import warnings
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -118,6 +119,12 @@ class ServerState:
     # lazily (only when a wide window actually warrants it) and cleared whenever
     # processing changes. Initialized in __post_init__ for deepcopy isolation.
     _lod_cache: dict = None  # type: ignore[assignment]
+    # Fix #2: per-session per-channel display scale cache, keyed
+    # (tensor, processing_dump) → (center, scale) DataArrays computed ONCE over
+    # the full processed tensor so the timeseries z-score is window-independent
+    # (amplitude stable across pan/zoom). Cleared whenever processing changes,
+    # alongside the LOD ladder. Initialized in __post_init__ for deepcopy isolation.
+    _channel_scale_cache: dict = None  # type: ignore[assignment]
     _subscribers: list[_Subscriber] = field(default_factory=list)
     # Per-tensor channel masks (flat channel ids: ap*n_ml+ml for grid, or channel idx).
     # Stored as sorted lists rather than sets so deepcopy + JSON round-trip is stable.
@@ -135,6 +142,8 @@ class ServerState:
             self._view_result_cache = OrderedDict()
         if self._lod_cache is None:
             self._lod_cache = {}
+        if self._channel_scale_cache is None:
+            self._channel_scale_cache = {}
         if self.transform_registry is None:
             self.transform_registry = TransformRegistry()
             register_builtins(self.transform_registry)
@@ -234,6 +243,7 @@ class ServerState:
         self._processed_cache.clear()
         self._view_result_cache.clear()  # P1: per-view results depend on processing
         self._lod_cache.clear()  # P2: LOD levels are built from the processed tensor
+        self._channel_scale_cache.clear()  # #2: display scale is processed-tensor-derived
         self._processed_params_hash = None
         self._processing_errors.clear()
         return self.processing
@@ -353,6 +363,7 @@ class ServerState:
             self._processed_cache.clear()
             self._view_result_cache.clear()  # P1: processing changed → drop stale views
             self._lod_cache.clear()  # P2: LOD ladder is processed-tensor-derived
+            self._channel_scale_cache.clear()  # #2: display scale is processed-tensor-derived
             self._processed_params_hash = params_hash
 
         if name not in self._processed_cache:
@@ -397,6 +408,27 @@ class ServerState:
                 self._lod_cache[ck] = level
             levels.append((target, level))
         return levels
+
+    def _get_channel_scale(
+        self, name: str, data: xr.DataArray
+    ) -> tuple[xr.DataArray, xr.DataArray] | None:
+        """Per-channel display center+scale, computed ONCE over the full tensor.
+
+        ``data`` is the *processed* (or raw) full tensor. The returned
+        ``(center, scale)`` are window-independent per-channel normalization
+        constants for the timeseries z-score (fix #2 — amplitude stable across
+        pan/zoom, the clinical/MNE fixed-scale convention). Keyed by the
+        processing dump like the LOD ladder and cleared on processing change.
+        Returns ``None`` for tensors without a time axis (nothing to normalize).
+        """
+        if "time" not in data.dims:
+            return None
+        ck = (name, self.processing.model_dump_json())
+        cached = self._channel_scale_cache.get(ck)
+        if cached is None:
+            cached = compute_channel_scale(data)
+            self._channel_scale_cache[ck] = cached
+        return cached
 
     def _view_cache_key(
         self, name: str, request: TensorSliceRequestDTO
@@ -484,9 +516,16 @@ class ServerState:
         lod_provider = None
         if request.view_type in {"timeseries", "navigator"} and request.bandpass is None:
             lod_provider = lambda: self._get_lod_levels(name, data)  # noqa: E731
+        # #2: only the timeseries view z-scores for stacked display; hand it the
+        # window-independent per-channel scale so amplitude is stable across pan.
+        channel_scale = (
+            self._get_channel_scale(name, data)
+            if request.view_type == "timeseries"
+            else None
+        )
         sliced = apply_slice_request(
             data, request, processing=None, masked_ids=masked_ids,
-            lod_provider=lod_provider,
+            lod_provider=lod_provider, channel_scale=channel_scale,
         )
         # Bandpass is applied inside apply_slice_request (before downsample /
         # zscore); it stashes its provenance here. Pop so it never leaks to
@@ -930,6 +969,7 @@ def apply_slice_request(
     processing: ProcessingParamsDTO | None = None,
     masked_ids: list[int] | None = None,
     lod_provider: Callable[[], list[tuple[int, xr.DataArray]]] | None = None,
+    channel_scale: tuple[xr.DataArray, xr.DataArray] | None = None,
 ) -> xr.DataArray:
     """Apply selection/windowing/downsampling to a tensor.
 
@@ -1372,7 +1412,11 @@ def apply_slice_request(
     # Running it on the navigator's full-session, full-rate slice was the
     # first-load lag (refactor-plan N1).
     if request.view_type == "timeseries" and "time" in sliced.dims:
-        sliced = zscore_offset(sliced, offset_scale=3.0)
+        # #2: use the window-independent per-channel center/scale when supplied
+        # (computed once over the full tensor) so amplitude is stable across
+        # pan/zoom; fall back to window-local mean/std otherwise.
+        _center, _scale = channel_scale if channel_scale is not None else (None, None)
+        sliced = zscore_offset(sliced, offset_scale=3.0, center=_center, scale=_scale)
         prior = list(sliced.attrs.get("display_transforms", []) or [])
         sliced = sliced.assign_attrs(
             {**dict(sliced.attrs), "display_transforms": prior + ["zscore_offset(scale=3.0)"]}
@@ -1505,8 +1549,68 @@ def _median_spatial_flat(data: xr.DataArray, *, size: int = 3) -> xr.DataArray:
     ).transpose(*data.dims)
 
 
-def zscore_offset(data: xr.DataArray, *, offset_scale: float = 3.0) -> xr.DataArray:
-    """Z-score each channel along the time axis, then add a vertical offset for stacked display.
+def compute_channel_scale(
+    data: xr.DataArray, *, max_samples: int = 200_000
+) -> tuple[xr.DataArray, xr.DataArray]:
+    """Per-channel display center & scale, estimated ONCE over the full time axis.
+
+    Returns ``(center, scale)`` DataArrays over ``data``'s non-time dims. The
+    estimators are robust — center = median, scale = IQR / 1.349 (the
+    normal-consistent robust std) — so a handful of artefact samples don't
+    dominate the scale.  Crucially they are computed over the WHOLE recording,
+    not the visible window, so a channel's displayed amplitude is stable across
+    pan/zoom (the clinical fixed-sensitivity / MNE global-scaling convention)
+    rather than "breathing" as the window's local variance changes (fix #2).
+
+    Time is strided to at most ``max_samples`` samples: the percentiles of a
+    (locally stationary) LFP channel are well estimated from a subsample, and
+    this caps the one-time cost regardless of tensor length.
+    """
+    if "time" not in data.dims:
+        raise ValueError("compute_channel_scale requires a 'time' dimension")
+    n_time = int(data.sizes["time"])
+    if n_time > max_samples:
+        idx = np.unique(np.linspace(0, n_time - 1, max_samples).astype(int))
+        sub = data.isel(time=idx)
+    else:
+        sub = data
+    time_axis = list(sub.dims).index("time")
+    vals = np.asarray(sub.values, dtype=np.float64)
+    with warnings.catch_warnings():
+        # An all-NaN channel yields NaN percentiles (warned); we guard below.
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        p25, p50, p75 = np.nanpercentile(vals, [25.0, 50.0, 75.0], axis=time_axis)
+        std = np.nanstd(vals, axis=time_axis)
+    scale = (p75 - p25) / 1.349
+    # Degenerate channels (flat / near-constant IQR): fall back to std, then 1.0,
+    # so we never divide by zero or NaN.
+    scale = np.where(np.isfinite(scale) & (scale > 0), scale, std)
+    scale = np.where(np.isfinite(scale) & (scale > 0), scale, 1.0)
+    center = np.where(np.isfinite(p50), p50, 0.0)
+    non_time_dims = [d for d in sub.dims if d != "time"]
+    coords = {d: sub.coords[d] for d in non_time_dims if d in sub.coords}
+    center_da = xr.DataArray(center, dims=non_time_dims, coords=coords)
+    scale_da = xr.DataArray(scale, dims=non_time_dims, coords=coords)
+    return center_da, scale_da
+
+
+def zscore_offset(
+    data: xr.DataArray,
+    *,
+    offset_scale: float = 3.0,
+    center: xr.DataArray | None = None,
+    scale: xr.DataArray | None = None,
+) -> xr.DataArray:
+    """Normalize each channel, then add a vertical offset for stacked display.
+
+    When ``center`` / ``scale`` are supplied — per-channel constants computed
+    once over the full recording by :func:`compute_channel_scale` — they are
+    used as the normalization, so a channel's amplitude is STABLE across windows
+    and LOD levels (fix #2).  When omitted, falls back to window-local mean/std
+    (the legacy behaviour) so callers without a precomputed scale still work.
+    Both ``center`` and ``scale`` are DataArrays over the non-time dims; xarray
+    aligns them to ``data`` by label, so a channel subset still normalizes
+    correctly.
 
     Works for both ``(time, channel)`` and ``(time, AP, ML)`` layouts.
     The topmost channel (rank 0) gets the largest offset so channels read
@@ -1515,33 +1619,32 @@ def zscore_offset(data: xr.DataArray, *, offset_scale: float = 3.0) -> xr.DataAr
     spatial = "AP" in data.dims and "ML" in data.dims
     channel_like = "channel" in data.dims
 
+    # Per-channel normalization — global (stable) when provided, else
+    # window-local (legacy). Computed in the original dim space; equivalent to
+    # the prior stack-then-reduce because time-reduction commutes with stacking.
+    if center is None:
+        center = data.mean(dim="time")
+    if scale is None:
+        scale = data.std(dim="time")
+    normed = (data - center) / scale.where(scale > 0, other=1.0)
+
     if not (spatial or channel_like):
-        # No channel axis — nothing to stack, just z-score along time.
-        mu = data.mean(dim="time")
-        sigma = data.std(dim="time")
-        return (data - mu) / sigma.where(sigma > 0, other=1.0)
+        # No channel axis — nothing to stack.
+        return normed
 
-    if spatial:
-        # Flatten AP × ML → "channel" for uniform treatment.
-        stacked = data.stack(channel=("AP", "ML"))
-    else:
-        stacked = data  # already (time, channel)
-
-    # Z-score each channel independently.
-    mu = stacked.mean(dim="time")
-    sigma = stacked.std(dim="time")
-    normed = (stacked - mu) / sigma.where(sigma > 0, other=1.0)
+    # Flatten AP × ML → "channel" for a uniform vertical offset.
+    stacked = normed.stack(channel=("AP", "ML")) if spatial else normed
 
     # Add vertical offset: channel 0 sits highest.
-    n_ch = int(normed.sizes["channel"])
+    n_ch = int(stacked.sizes["channel"])
     ranks = np.arange(n_ch, dtype=float)
     offsets = (n_ch - 1 - ranks) * offset_scale  # shape (n_ch,)
+    offset_da = xr.DataArray(
+        offsets, coords={"channel": stacked.coords["channel"]}, dims=["channel"]
+    )
+    stacked = stacked + offset_da
 
-    # Build a DataArray aligned on the channel dimension.
-    ch_coord = normed.coords["channel"]
-    offset_da = xr.DataArray(offsets, coords={"channel": ch_coord}, dims=["channel"])
-    normed = normed + offset_da
-
+    normed = stacked
     if spatial:
         normed = normed.unstack("channel")
         # Restore original dim order (time, AP, ML).
@@ -1553,9 +1656,22 @@ def zscore_offset(data: xr.DataArray, *, offset_scale: float = 3.0) -> xr.DataAr
 def downsample_time_axis(data: xr.DataArray, max_points: int, method: DownsampleMethod) -> xr.DataArray:
     """Reduce the time axis to a bounded number of points.
 
-    The min/max envelope path is fully vectorized via numpy — no Python loop
-    over buckets.  This is critical for large recordings (e.g. demo2) where
-    the old per-bucket xr.concat loop was the dominant bottleneck.
+    The MINMAX path emits a per-feature min/max envelope — two points per
+    bucket, each anchored at the real source-time of the dominant feature's
+    extremum (Audit F5).  The per-bucket reductions (``chunk.argmin/argmax``)
+    are C-level numpy; the surrounding Python loop runs once per bucket
+    (``max_points // 2`` iterations, typically a few thousand) and is a
+    negligible fraction of the cost on multichannel data.
+
+    NOTE (measured 2026-06-05): a fully ``reduceat``-vectorized rewrite of this
+    loop is ~3× SLOWER on the multichannel LOD-pyramid build (the case that
+    matters), because ``argmin`` yields the extremum's value AND its position in
+    one pass, whereas ``reduceat`` returns only values and needs extra
+    full-array passes to recover the anchor positions.  It only wins for
+    single-channel input (the navigator, already <10 ms).  Do not "optimize"
+    this loop away without re-benchmarking — see
+    ``tests/test_downsample_vectorized.py`` and the #3 note in
+    ``docs/design/multichannel-display-fixes-plan.md``.
     """
     time_len = int(data.sizes.get("time", 0))
     if time_len <= max_points or method == DownsampleMethod.NONE:
@@ -1565,7 +1681,7 @@ def downsample_time_axis(data: xr.DataArray, max_points: int, method: Downsample
         indices = np.linspace(0, time_len - 1, max_points, dtype=int)
         return data.isel(time=np.unique(indices))
 
-    # ── Vectorized min/max envelope ──────────────────────────────────────
+    # ── Min/max envelope ─────────────────────────────────────────────────
     bucket_count = max(1, max_points // 2)
     edges = np.linspace(0, time_len, bucket_count + 1, dtype=int)
     starts = edges[:-1]
@@ -1598,6 +1714,10 @@ def downsample_time_axis(data: xr.DataArray, max_points: int, method: Downsample
     # emitted timestamps are anchored at the most-extreme feature's real
     # sample times — the dominant channel's peak lands exactly, and a 1 ms
     # spike near the centre of a 100 ms bucket no longer renders 50 ms off.
+    #
+    # This per-bucket loop is intentional — see the function docstring: argmin
+    # gives value+position in one pass, which a reduceat rewrite can't, making
+    # the loop ~3× faster on multichannel data.  Do not vectorize it away.
     feat_idx = np.arange(n_feat)
     for i in range(n_buckets):
         s, e = int(starts[i]), int(stops[i])
