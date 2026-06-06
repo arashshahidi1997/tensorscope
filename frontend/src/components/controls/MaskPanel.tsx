@@ -9,7 +9,7 @@
  * mask to the server so views compute against the new mask, and the React
  * Query slice cache is invalidated so all panels refresh.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMaskQuery, useSetMask } from "../../api/queries";
 import { useMaskStore } from "../../store/maskStore";
 import { ChannelGridRenderer } from "../views/ChannelGridRenderer";
@@ -84,6 +84,39 @@ export function MaskPanel({ tensorName, nAP, nML }: MaskPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<ChannelGridRenderer>(new ChannelGridRenderer());
 
+  // Draw the editor grid: an empty (dim) AP×ML grid with masked cells hatched
+  // and visible cell borders to target by eye.
+  const renderGrid = useCallback(() => {
+    if (!nAP || !nML) return;
+    const renderer = rendererRef.current;
+    const cells = [];
+    for (let ap = 0; ap < nAP; ap++) {
+      for (let ml = 0; ml < nML; ml++) {
+        cells.push({ id: ap * nML + ml, apIdx: ap, mlIdx: ml, value: 0 });
+      }
+    }
+    renderer.render(cells, {
+      nAP,
+      nML,
+      colorScale: "sequential",
+      hoveredId: null,
+      selectedIds: [],
+      // Pin every cell to t=0 → bottom of the LUT (dark navy); with
+      // showCellBorders the editor reads as a dark grid with visible boundaries.
+      minValue: 0,
+      maxValue: 1,
+      maskedIds: new Set(localMask ?? []),
+      smoothing: false,
+      colormap: "sequential",
+      showCellBorders: true,
+    });
+  }, [nAP, nML, localMask]);
+
+  // Latest renderer in a ref so the ResizeObserver (set up once per nAP/nML)
+  // always redraws with the current mask after a resize.
+  const renderGridRef = useRef(renderGrid);
+  useEffect(() => { renderGridRef.current = renderGrid; }, [renderGrid]);
+
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -99,7 +132,15 @@ export function MaskPanel({ tensorName, nAP, nML }: MaskPanelProps) {
       renderer.init(canvas, w, h);
     }
     syncSize();
-    const ro = new ResizeObserver(syncSize);
+    // Paint immediately, and REPAINT on every resize — the grid container is
+    // aspect-ratio sized and lives in a collapsible / inspector, so its real
+    // size frequently arrives after mount. The old RO only re-sized the canvas
+    // (not redraw), so the grid stayed blank until the first cell click.
+    renderGridRef.current();
+    const ro = new ResizeObserver(() => {
+      syncSize();
+      renderGridRef.current();
+    });
     ro.observe(container);
     return () => {
       ro.disconnect();
@@ -107,35 +148,10 @@ export function MaskPanel({ tensorName, nAP, nML }: MaskPanelProps) {
     };
   }, [nAP, nML]);
 
+  // Redraw when dims or the mask change.
   useEffect(() => {
-    if (!nAP || !nML) return;
-    const renderer = rendererRef.current;
-    // Editor mode draws an empty grid (no data values), masked cells in the
-    // hatched style. Pass a single "neutral" cell value for unmasked slots
-    // so the unmasked grid renders as a uniform dim color.
-    const cells = [];
-    for (let ap = 0; ap < nAP; ap++) {
-      for (let ml = 0; ml < nML; ml++) {
-        cells.push({ id: ap * nML + ml, apIdx: ap, mlIdx: ml, value: 0 });
-      }
-    }
-    renderer.render(cells, {
-      nAP,
-      nML,
-      colorScale: "sequential",
-      hoveredId: null,
-      selectedIds: [],
-      // Pin every cell to t=0 → bottom of the LUT, which is dark navy.
-      // Combined with `showCellBorders: true` below, the editor renders as a
-      // dark grid with visible cell boundaries the user can target by eye.
-      minValue: 0,
-      maxValue: 1,
-      maskedIds: new Set(localMask ?? []),
-      smoothing: false,
-      colormap: "sequential",
-      showCellBorders: true,
-    });
-  }, [nAP, nML, localMask]);
+    renderGrid();
+  }, [renderGrid]);
 
   if (!tensorName || !nAP || !nML) {
     return (
