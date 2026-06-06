@@ -13,9 +13,11 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useSelectionStore } from "../../store/selectionStore";
+import { useElectrodesQuery } from "../../api/queries";
 import { AnimationController } from "../controls/AnimationController";
 import { PropagationView } from "./PropagationView";
 import { PropagationMoviePlayer } from "./PropagationMoviePlayer";
+import { ScatterMoviePlayer } from "./ScatterMoviePlayer";
 import { decodeArrowSlice, extractSpatialCells } from "../../api/arrow";
 import type { ColormapName } from "./colormaps";
 import type { CoordSummary, SelectionDTO, TensorSliceDTO } from "../../api/types";
@@ -51,6 +53,12 @@ export function PropagationController({
   // Movie is the default: preloaded, smooth, cursor-synced playback (ADR-0008).
   const [mode, setMode] = useState<PropagationMode>("movie");
   const [colormap, setColormap] = useState<ColormapName>("viridis");
+
+  // Geometry routing (ADR-0010 Phase 3): a planar probe (arbitrary x/y, no
+  // AP×ML lattice) plays propagation as an animated position scatter. The grid's
+  // 5-mode UI (player/strip/tiled use the imshow PropagationView) doesn't apply,
+  // so planar renders a focused movie-only controller.
+  const isPlanar = useElectrodesQuery(tensorName).data?.geometry === "planar";
 
   const tMin = typeof timeCoord?.min === "number" ? timeCoord.min : parseFloat(String(timeCoord?.min ?? "0"));
   const tMax = typeof timeCoord?.max === "number" ? timeCoord.max : parseFloat(String(timeCoord?.max ?? "10"));
@@ -234,6 +242,49 @@ export function PropagationController({
   }, [mode, tensorName, t0, t1, frameCount, colorScaleLock]);
 
   const frameTimes = mode !== "player" ? linspace(t0, t1, frameCount) : [];
+
+  // Planar probe → focused scatter-movie controller (window + colormap + N).
+  if (isPlanar && tensorName) {
+    return (
+      <div className="propagation-controller">
+        <div className="propagation-toolbar">
+          <label className="propagation-setting" title="Colormap (viridis is perceptually uniform)">
+            <span>cmap</span>
+            <select value={colormap} onChange={(e) => setColormap(e.target.value as ColormapName)}>
+              {COLORMAP_OPTIONS.map((c) => (<option key={c} value={c}>{c}</option>))}
+            </select>
+          </label>
+          <div className="propagation-settings">
+            <label className="propagation-setting">
+              <span>t0</span>
+              <input type="number" value={t0} step={0.1}
+                onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) setT0(v); }} />
+            </label>
+            <label className="propagation-setting">
+              <span>t1</span>
+              <input type="number" value={t1} step={0.1}
+                onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) setT1(v); }} />
+            </label>
+            <button type="button" className="ts-tool" title="Snap to the visible window" onClick={snapToWindow}>↺ win</button>
+            <button type="button" className="ts-tool" title="Expand to the full recording" onClick={expandToFull}>⤢ all</button>
+            <label className="propagation-setting">
+              <span>N</span>
+              <input type="number" value={frameCount} min={1} max={240}
+                onChange={(e) => { const v = parseInt(e.target.value, 10); if (Number.isFinite(v) && v > 0) setFrameCount(v); }} />
+            </label>
+          </div>
+        </div>
+        <ScatterMoviePlayer
+          tensorName={tensorName}
+          timeWindow={[t0, t1]}
+          selection={selectionDraft}
+          nFrames={frameCount}
+          colormap={colormap}
+          onCommitTime={(t) => useSelectionStore.getState().setTimeCursor(t)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="propagation-controller">

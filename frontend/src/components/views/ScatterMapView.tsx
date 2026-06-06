@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../../store/appStore";
 import { useMaskStore } from "../../store/maskStore";
 import { getColormapLUT } from "./colormaps";
+import { paintScatter } from "./scatterPaint";
 
 /**
  * ScatterMapView — position-driven spatial map for non-grid probes.
@@ -16,13 +17,6 @@ import { getColormapLUT } from "./colormaps";
  * docs/design/neuropixels-multiprobe.md.
  */
 const LUT = getColormapLUT("viridis");
-
-function colorFor(v: number, lo: number, hi: number): string {
-  if (!Number.isFinite(v)) return "#2a2a2a";
-  const t = Math.max(0, Math.min(1, (v - lo) / (hi - lo || 1)));
-  const i = Math.round(t * 255) * 4;
-  return `rgb(${LUT[i]},${LUT[i + 1]},${LUT[i + 2]})`;
-}
 
 export function ScatterMapView({
   positions,
@@ -84,43 +78,8 @@ export function ScatterMapView({
     canvas.height = H;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.clearRect(0, 0, W, H);
 
-    // Position bounds → aspect-equal fit with padding.
-    let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
-    for (let i = 0; i < n; i++) {
-      xMin = Math.min(xMin, positions.x[i]); xMax = Math.max(xMax, positions.x[i]);
-      yMin = Math.min(yMin, positions.y[i]); yMax = Math.max(yMax, positions.y[i]);
-    }
-    const pad = 24;
-    const spanX = xMax - xMin || 1;
-    const spanY = yMax - yMin || 1;
-    const scale = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY);
-    const drawnW = spanX * scale;
-    const drawnH = spanY * scale;
-    const offX = (W - drawnW) / 2;
-    const offY = (H - drawnH) / 2;
-    // y grows downward on canvas; flip so larger y (deeper/dorsal) sits as data intends.
-    const px = (x: number) => offX + (x - xMin) * scale;
-    const py = (y: number) => offY + (yMax - y) * scale;
-
-    const r = Math.max(2.5, Math.min(16, 0.55 * Math.sqrt((drawnW * drawnH) / Math.max(1, n))));
-
-    const cx = new Array<number>(n);
-    const cy = new Array<number>(n);
-    for (let i = 0; i < n; i++) {
-      cx[i] = px(positions.x[i]);
-      cy[i] = py(positions.y[i]);
-      const masked = maskedSet?.has(i);
-      ctx.beginPath();
-      ctx.arc(cx[i], cy[i], r, 0, 2 * Math.PI);
-      ctx.fillStyle = masked ? "rgba(60,60,60,0.5)" : colorFor(values[i], lo, hi);
-      ctx.fill();
-      ctx.lineWidth = 0.5;
-      ctx.strokeStyle = "rgba(0,0,0,0.5)";
-      ctx.stroke();
-    }
-    geomRef.current = { cx, cy, r };
+    geomRef.current = paintScatter(ctx, W, H, positions, values, LUT, lo, hi, maskedSet);
   }, [positions, values, maskedSet, lo, hi]);
 
   // Hover hit-test: nearest electrode within ~1.6× the dot radius of the cursor.

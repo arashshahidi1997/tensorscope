@@ -550,6 +550,47 @@ export function extractPSDAverageV2(t: LabeledTensor): PSDAvgData {
  * `psd_spatial` scatter, paired with electrode positions from the electrodes
  * endpoint. Returns `[]` when the cube is not `(freq, channel)`. See ADR-0010.
  */
+export type ChannelMovieFrame = { time: number; values: number[] };
+export type ChannelMovie = { frames: ChannelMovieFrame[]; nCh: number; min: number; max: number };
+
+/**
+ * Decode a `(time, channel)` propagation-movie cube into per-frame per-channel
+ * values (channel order) + a global value range — the channel-native analogue of
+ * `extractSpatialFramesV2`. Feeds the planar `ScatterMoviePlayer`, paired with
+ * electrode positions. Returns empty if the cube isn't `(time, channel)`. ADR-0010.
+ */
+export function extractChannelFramesV2(t: LabeledTensor): ChannelMovie {
+  const empty: ChannelMovie = { frames: [], nCh: 0, min: 0, max: 1 };
+  const { meta, data, coords } = t;
+  const timeAxis = meta.dims.indexOf("time");
+  const chAxis = meta.dims.indexOf("channel");
+  if (timeAxis === -1 || chAxis === -1) return empty;
+  const timeTyped = coords["time"];
+  if (!(timeTyped instanceof Float64Array)) return empty;
+  const strides = rowMajorStrides(meta.shape);
+  const timeStride = strides[timeAxis];
+  const chStride = strides[chAxis];
+  const nT = meta.shape[timeAxis];
+  const nCh = meta.shape[chAxis];
+  let min = Infinity;
+  let max = -Infinity;
+  const frames: ChannelMovieFrame[] = [];
+  for (let ti = 0; ti < nT; ti++) {
+    const values = new Array<number>(nCh);
+    for (let c = 0; c < nCh; c++) {
+      const v = data[ti * timeStride + c * chStride];
+      values[c] = v;
+      if (Number.isFinite(v)) {
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+    }
+    frames.push({ time: timeTyped[ti], values });
+  }
+  if (!(min < max)) { min = 0; max = 1; }
+  return { frames, nCh, min, max };
+}
+
 export function extractPSDSpatialChannelFrame(t: LabeledTensor, targetFreq: number): number[] {
   const { meta, data, coords } = t;
   const freqAxis = meta.dims.indexOf("freq");

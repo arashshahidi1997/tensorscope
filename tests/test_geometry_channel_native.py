@@ -215,6 +215,26 @@ def test_planar_probe_advertises_spatial_map_view() -> None:
     assert "spatial_map" in state.tensor_meta("npx4").available_views
 
 
+def test_planar_probe_advertises_and_serves_propagation() -> None:
+    """Planar probes get propagation (movie/frame) — the same (channel,) frame
+    and (time, channel) cube the grid uses, rendered as an animated scatter."""
+    probe = prepare_planar_probe(
+        _flat(2000, 12, fs=500.0),
+        x=np.repeat(np.arange(3), 4) * 100.0, y=np.tile(np.arange(4), 3) * 50.0, fs=500.0,
+    )
+    state = create_server_state(probe, tensor_name="p")
+    views = state.tensor_meta("p").available_views
+    assert "propagation_movie" in views and "propagation_frame" in views
+    sel = SelectionDTO(time=1.0, freq=0.0, ap=0, ml=0)
+    movie = state.tensor_slice(
+        "p", TensorSliceRequestDTO(view_type="propagation_movie", selection=sel,
+                                   time_range=(0.5, 3.5), n_frames=10))
+    assert [c["name"] for c in movie.meta["coords"]] == ["time", "channel"]
+    frame = state.tensor_slice(
+        "p", TensorSliceRequestDTO(view_type="propagation_frame", selection=sel, frame_time=1.0))
+    assert [c["name"] for c in frame.meta["coords"]] == ["channel"]
+
+
 def test_electrodes_http_endpoint_planar_and_grid() -> None:
     """GET /tensors/{name}/electrodes serves geometry for the scatter view."""
     from fastapi.testclient import TestClient

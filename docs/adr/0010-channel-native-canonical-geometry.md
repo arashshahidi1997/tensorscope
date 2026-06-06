@@ -63,8 +63,14 @@ interactions: mask greying (Phase 1) + hover tooltip (channel · value) DONE. **
 click-to-select-channel (needs a channel-focus path through WorkspaceMain) and region overlay
 (needs the probe-layout sidecar; inert without one).
 
-**Phase 3 — Propagation (planned):** position-driven `propagation_frame`/`propagation_movie`
-(triangulated/interpolated over `(x, y)`); for linear probes this is CSD-along-depth (cogpy has
+**Phase 3 — Propagation (DONE for planar):** `propagation_frame`/`propagation_movie` are
+advertised for planar probes (the same `(channel,)` frame / `(time, channel)` cube the grid uses).
+The frontend plays them as an **animated position scatter**: a shared `paintScatter` helper (also
+used by ScatterMapView), `extractChannelFramesV2` (movie cube → per-frame channel values), a
+`ScatterMoviePlayer` (preload + RAF + cursor-sync + hover, mirroring the grid movie player), and
+`PropagationController` routing planar → a focused movie-only scatter controller. The grid
+imshow player is untouched. **Remaining:** dot-interpolated surface (currently discrete dots, no
+spatial interpolation between electrodes) and CSD-along-depth for linear probes (cogpy
 `depth_probe/csd`).
 
 **Out of scope (explicitly not this ADR):** the Zarr/on-disk chunked-multiscale storage format

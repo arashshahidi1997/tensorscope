@@ -875,7 +875,10 @@ def available_views(data: xr.DataArray) -> list[str]:
         from tensorscope.core.schema import channel_positions
 
         if channel_positions(data) is not None:
-            views = [*views, "spatial_map"]
+            # Position-driven scatter spatial_map + propagation (movie/frame). The
+            # movie cube and single frame are the same (channel,) selection the
+            # grid uses; the frontend renders them as a scatter (ADR-0010 Phase 3).
+            views = [*views, "spatial_map", "propagation_frame", "propagation_movie"]
     return views
 
 

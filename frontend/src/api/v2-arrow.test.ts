@@ -30,6 +30,7 @@ import {
   extractHeatmapNDV2,
   extractPSDAverageV2,
   extractPSDHeatmapV2,
+  extractChannelFramesV2,
   extractPSDSpatialChannelFrame,
   extractPSDSpatialV2,
   extractSpatialCellsV2,
@@ -725,6 +726,37 @@ describe("extractPSDSpatialV2 parity", () => {
     for (let i = 0; i < GOLDEN_PSDSPATIAL.length; i++) {
       expect(v2[i].value).toBeCloseTo(GOLDEN_PSDSPATIAL[i].value, 4);
     }
+  });
+});
+
+describe("extractChannelFramesV2 (planar propagation movie)", () => {
+  it("decodes a (time, channel) cube into per-frame channel values + range", () => {
+    const times = [0.0, 0.1, 0.2];
+    const nCh = 4;
+    const data = new Float32Array(times.length * nCh);
+    for (let ti = 0; ti < times.length; ti++) {
+      for (let c = 0; c < nCh; c++) data[ti * nCh + c] = ti * 10 + c;
+    }
+    const labeled: LabeledTensor = {
+      meta: { version: "2.0", dims: ["time", "channel"], shape: [times.length, nCh], dtype: "float32", units: "uV", attrs: {}, display_transforms: [] },
+      data,
+      coords: { time: Float64Array.from(times), channel: Float64Array.from([0, 1, 2, 3]) },
+    };
+    const m = extractChannelFramesV2(labeled);
+    expect(m.nCh).toBe(4);
+    expect(m.frames.length).toBe(3);
+    expect(m.frames[0]).toEqual({ time: 0.0, values: [0, 1, 2, 3] });
+    expect(m.frames[2]).toEqual({ time: 0.2, values: [20, 21, 22, 23] });
+    expect([m.min, m.max]).toEqual([0, 23]);
+  });
+
+  it("returns empty for a non-(time, channel) cube", () => {
+    const labeled: LabeledTensor = {
+      meta: { version: "2.0", dims: ["time", "AP", "ML"], shape: [1, 1, 1], dtype: "float32", units: null, attrs: {}, display_transforms: [] },
+      data: new Float32Array([1]),
+      coords: { time: Float64Array.from([0]), AP: Float64Array.from([0]), ML: Float64Array.from([0]) },
+    };
+    expect(extractChannelFramesV2(labeled).frames).toEqual([]);
   });
 });
 
