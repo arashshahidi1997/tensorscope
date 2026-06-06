@@ -56,9 +56,12 @@ Consequences of the model:
 - Live-validated on a 4-shank probe (`bench/serve_planar_probe.py`): loads, scatter renders,
   spatial-median visibly cleans it. Backend 685 / frontend 450 / tsc clean.
 
-**Phase 2 — Parity (planned):** channel-native `psd_spatial` (freq-selected position scatter)
-and scatter interactions (click-to-select-channel, mask greying, region overlay, hover) so a
-non-grid probe loses nothing vs grid.
+**Phase 2 — Parity (mostly DONE):** channel-native `psd_spatial` renders as a freq-selected
+position scatter — `PSDSpatialView` self-branches on geometry (`extractPSDSpatialChannelFrame`
+over the `(freq, channel)` cube → `ScatterMapView`), no WorkspaceMain change. Scatter
+interactions: mask greying (Phase 1) + hover tooltip (channel · value) DONE. **Remaining:**
+click-to-select-channel (needs a channel-focus path through WorkspaceMain) and region overlay
+(needs the probe-layout sidecar; inert without one).
 
 **Phase 3 — Propagation (planned):** position-driven `propagation_frame`/`propagation_movie`
 (triangulated/interpolated over `(x, y)`); for linear probes this is CSD-along-depth (cogpy has

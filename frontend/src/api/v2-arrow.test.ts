@@ -30,6 +30,7 @@ import {
   extractHeatmapNDV2,
   extractPSDAverageV2,
   extractPSDHeatmapV2,
+  extractPSDSpatialChannelFrame,
   extractPSDSpatialV2,
   extractSpatialCellsV2,
   extractSpatialFramesV2,
@@ -724,6 +725,44 @@ describe("extractPSDSpatialV2 parity", () => {
     for (let i = 0; i < GOLDEN_PSDSPATIAL.length; i++) {
       expect(v2[i].value).toBeCloseTo(GOLDEN_PSDSPATIAL[i].value, 4);
     }
+  });
+});
+
+describe("extractPSDSpatialChannelFrame (planar psd_spatial)", () => {
+  it("returns per-channel power at the nearest freq, in channel order", () => {
+    const freqs = [5, 10, 20, 40];
+    const nCh = 6;
+    // (freq, channel) row-major cube; value = freqIdx*100 + channel.
+    const data = new Float32Array(freqs.length * nCh);
+    for (let f = 0; f < freqs.length; f++) {
+      for (let c = 0; c < nCh; c++) data[f * nCh + c] = f * 100 + c;
+    }
+    const labeled: LabeledTensor = {
+      meta: {
+        version: "2.0",
+        dims: ["freq", "channel"],
+        shape: [freqs.length, nCh],
+        dtype: "float32",
+        units: "uV^2/Hz",
+        attrs: {},
+        display_transforms: [],
+      },
+      data,
+      coords: { freq: Float64Array.from(freqs), channel: Float64Array.from([0, 1, 2, 3, 4, 5]) },
+    };
+    // 22 → nearest freq is 20 (index 2) → values 200..205.
+    expect(extractPSDSpatialChannelFrame(labeled, 22)).toEqual([200, 201, 202, 203, 204, 205]);
+    // 6 → nearest is 5 (index 0) → 0..5.
+    expect(extractPSDSpatialChannelFrame(labeled, 6)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  it("returns [] when the cube is not (freq, channel)", () => {
+    const labeled: LabeledTensor = {
+      meta: { version: "2.0", dims: ["freq", "AP", "ML"], shape: [1, 1, 1], dtype: "float32", units: null, attrs: {}, display_transforms: [] },
+      data: new Float32Array([1]),
+      coords: { freq: Float64Array.from([10]), AP: Float64Array.from([0]), ML: Float64Array.from([0]) },
+    };
+    expect(extractPSDSpatialChannelFrame(labeled, 10)).toEqual([]);
   });
 });
 

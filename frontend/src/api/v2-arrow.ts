@@ -544,6 +544,34 @@ export function extractPSDAverageV2(t: LabeledTensor): PSDAvgData {
  *   - non-finite cells skipped; AP/ML ranks built only from finite cells
  *   - 0-based integer ranks (sorted ascending unique), output sorted (ap, ml)
  */
+/**
+ * Per-channel PSD power at the nearest frequency, in channel order — the
+ * channel-native (non-grid) analogue of `extractPSDSpatialV2`. Feeds the planar
+ * `psd_spatial` scatter, paired with electrode positions from the electrodes
+ * endpoint. Returns `[]` when the cube is not `(freq, channel)`. See ADR-0010.
+ */
+export function extractPSDSpatialChannelFrame(t: LabeledTensor, targetFreq: number): number[] {
+  const { meta, data, coords } = t;
+  const freqAxis = meta.dims.indexOf("freq");
+  const chAxis = meta.dims.indexOf("channel");
+  if (freqAxis === -1 || chAxis === -1) return [];
+  const freqsTyped = coords["freq"];
+  if (!(freqsTyped instanceof Float64Array) || freqsTyped.length === 0) return [];
+  let nearest = 0;
+  let minDist = Math.abs(targetFreq - freqsTyped[0]);
+  for (let i = 0; i < freqsTyped.length; i++) {
+    const d = Math.abs(targetFreq - freqsTyped[i]);
+    if (d < minDist) { minDist = d; nearest = i; }
+  }
+  const strides = rowMajorStrides(meta.shape);
+  const fStride = strides[freqAxis];
+  const chStride = strides[chAxis];
+  const nCh = meta.shape[chAxis];
+  const out = new Array<number>(nCh);
+  for (let c = 0; c < nCh; c++) out[c] = data[nearest * fStride + c * chStride];
+  return out;
+}
+
 export function extractPSDSpatialV2(
   t: LabeledTensor,
   targetFreq: number,

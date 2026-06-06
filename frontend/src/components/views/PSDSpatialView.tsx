@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import { extractPSDSpatialV2, type LabeledTensor } from "../../api/v2-arrow";
+import { extractPSDSpatialChannelFrame, extractPSDSpatialV2, type LabeledTensor } from "../../api/v2-arrow";
+import { useElectrodesQuery } from "../../api/queries";
 import { useAppStore } from "../../store/appStore";
 import { useSelectionStore } from "../../store/selectionStore";
 import { useMaskStore } from "../../store/maskStore";
 import { ChannelGridRenderer } from "./ChannelGridRenderer";
+import { ScatterMapView } from "./ScatterMapView";
 import { ColorBar } from "./ColorBar";
 import { CoordReadout, joinCoords } from "./CoordReadout";
 import { unmaskedCellRange } from "./colorRange";
@@ -32,6 +34,17 @@ export function PSDSpatialView({ v2, selectedFreq, onSelectFreq, onSelectCell, t
   const maskedSet = useMemo(
     () => (maskedArray ? new Set(maskedArray) : undefined),
     [maskedArray],
+  );
+
+  // Geometry routing (ADR-0010): a planar probe (arbitrary x/y, no AP×ML
+  // lattice) renders psd_spatial as a position scatter — per-channel PSD power
+  // at the selected freq — instead of the grid imshow. Positions come from the
+  // electrodes endpoint; values from the (freq, channel) cube.
+  const electrodes = useElectrodesQuery(maskTensor);
+  const isPlanar = electrodes.data?.geometry === "planar";
+  const planarFrame = useMemo(
+    () => (isPlanar ? extractPSDSpatialChannelFrame(v2, selectedFreq) : null),
+    [isPlanar, v2, selectedFreq],
   );
 
   const cellsRef = useRef<SpatialCellWithId[]>([]);
@@ -148,6 +161,19 @@ export function PSDSpatialView({ v2, selectedFreq, onSelectFreq, onSelectCell, t
     setHoveredElectrode(rendererRef.current.hitTest(e.clientX - rect.left, e.clientY - rect.top));
   }, [setHoveredElectrode]);
   const handleMouseLeave = useCallback(() => setHoveredElectrode(null), [setHoveredElectrode]);
+
+  // Planar probe → position-driven scatter of per-channel PSD power at the freq.
+  const e = electrodes.data;
+  if (isPlanar && e?.x_coords && e?.y_coords && planarFrame) {
+    return (
+      <ScatterMapView
+        positions={{ x: e.x_coords, y: e.y_coords }}
+        values={planarFrame}
+        selectedFreq={selectedFreq}
+        tensorName={tensorName}
+      />
+    );
+  }
 
   if (rawCells.length === 0) return null;
 
