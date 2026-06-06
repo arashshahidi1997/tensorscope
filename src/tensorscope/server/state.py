@@ -865,6 +865,17 @@ def available_views(data: xr.DataArray) -> list[str]:
     # docs/design/neuropixels-multiprobe.md.
     if dims == frozenset({"time", "channel"}) and "depth" in data.coords:
         views = [*views, "depth_map"]
+    # Planar geometry: a (time, channel) probe with arbitrary 2-D positions
+    # (x/y coords — a 4-shank Neuropixels, sparse/L-shaped ECoG, SEEG) earns the
+    # position-driven ``spatial_map`` scatter view. The frontend reads the
+    # per-channel positions from GET /tensors/{name}/electrodes (geometry
+    # "planar") and the per-channel values from the spatial_map slice. See
+    # core.schema.channel_positions + bench/RESULTS.md.
+    if dims == frozenset({"time", "channel"}):
+        from tensorscope.core.schema import channel_positions
+
+        if channel_positions(data) is not None:
+            views = [*views, "spatial_map"]
     return views
 
 

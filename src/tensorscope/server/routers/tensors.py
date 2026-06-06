@@ -8,6 +8,7 @@ from tensorscope.core.state import TensorNode
 from tensorscope.pairing.wire import payload_to_dataarray
 from tensorscope.server.models import (
     ApiErrorDTO,
+    ElectrodeLayoutDTO,
     TensorMetaDTO,
     TensorPostDTO,
     TensorSliceDTO,
@@ -48,6 +49,25 @@ def post_tensor(body: TensorPostDTO, session: SessionState = SessionStateDep) ->
 def get_tensor(name: str, session: SessionState = SessionStateDep) -> TensorMetaDTO:
     _, state = session
     return state.tensor_meta(name)
+
+
+@router.get(
+    "/{name}/electrodes",
+    response_model=ElectrodeLayoutDTO,
+    responses={404: {"model": ApiErrorDTO}, 400: {"model": ApiErrorDTO}},
+)
+def get_tensor_electrodes(
+    name: str, session: SessionState = SessionStateDep
+) -> ElectrodeLayoutDTO:
+    """Electrode geometry for a spatial tensor.
+
+    ``geometry`` is ``"grid"`` (dense AP×ML), ``"linear"`` (depth strip), or
+    ``"planar"`` (arbitrary 2-D positions in ``x_coords``/``y_coords``). The
+    scatter spatial view consumes the planar positions; the grid/linear views
+    use ap/ml_coords. KeyError→404 (no tensor), ValueError→400 (no geometry).
+    """
+    _, state = session
+    return state.electrode_layout(name)
 
 
 @router.post(

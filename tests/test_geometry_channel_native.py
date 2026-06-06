@@ -171,6 +171,38 @@ def test_electrode_layout_grid_unchanged() -> None:
     assert state.electrode_layout("ecog").geometry == "grid"
 
 
+def test_planar_probe_advertises_spatial_map_view() -> None:
+    probe = prepare_planar_probe(
+        _flat(100, 5), x=[0, 200, 0, 200, 400], y=[0, 0, 100, 100, 50], fs=500.0,
+    )
+    state = create_server_state(probe, tensor_name="npx4")
+    assert "spatial_map" in state.tensor_meta("npx4").available_views
+
+
+def test_electrodes_http_endpoint_planar_and_grid() -> None:
+    """GET /tensors/{name}/electrodes serves geometry for the scatter view."""
+    from fastapi.testclient import TestClient
+
+    from tensorscope.server.app import create_app
+
+    probe = prepare_planar_probe(
+        _flat(100, 4), x=[0, 1, 2, 3], y=[0, 0, 1, 1], fs=500.0,
+    )
+    app = create_app({"npx": probe, "ecog": _grid()}, tensor_name="npx")
+    client = TestClient(app)
+
+    planar = client.get("/api/v1/tensors/npx/electrodes").json()
+    assert planar["geometry"] == "planar"
+    assert planar["x_coords"] == [0, 1, 2, 3]
+    assert planar["y_coords"] == [0, 0, 1, 1]
+
+    grid = client.get("/api/v1/tensors/ecog/electrodes").json()
+    assert grid["geometry"] == "grid"
+    assert grid["x_coords"] is None  # positions only for planar
+
+    assert client.get("/api/v1/tensors/missing/electrodes").status_code == 404
+
+
 # ── end-to-end: the flat views work on a non-grid probe ───────────────────
 
 
