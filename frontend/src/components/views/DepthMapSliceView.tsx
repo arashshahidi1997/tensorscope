@@ -21,7 +21,7 @@ export function DepthMapSliceView({ slice, tensorName }: SliceViewProps & { tens
   const depthCsd = useAppStore((s) => s.depthCsd);
   const toggleDepthCsd = useAppStore((s) => s.toggleDepthCsd);
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+    <div style={{ height: "100%", display: "flex", flexDirection: "column" }} data-testid="depth-panel">
       <div className="ts-toolbar" style={{ fontSize: 11, color: "#8b949e", gap: 8 }}>
         <button
           type="button"
