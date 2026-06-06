@@ -2,10 +2,13 @@ import { useEffect, useMemo, useRef } from "react";
 import { decodeArrowSlice, extractSpectrogram, type Spectrogram } from "../../api/arrow";
 import { useHeatmapGestures } from "../../hooks/useHeatmapGestures";
 import { useAppStore } from "../../store/appStore";
+import { useViewportStore } from "../../store/viewportStore";
 import type { SliceViewProps } from "./viewTypes";
 import { XTicks, YTicks } from "./AxisTicks";
 import { CrosshairOverlay } from "./CrosshairOverlay";
 import { TimeScaleBar } from "./ChartToolbar";
+import { ColorScaleOverlay } from "./ColorBar";
+import { CoordReadout, fmtTime, fmtFreq, joinCoords } from "./CoordReadout";
 import { getColormapLUT } from "./colormaps";
 
 // ── Colormap ─────────────────────────────────────────────────────────────────
@@ -51,6 +54,16 @@ export function SpectrogramView({
   const freqLogScale = useAppStore((s) => s.freqLogScale);
   const toggleFreqLogScale = useAppStore((s) => s.toggleFreqLogScale);
 
+  // Match the timeseries' plot-area insets so the spectrogram's data region
+  // (and time axis) lines up vertically with the traces above it. The
+  // timeseries publishes its uPlot gutters; we pad the canvas-wrap to the same
+  // left/right. SPEC_LEFT_GUTTER is the wrap's own y-label+ticks columns
+  // (14+40px) — only the *extra* left gutter is added as padding.
+  const SPEC_LEFT_GUTTER = 54;
+  const timeAxisInset = useViewportStore((s) => s.timeAxisInset);
+  const padLeft = timeAxisInset ? Math.max(0, timeAxisInset.left - SPEC_LEFT_GUTTER) : 0;
+  const padRight = timeAxisInset ? Math.max(0, timeAxisInset.right) : 0;
+
   // Stable callback refs
   const onSelectTimeRef = useRef(onSelectTime);
   const onSelectFreqRef = useRef(onSelectFreq);
@@ -80,6 +93,8 @@ export function SpectrogramView({
     yRange: [dataFMin, dataFMax],
     onSelectX: (t) => onSelectTimeRef.current?.(t),
     onSelectY: (f) => onSelectFreqRef.current?.(f),
+    // Log-freq toggle → click/hover must map on the same scale as the canvas.
+    yLog: freqLogScale,
     onXRangeChange: (range) => onTimeWindowChangeRef.current?.(range),
     // Externally-driven viewport — store's authoritative `timeWindow` (e.g.
     // SSE-driven agent set_selection, navigator brush). Pins the X axis to
@@ -155,7 +170,9 @@ export function SpectrogramView({
       }
     }
     ctx.putImageData(imgData, 0, 0);
-  }, [times, freqs, values, viewport, freqLogScale, colorRange]);
+    // padLeft/padRight change the canvas-area width (to match the timeseries
+    // plot region) → re-run so the canvas re-measures its parent and repaints.
+  }, [times, freqs, values, viewport, freqLogScale, colorRange, padLeft, padRight]);
 
   // Rules of Hooks: all hooks above, conditional return below
   if (!selection || times.length === 0 || freqs.length === 0) {
@@ -172,6 +189,36 @@ export function SpectrogramView({
   // must use the SAME predicate or ticks render on a log scale over a linearly
   // painted canvas.
   const useLogAxis = freqLogScale && fLo > 0;
+
+  // Effective spectral params caption (spectral-window decoupling). The window
+  // length fixes the frequency resolution and stays constant across zoom; the
+  // segment cap can lower the *effective* overlap on wide views, shown amber
+  // with the requested value so it doesn't look like the control was ignored.
+  // Rendered as a corner annotation rather than inside `.ts-toolbar`, so the
+  // gesture bar stays a narrow, right-flush button column like the timeseries
+  // toolbar (a wide nowrap span here pushed the buttons off the right edge).
+  const specCaption = (() => {
+    const sm = v2Data?.specMeta;
+    if (!sm) return null;
+    const ov = sm.overlapPctEffective;
+    const req = sm.overlapPctRequested;
+    const win = sm.npersegS;
+    const capped = sm.capActive === true && ov != null && req != null;
+    const parts: string[] = [];
+    if (win != null) parts.push(`win ${win >= 1 ? win.toFixed(1) : win.toFixed(2)}s`);
+    if (ov != null) {
+      parts.push(`ov ${Math.round(ov)}%${capped && req != null ? ` (req ${Math.round(req)}%)` : ""}`);
+    }
+    if (parts.length === 0) return null;
+    let title = "Spectral window length (sets frequency resolution) · inter-segment overlap";
+    if (capped && ov != null && req != null) {
+      title =
+        `Segment cap widened the hop: effective overlap ${Math.round(ov)}% ` +
+        `(requested ${Math.round(req)}%)` +
+        (win != null ? `. Frequency resolution still reflects the ${win.toFixed(2)} s window.` : ".");
+    }
+    return { text: parts.join(" · "), capped, title };
+  })();
 
   return (
     <div ref={wrapRef} style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column" }}>
@@ -206,51 +253,10 @@ export function SpectrogramView({
           aria-label="Toggle log frequency"
           aria-pressed={freqLogScale}
         >log</button>
-        {/* Effective spectral params (spectral-window decoupling). The window
-            length fixes the frequency resolution and stays constant across zoom;
-            the segment cap can lower the *effective* overlap on wide views, shown
-            amber with the requested value so it doesn't look like the control was
-            ignored. */}
-        {(() => {
-          const sm = v2Data?.specMeta;
-          if (!sm) return null;
-          const ov = sm.overlapPctEffective;
-          const req = sm.overlapPctRequested;
-          const win = sm.npersegS;
-          const capped = sm.capActive === true && ov != null && req != null;
-          const parts: string[] = [];
-          if (win != null) parts.push(`win ${win >= 1 ? win.toFixed(1) : win.toFixed(2)}s`);
-          if (ov != null) {
-            parts.push(`ov ${Math.round(ov)}%${capped && req != null ? ` (req ${Math.round(req)}%)` : ""}`);
-          }
-          if (parts.length === 0) return null;
-          let title = "Spectral window length (sets frequency resolution) · inter-segment overlap";
-          if (capped && ov != null && req != null) {
-            title =
-              `Segment cap widened the hop: effective overlap ${Math.round(ov)}% ` +
-              `(requested ${Math.round(req)}%)` +
-              (win != null ? `. Frequency resolution still reflects the ${win.toFixed(2)} s window.` : ".");
-          }
-          return (
-            <span
-              style={{
-                marginLeft: "auto",
-                fontSize: 11,
-                color: capped ? "#d29922" : "#8b949e",
-                whiteSpace: "nowrap",
-                paddingRight: 4,
-              }}
-              title={title}
-              data-testid="spec-effective-overlap"
-            >
-              {parts.join(" · ")}
-            </span>
-          );
-        })()}
       </div>
 
       {/* Spectrogram with axes */}
-      <div className="axis-canvas-wrap" style={{ flex: 1, minHeight: 0 }}>
+      <div className="axis-canvas-wrap" style={{ flex: 1, minHeight: 0, paddingLeft: padLeft, paddingRight: padRight }}>
         <div className="axis-y-label">Freq (Hz)</div>
         <YTicks lo={fLo} hi={fHi} logScale={useLogAxis} />
         <div className="axis-canvas-area">
@@ -291,6 +297,35 @@ export function SpectrogramView({
           )}
           {/* Cross-view hover crosshair (Bokeh-style inspector). */}
           <CrosshairOverlay tLo={tLo} tHi={tHi} fLo={fLo} fHi={fHi} freqLog={useLogAxis} />
+          {/* Compact value legend — overlaid (no layout width) so the time axis
+              stays aligned with the timeseries. */}
+          <ColorScaleOverlay colormap="viridis" min={colorRange.cMin} max={colorRange.cMax} label="power" />
+          {/* Selected coordinate readout (time · freq). */}
+          <CoordReadout text={joinCoords([fmtTime(selection.time), fmtFreq(selection.freq)])} />
+          {/* Effective spectral-params caption — top-left corner annotation
+              (least-interesting band) so the gesture toolbar stays narrow. */}
+          {specCaption && (
+            <div
+              data-testid="spec-effective-overlap"
+              title={specCaption.title}
+              style={{
+                position: "absolute",
+                top: 4,
+                left: 4,
+                fontSize: 11,
+                lineHeight: 1.3,
+                color: specCaption.capped ? "#d29922" : "#8b949e",
+                background: "rgba(13,17,23,0.66)",
+                padding: "1px 6px",
+                borderRadius: 4,
+                whiteSpace: "nowrap",
+                pointerEvents: "none",
+                userSelect: "none",
+              }}
+            >
+              {specCaption.text}
+            </div>
+          )}
         </div>
         <XTicks lo={tLo} hi={tHi} />
         <div className="axis-x-label">Time (s)</div>

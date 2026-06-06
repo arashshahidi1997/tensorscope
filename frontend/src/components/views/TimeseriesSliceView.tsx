@@ -1,13 +1,18 @@
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import { extractTimeseriesColumnarFast, type ColumnarTimeseries } from "../../api/arrow";
+import { extractTimeseriesColumnarFast, type ColumnarTimeseries, type Raster } from "../../api/arrow";
 import { buildRegionResolver } from "../../api/probeLayout";
+import { getColormapLUT } from "./colormaps";
+import { unmaskedRasterRange } from "./colorRange";
 import { useProbeLayoutQuery } from "../../api/queries";
 import { useAppStore, type BandPreset } from "../../store/appStore";
 import { useViewportStore } from "../../store/viewportStore";
 import { useChannelViewportShortcuts } from "./useChannelViewportShortcuts";
 import { CrosshairOverlay } from "./CrosshairOverlay";
+import { ColorScaleOverlay } from "./ColorBar";
+import { CoordReadout, fmtTime } from "./CoordReadout";
 import type { BrainstateIntervalDTO, EventRecordDTO } from "../../api/types";
 import type { SliceViewProps } from "./viewTypes";
 import { ChartToolbar } from "./ChartToolbar";
@@ -20,6 +25,9 @@ import { resolveEventSpan } from "./eventFilterLogic";
 import { restackBandpassToRawMean } from "./timeseriesBandpass";
 
 const COLORS = ["#d3ff68", "#73d2de", "#ff9770", "#c492ff", "#f4d35e", "#8bd450", "#ff6b9d", "#a8e6cf"];
+
+// Raster display-mode colormap (channel×time amplitude heatmap drawn in-plot).
+const RASTER_LUT = getColormapLUT("viridis");
 
 function formatRelativeTime(seconds: number): string {
   const abs = Math.abs(seconds);
@@ -256,6 +264,7 @@ export function TimeseriesSliceView({
   onTimeWindowChange,
   timeWindow,
   dataRange,
+  rasterData,
 }: Omit<SliceViewProps, "slice"> & {
   /** v2-only: present for v1-staying callers, omitted once `v2Data` drives the view. */
   slice?: SliceViewProps["slice"];
@@ -284,10 +293,23 @@ export function TimeseriesSliceView({
   eventsByStream?: Map<string, EventRecordDTO[]>;
   streamColors?: Map<string, string>;
   coincidentTimes?: number[];
+  /**
+   * Decoded channel×time raster (all channels). Present only while the panel's
+   * display mode is "raster" — see useAppStore.timeseriesDisplayMode. When set
+   * (and non-empty), the view draws this as a heatmap in the uPlot plot area
+   * instead of stacked traces, sharing the time x-axis / cursor / event overlay.
+   */
+  rasterData?: Raster | null;
 }) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<uPlot | null>(null);
   const chartCleanupRef = useRef<(() => void) | null>(null);
+  // uPlot's `.u-over` element — exactly covers the plot area (inset by the
+  // Y-axis gutter). The cross-view hover crosshair is portaled into it so the
+  // line aligns with the data instead of mapping over the full panel width,
+  // which shifted it left by the axis gutter. See CrosshairOverlay usage below.
+  const [overEl, setOverEl] = useState<HTMLDivElement | null>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const reconcileRafRef = useRef<number | null>(null);
   const initializedRef = useRef(false);
@@ -329,6 +351,84 @@ export function TimeseriesSliceView({
   useEffect(() => { brainstateEnabledRef.current = brainstateOverlayEnabled; });
 
   const tools = useChartTools(chartRef);
+
+  // ── Raster display mode ───────────────────────────────────────────────────
+  // The panel can render an all-channel channel×time amplitude heatmap inside
+  // the SAME uPlot plot area instead of stacked traces, so it shares the time
+  // x-axis / cursor / event overlay (and lines up with the spectrogram). The
+  // heatmap is blitted in a uPlot draw hook from a cached offscreen image.
+  const displayMode = useAppStore((s) => s.timeseriesDisplayMode);
+  const setDisplayMode = useAppStore((s) => s.setTimeseriesDisplayMode);
+  const isRaster = displayMode === "raster" && !!rasterData && rasterData.nChannels > 0;
+  const isRasterRef = useRef(isRaster);
+  const rasterDataRef = useRef<Raster | null>(rasterData ?? null);
+  const rasterImageRef = useRef<HTMLCanvasElement | null>(null);
+  // Color range of the raster image (for the overlay value legend).
+  const [rasterRange, setRasterRange] = useState<[number, number] | null>(null);
+  useEffect(() => { isRasterRef.current = isRaster; });
+
+  // Render the raster to an offscreen canvas at native (nTime × nChannels)
+  // resolution; the draw hook blits it scaled (nearest-neighbour) into the
+  // plot area. Row 0 = first channel (depth-sorted) → drawn at the top.
+  const buildRasterImage = () => {
+    const rd = rasterDataRef.current;
+    if (!rd || rd.nChannels === 0 || rd.nTime === 0) {
+      rasterImageRef.current = null;
+      setRasterRange(null);
+      return;
+    }
+    const { nChannels, nTime, values, channels } = rd;
+    const [min, max] = unmaskedRasterRange(values, channels, nTime, undefined);
+    setRasterRange([min, max]);
+    const span = max - min || 1;
+    const off = document.createElement("canvas");
+    off.width = nTime;
+    off.height = nChannels;
+    const octx = off.getContext("2d");
+    if (!octx) {
+      rasterImageRef.current = null;
+      return;
+    }
+    const img = octx.createImageData(nTime, nChannels);
+    for (let r = 0; r < nChannels; r++) {
+      for (let c = 0; c < nTime; c++) {
+        const v = values[r * nTime + c];
+        const px = (r * nTime + c) * 4;
+        if (!Number.isFinite(v)) {
+          img.data[px] = 20; img.data[px + 1] = 20; img.data[px + 2] = 20; img.data[px + 3] = 255;
+          continue;
+        }
+        const t = Math.max(0, Math.min(1, (v - min) / span));
+        const li = Math.round(t * 255) * 4;
+        img.data[px] = RASTER_LUT[li];
+        img.data[px + 1] = RASTER_LUT[li + 1];
+        img.data[px + 2] = RASTER_LUT[li + 2];
+        img.data[px + 3] = 255;
+      }
+    }
+    octx.putImageData(img, 0, 0);
+    rasterImageRef.current = off;
+  };
+
+  const drawRasterHeatmap = (u: uPlot) => {
+    if (!isRasterRef.current) return;
+    const rd = rasterDataRef.current;
+    const img = rasterImageRef.current;
+    if (!rd || !img || rd.nTime === 0) return;
+    const { left, top, width, height } = u.bbox; // device px
+    // Map the raster's first/last column times through the x-scale so the
+    // heatmap lines up with the traces' (and spectrogram's) time axis exactly.
+    const x0 = u.valToPos(rd.times[0], "x", true);
+    const x1 = u.valToPos(rd.times[rd.times.length - 1], "x", true);
+    const ctx = u.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(left, top, width, height);
+    ctx.clip();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, 0, 0, rd.nTime, rd.nChannels, x0, top, x1 - x0, height);
+    ctx.restore();
+  };
 
   // G7: probe-layout sidecar. Drives region-aware channel labels in the
   // drawAxes hook below. Resolved against series keys so a (time,channel)
@@ -433,9 +533,14 @@ export function TimeseriesSliceView({
   const regionTagsRef = useRef<Array<string | null> | null>(regionTags);
   useEffect(() => { regionTagsRef.current = regionTags; });
 
+  // Includes the display mode + raster channel count so toggling traces⇄raster
+  // (or a channel-count change) recreates uPlot with the right axes/series.
   const structuralKey = useMemo(
-    () => series.map((s) => `${s.key}:${s.label}`).join("|"),
-    [series],
+    () =>
+      isRaster
+        ? `raster:${rasterData?.nChannels ?? 0}`
+        : series.map((s) => `${s.key}:${s.label}`).join("|"),
+    [isRaster, rasterData?.nChannels, series],
   );
 
   /**
@@ -509,6 +614,11 @@ export function TimeseriesSliceView({
   };
 
   const buildChartData = (): [Float64Array, ...Float32Array[]] | null => {
+    // Raster mode: a single x-column (the raster's time grid); the heatmap is
+    // painted in the draw hook, so there are no y-series.
+    if (isRaster && rasterData) {
+      return [new Float64Array(rasterData.times)];
+    }
     if (times.length === 0 || series.length === 0) return null;
     // "auto": re-fit the gain to every payload (per-window adaptive fill).
     // "fit": fit ONCE (the first payload, or after a re-arm), then hold the
@@ -548,6 +658,7 @@ export function TimeseriesSliceView({
     chartCleanupRef.current = null;
     chartRef.current = null;
     initializedRef.current = false;
+    setOverEl(null);
   };
 
   const reconcileChartSize = () => {
@@ -564,10 +675,28 @@ export function TimeseriesSliceView({
     }
 
     readinessRef.current = "ready";
+    publishTimeAxisInset();
     return true;
   };
 
+  // Publish the uPlot plot-area insets (left/right px, relative to this view's
+  // root) so the spectrogram can match its data region to ours — see
+  // viewportStore.timeAxisInset. Measured off chart.over (the exact plot rect).
+  const publishTimeAxisInset = () => {
+    const chart = chartRef.current;
+    const root = rootRef.current;
+    if (!chart || !root) return;
+    const o = chart.over.getBoundingClientRect();
+    const r = root.getBoundingClientRect();
+    if (o.width <= 0 || r.width <= 0) return;
+    useViewportStore.getState().setTimeAxisInset({
+      left: o.left - r.left,
+      right: r.right - o.right,
+    });
+  };
+
   const applyGain = () => {
+    if (isRasterRef.current) return; // raster mode has no trace series to scale
     const chart = chartRef.current;
     const raw = rawDataRef.current;
     if (!chart || !raw) return;
@@ -625,12 +754,19 @@ export function TimeseriesSliceView({
               sync: { key: "tsscope-time" },
             },
             scales: {
-              y: {
-                range: (_u: uPlot, dataMin: number, dataMax: number): [number, number] => {
-                  if (yLockedRef.current) return yLockedRef.current;
-                  return [dataMin, dataMax];
-                },
-              },
+              y: isRaster
+                ? {
+                    // Channel-index domain. Orientation (channel 0 at top) is
+                    // set by the heatmap blit, not this scale — y ticks are
+                    // hidden — so a plain [0, n] range is fine.
+                    range: (): [number, number] => [0, Math.max(1, rasterDataRef.current?.nChannels ?? 1)],
+                  }
+                : {
+                    range: (_u: uPlot, dataMin: number, dataMax: number): [number, number] => {
+                      if (yLockedRef.current) return yLockedRef.current;
+                      return [dataMin, dataMax];
+                    },
+                  },
             },
             axes: [
               {
@@ -641,23 +777,38 @@ export function TimeseriesSliceView({
                 grid: { stroke: "#21262d" },
                 values: (_u: uPlot, vals: number[]) => vals.map((v) => formatRelativeTime(v)),
               },
-              {
-                label: "Amplitude",
-                labelSize: 14,
-                stroke: "#8b949e",
-                ticks: { stroke: "#30363d" },
-                grid: { stroke: "#21262d" },
-              },
+              isRaster
+                ? {
+                    // Reserve a left gutter close to the amplitude axis so the
+                    // plot region barely shifts when toggling modes; channel
+                    // numbers are dense/uninformative so we show the label only.
+                    label: rasterData?.depths ? "Depth" : "Channel",
+                    labelSize: 14,
+                    size: 60,
+                    stroke: "#8b949e",
+                    ticks: { show: false },
+                    grid: { show: false },
+                    values: () => [],
+                  }
+                : {
+                    label: "Amplitude",
+                    labelSize: 14,
+                    stroke: "#8b949e",
+                    ticks: { stroke: "#30363d" },
+                    grid: { stroke: "#21262d" },
+                  },
             ],
-            series: [
-              {},
-              ...series.map((s, i) => ({
-                label: s.label,
-                stroke: COLORS[i % COLORS.length],
-                width: 1.5,
-                spanGaps: false,
-              })),
-            ],
+            series: isRaster
+              ? [{}] // raster: only the x-series; the heatmap is drawn in a hook
+              : [
+                  {},
+                  ...series.map((s, i) => ({
+                    label: s.label,
+                    stroke: COLORS[i % COLORS.length],
+                    width: 1.5,
+                    spanGaps: false,
+                  })),
+                ],
             hooks: {
               setScale: [
                 (u, key) => {
@@ -724,6 +875,9 @@ export function TimeseriesSliceView({
                 makeBrainstateDrawHook(brainstateIntervalsRef, brainstateEnabledRef),
               ],
               draw: [
+                // Raster heatmap (when in raster mode) — drawn first so the
+                // event ticks / coincidence glyphs / cursor below paint on top.
+                drawRasterHeatmap,
                 (u) => {
                   const ctx = u.ctx;
                   const byStream = eventsByStreamRef.current;
@@ -840,6 +994,7 @@ export function TimeseriesSliceView({
         );
 
         chartRef.current = chart;
+        setOverEl(chart.over as HTMLDivElement);
         tools.onChartCreated(chart);
 
         const detachGestures = attachGestures(chart, {
@@ -945,6 +1100,24 @@ export function TimeseriesSliceView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [v2Data, slice?.payload]);
 
+  // Raster: rebuild the offscreen image when the slice changes / mode flips,
+  // then push the x-grid + repaint. When entering raster mode the structuralKey
+  // effect (above) recreates the chart asynchronously; building the image here
+  // synchronously ensures it's ready for that first draw.
+  useEffect(() => {
+    rasterDataRef.current = rasterData ?? null;
+    buildRasterImage();
+    const chart = chartRef.current;
+    if (!chart || !isRaster || !rasterData) return;
+    const range = xRangeRef.current;
+    withSuppressedWindowPublish(() => {
+      chart.setData([new Float64Array(rasterData.times)] as uPlot.AlignedData, false);
+      if (range) chart.batch(() => chart.setScale("x", { min: range[0], max: range[1] }));
+    });
+    chart.redraw();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rasterData, isRaster]);
+
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
@@ -965,6 +1138,12 @@ export function TimeseriesSliceView({
     applyGain();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tools.yMode]);
+
+  // On unmount, drop the published time-axis inset so a timeseries-less layout
+  // (e.g. Spectral) lets the spectrogram fall back to its natural full width.
+  useEffect(() => {
+    return () => useViewportStore.getState().setTimeAxisInset(null);
+  }, []);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -1025,7 +1204,7 @@ export function TimeseriesSliceView({
   }
 
   return (
-    <div style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column" }}>
+    <div ref={rootRef} style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column" }}>
       <ChartToolbar
         activeTool={tools.activeTool}
         onSetTool={tools.setActiveTool}
@@ -1049,6 +1228,8 @@ export function TimeseriesSliceView({
         }}
         yMode={tools.yMode}
         onSetYMode={tools.setYMode}
+        rasterMode={displayMode === "raster"}
+        onToggleRaster={() => setDisplayMode(displayMode === "raster" ? "traces" : "raster")}
       />
       <BandPickerInline bandPreset={bandPreset ?? "off"} bandActive={bandActive ?? null}>
         {focusChannel && (
@@ -1086,9 +1267,15 @@ export function TimeseriesSliceView({
         style={{ width: "100%", height: "100%" }}
         title={`${series.length} ch \u00B7 ${times.length} samples`}
       />
-        {timeWindow && (
-          <CrosshairOverlay tLo={timeWindow[0]} tHi={timeWindow[1]} />
+        {overEl && timeWindow &&
+          createPortal(
+            <CrosshairOverlay tLo={timeWindow[0]} tHi={timeWindow[1]} />,
+            overEl,
+          )}
+        {isRaster && rasterRange && (
+          <ColorScaleOverlay colormap="viridis" min={rasterRange[0]} max={rasterRange[1]} label="amp" />
         )}
+        {selection && <CoordReadout text={fmtTime(selection.time)} />}
         {eventsByStream && eventsByStream.size > 0 && streamColors && (
           <div
             className="ts-event-legend"

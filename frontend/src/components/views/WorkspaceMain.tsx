@@ -28,6 +28,7 @@ import { buildStreamColorMap } from "./eventStreamColors";
 import type { SelectionDTO, TensorSliceRequestDTO } from "../../api/types";
 import { resolveBand, useAppStore } from "../../store/appStore";
 import { useViewportStore } from "../../store/viewportStore";
+import { useLayoutStore } from "../../store/layoutStore";
 import { useTimeNavigation } from "./useTimeNavigation";
 import { resolveTensorForSlot, useWorkspaceData } from "./useWorkspaceData";
 import { getAvailableViews, getOrthoPair, viewRegistry } from "../../registry/viewRegistry";
@@ -132,6 +133,9 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     objectLayoutMode,
     setObjectLayoutMode,
   } = useAppStore();
+  // Collapse the header chrome (tensor pills / metadata / view-pill row /
+  // object strip) to give the view grid more vertical space.
+  const headerCollapsed = useLayoutStore((s) => s.headerCollapsed);
 
   // `onCommitSelection` is a fresh arrow on every App render (App.tsx:68
   // wraps a mutation without useCallback). We don't want it as a memo dep
@@ -537,6 +541,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
           positions={{ x: electrodes.x_coords, y: electrodes.y_coords }}
           values={v2ScatterValues}
           selectedTime={selectionDraft.time}
+          tensorName={tensorForSlot("spatial_map")}
         />
       ) : (
         <div className="placeholder">Loading…</div>
@@ -811,20 +816,24 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
 
   return (
     <div className="content-stack">
-      {/* Tensor + view selector */}
-      <TensorChooser
-        tensors={stateQuery.data?.tensors ?? []}
-        selectedTensor={selectedTensor ?? stateQuery.data?.active_tensor ?? ""}
-        onSelectTensor={setSelectedTensor}
-      />
-      {tensorQuery.data ? (
-        <TensorOverview
-          tensor={tensorQuery.data}
-          availableViews={availableViews}
-          activeViews={activeViews}
-          onToggleView={(v) => toggleView(v, availableViews)}
-        />
-      ) : null}
+      {/* Tensor + view selector — collapsible header chrome (Ctrl+H). */}
+      {!headerCollapsed && (
+        <>
+          <TensorChooser
+            tensors={stateQuery.data?.tensors ?? []}
+            selectedTensor={selectedTensor ?? stateQuery.data?.active_tensor ?? ""}
+            onSelectTensor={setSelectedTensor}
+          />
+          {tensorQuery.data ? (
+            <TensorOverview
+              tensor={tensorQuery.data}
+              availableViews={availableViews}
+              activeViews={activeViews}
+              onToggleView={(v) => toggleView(v, availableViews)}
+            />
+          ) : null}
+        </>
+      )}
 
       {/* Navigator inline fallback — shown when no bottom panel render prop */}
       {!renderNavigator && v2NavigatorData && (
@@ -851,8 +860,8 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         </>
       )}
 
-      {/* Workspace object chips */}
-      {workspaceObjects.length > 1 && (
+      {/* Workspace object chips — part of the collapsible header chrome. */}
+      {!headerCollapsed && workspaceObjects.length > 1 && (
         <div className="workspace-object-strip">
           <div className="object-layout-toggle">
             {(["single", "row", "column"] as const).map((m) => (

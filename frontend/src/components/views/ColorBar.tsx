@@ -12,6 +12,7 @@
  * the width footprint.
  */
 import { useEffect, useRef } from "react";
+import type { CSSProperties } from "react";
 import type { ColormapName } from "./colormaps";
 import { getColormapLUT } from "./colormaps";
 import { formatTickLabel } from "./AxisTicks";
@@ -94,6 +95,13 @@ export function ColorBar({
         flexDirection: "row",
         alignItems: "stretch",
         gap: 4,
+        // The end tick labels are centered on the bar's top/bottom edges
+        // (bottom:0%/100% + translateY(50%)), so each pokes ~half a line-height
+        // outside the bar. Without this inset that overflow pushed the panel
+        // body's scrollHeight past its height → a stray vertical scrollbar on
+        // the spatial panels. Reserve room so the labels stay within the box.
+        padding: "8px 0",
+        boxSizing: "border-box",
       }}
     >
       {label && (
@@ -155,6 +163,54 @@ export function ColorBar({
           </span>
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * ColorScaleOverlay — a compact ColorBar floated *inside* a plot's area as an
+ * absolute overlay, so it adds a value legend WITHOUT consuming layout width
+ * (which would shrink the plot and break the timeseries↔spectrogram time-axis
+ * alignment). Used by the spectrogram and the timeseries raster mode. The host
+ * must be `position: relative`. `pointer-events: none` so clicks/hover still
+ * reach the canvas beneath.
+ */
+export function ColorScaleOverlay({
+  colormap,
+  min,
+  max,
+  label,
+  style,
+}: {
+  colormap: ColormapName;
+  min: number;
+  max: number;
+  label?: string;
+  /** Position override (defaults to the top-right corner of the plot). */
+  style?: CSSProperties;
+}) {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null;
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: "absolute",
+        top: 8,
+        bottom: 8,
+        right: 6,
+        zIndex: 6,
+        pointerEvents: "none",
+        display: "flex",
+        alignItems: "stretch",
+        background: "rgba(13,17,23,0.55)",
+        border: "1px solid rgba(148,163,184,0.18)",
+        borderRadius: 4,
+        padding: "0 3px",
+        backdropFilter: "blur(1px)",
+        ...style,
+      }}
+    >
+      <ColorBar colormap={colormap} min={min} max={max} label={label} tickCount={3} barWidth={9} />
     </div>
   );
 }

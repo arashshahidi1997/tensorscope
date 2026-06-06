@@ -46,20 +46,17 @@ export const DEFAULT_SLOT_LAYOUT: ViewSlotLayout = {
         // preset). Width matches the signal-row spatial_map (0.4).
         { viewId: "psd_spatial", region: "right", widthFraction: 0.4 },
       ],
-      minHeight: 240,
-    },
-    {
-      id: "raster",
-      label: "Raster",
-      // 0.6 (left) so the raster's time axis lines up with the timeseries /
-      // spectrogram above — all three share the same time x-axis.
-      slots: [{ viewId: "raster", region: "left", widthFraction: 0.6 }],
-      minHeight: 220,
+      // Match the signal row (360) so the spectrogram has more height AND the
+      // psd_spatial map renders the same size as the signal-row spatial_map
+      // (rows share an equal flex-grow, so an equal basis ⇒ equal heights).
+      minHeight: 360,
     },
     {
       id: "event",
       label: "Event",
-      slots: [{ viewId: "event_average", region: "left", widthFraction: 1.0 }],
+      // 0.6 (left) to match the timeseries/spectrogram column — the triggered
+      // average concentrates near lag 0, so full width was unnecessarily wide.
+      slots: [{ viewId: "event_average", region: "left", widthFraction: 0.6 }],
       minHeight: 220,
     },
     {
@@ -129,7 +126,8 @@ export const SPECTRAL_LAYOUT: ViewSlotLayout = {
 
 /**
  * Events — review/triggered-stats: traces with the event overlay, plus the
- * event-triggered average beside the raster.
+ * event-triggered average. (Raster is now a display mode of the timeseries
+ * panel — toggle it on the traces toolbar.)
  */
 export const EVENTS_LAYOUT: ViewSlotLayout = {
   rows: [
@@ -144,7 +142,6 @@ export const EVENTS_LAYOUT: ViewSlotLayout = {
       label: "Triggered",
       slots: [
         { viewId: "event_average", region: "left", widthFraction: 0.6 },
-        { viewId: "raster", region: "right", widthFraction: 0.4 },
       ],
       minHeight: 240,
     },

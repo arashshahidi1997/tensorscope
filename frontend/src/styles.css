@@ -1487,7 +1487,11 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
 }
 
 .view-slot--hidden {
-  visibility: hidden;
+  /* display:none (not visibility:hidden) so a hidden slot is removed from the
+   * flex flow entirely — otherwise the row's `gap` still reserves 4px around a
+   * zero-width hidden slot, which shifted the spectrogram 4px right of the
+   * timeseries (a hidden `spectrogram_live` slot sits before it). */
+  display: none;
   height: 0;
   overflow: hidden;
   flex: 0 0 0 !important;

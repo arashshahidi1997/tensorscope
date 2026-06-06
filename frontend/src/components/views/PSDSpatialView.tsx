@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { extractPSDSpatialV2, type LabeledTensor } from "../../api/v2-arrow";
 import { useAppStore } from "../../store/appStore";
+import { useSelectionStore } from "../../store/selectionStore";
 import { useMaskStore } from "../../store/maskStore";
 import { ChannelGridRenderer } from "./ChannelGridRenderer";
 import { ColorBar } from "./ColorBar";
+import { CoordReadout, joinCoords } from "./CoordReadout";
 import { unmaskedCellRange } from "./colorRange";
 import type { SpatialCellWithId } from "./SpatialRenderer";
 
@@ -61,12 +63,17 @@ export function PSDSpatialView({ v2, selectedFreq, onSelectFreq, onSelectCell, t
     nMLRef.current = 0;
   }
 
+  // Shared hovered electrode — highlight the cell under the cursor, linked with
+  // the signal-row spatial_map (hovering either highlights the same cell).
+  const storeHovered = useSelectionStore((s) => s.spatial.hoveredId);
+  const setHoveredElectrode = useSelectionStore((s) => s.setHoveredElectrode);
+
   const renderGrid = useCallback(() => {
     rendererRef.current.render(cellsRef.current, {
       nAP: nAPRef.current,
       nML: nMLRef.current,
       colorScale: "sequential",
-      hoveredId: null,
+      hoveredId: storeHovered ?? null,
       selectedIds: [],
       minValue: minValueRef.current,
       maxValue: maxValueRef.current,
@@ -78,7 +85,7 @@ export function PSDSpatialView({ v2, selectedFreq, onSelectFreq, onSelectCell, t
       squareCells: true,
       maskedIds: maskedSet,
     });
-  }, [maskedSet]);
+  }, [maskedSet, storeHovered]);
 
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
@@ -134,19 +141,62 @@ export function PSDSpatialView({ v2, selectedFreq, onSelectFreq, onSelectCell, t
     [onSelectCell],
   );
 
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    setHoveredElectrode(rendererRef.current.hitTest(e.clientX - rect.left, e.clientY - rect.top));
+  }, [setHoveredElectrode]);
+  const handleMouseLeave = useCallback(() => setHoveredElectrode(null), [setHoveredElectrode]);
+
   if (rawCells.length === 0) return null;
+
+  // Constrain the canvas to the AP×ML aspect ratio and center it — identical to
+  // the signal-row spatial_map — so the two spatial panels render at the same
+  // size/shape (not stretched to fill the taller spectral row).
+  const aspectRatio = (nMLRef.current || 1) / (nAPRef.current || 1);
 
   return (
     <div style={{ display: "flex", width: "100%", height: "100%", gap: 4 }}>
     <div className="axis-canvas-wrap" style={{ flex: 1, minHeight: 0 }} title="PSD spatial power at selected frequency">
       <div className="axis-y-label">AP</div>
       <div className="axis-y-ticks" />
-      <div ref={containerRef} className="axis-canvas-area">
-        <canvas
-          ref={canvasRef}
-          style={{ display: "block", width: "100%", height: "100%" }}
-          onClick={handleClick}
-        />
+      <div className="axis-canvas-area" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+        {(() => {
+          const nML = nMLRef.current || 1;
+          const hovering = storeHovered != null;
+          const ap = hovering ? Math.floor(storeHovered! / nML) : null;
+          const ml = hovering ? storeHovered! % nML : null;
+          return (
+            <CoordReadout
+              muted={!hovering}
+              text={joinCoords([
+                ap != null ? `AP ${ap}` : null,
+                ml != null ? `ML ${ml}` : null,
+                Number.isFinite(selectedFreq) && selectedFreq > 0 ? `${selectedFreq.toFixed(1)} Hz` : null,
+              ])}
+            />
+          );
+        })()}
+        <div
+          ref={containerRef}
+          style={{
+            position: "relative",
+            aspectRatio: `${aspectRatio}`,
+            maxWidth: "100%",
+            maxHeight: "100%",
+            width: aspectRatio >= 1 ? "100%" : "auto",
+            height: aspectRatio < 1 ? "100%" : "auto",
+          }}
+        >
+          <canvas
+            ref={canvasRef}
+            style={{ display: "block", width: "100%", height: "100%" }}
+            onClick={handleClick}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
+          />
+        </div>
       </div>
       <div className="axis-x-ticks" />
       <div className="axis-x-label">ML</div>

@@ -47,12 +47,14 @@ export function LayoutShell({
     inspectorCollapsed,
     bottomPanelHeight,
     bottomPanelCollapsed,
+    headerCollapsed,
     setSidebarWidth,
     toggleSidebar,
     setInspectorWidth,
     toggleInspector,
     setBottomPanelHeight,
     toggleBottomPanel,
+    toggleHeader,
   } = useLayoutStore();
 
   // Register keyboard shortcuts
@@ -127,6 +129,17 @@ export function LayoutShell({
           <LayoutPresetPicker />
           <GridLayoutPicker />
           <span className="topbar-chip muted">{sessionId.slice(0, 8)}</span>
+          <button
+            className={`collapse-toggle${headerCollapsed ? " active" : ""}`}
+            onClick={toggleHeader}
+            aria-label={headerCollapsed ? "Show workspace header" : "Hide workspace header"}
+            aria-pressed={headerCollapsed}
+            title="Toggle workspace header (tensor pills / view toggles) for more plot space (Ctrl+H)"
+            type="button"
+          >
+            {/* Collapse-up-to-bar glyph; filled when collapsed. */}
+            {headerCollapsed ? "↑" : "↥"}
+          </button>
           <button
             className="collapse-toggle bottom-toggle"
             onClick={toggleBottomPanel}

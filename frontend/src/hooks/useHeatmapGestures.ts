@@ -15,6 +15,12 @@ function scrollToWheelZoom(s: ScrollTool): boolean {
   return s === "wheel_zoom";
 }
 
+// Max pointer travel (px) between mousedown and mouseup that still counts as a
+// click (selects time/freq) rather than a box-zoom drag. Real clicks routinely
+// jitter a few px; without this slop a slightly-draggy click triggered a tiny
+// box-zoom instead of selecting — so the frequency cursor never stuck.
+const CLICK_SLOP = 6;
+
 // ── Public types ─────────────────────────────────────────────────────────────
 
 export type HeatmapGestureOptions = {
@@ -35,6 +41,12 @@ export type HeatmapGestureOptions = {
    * Does NOT call onXRangeChange (one-way: external → viewport).
    */
   externalXRange?: [number, number];
+  /**
+   * When true, the Y axis is displayed on a log10 scale (spectrogram log-freq
+   * toggle), so click / hover must map pixel→value logarithmically to match the
+   * painted canvas, ticks, and cursor. Falls back to linear when yLo ≤ 0.
+   */
+  yLog?: boolean;
 };
 
 export type HeatmapViewport = {
@@ -56,7 +68,7 @@ export type HeatmapGestureResult = {
 // ── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useHeatmapGestures(opts: HeatmapGestureOptions): HeatmapGestureResult {
-  const { canvasRef, xRange, yRange, onSelectX, onSelectY, onXRangeChange, externalXRange } = opts;
+  const { canvasRef, xRange, yRange, onSelectX, onSelectY, onXRangeChange, externalXRange, yLog } = opts;
 
   const [xMin, xMax] = xRange;
   const [yMin, yMax] = yRange;
@@ -83,8 +95,10 @@ export function useHeatmapGestures(opts: HeatmapGestureOptions): HeatmapGestureR
   );
   const toolRef = useRef<"zoom" | "pan">(activeTool);
   const wheelZoomRef = useRef(wheelZoom);
+  const yLogRef = useRef(!!yLog);
   useEffect(() => { toolRef.current = activeTool; }, [activeTool]);
   useEffect(() => { wheelZoomRef.current = wheelZoom; }, [wheelZoom]);
+  useEffect(() => { yLogRef.current = !!yLog; }, [yLog]);
 
   // Viewport state
   const [viewport, setViewport] = useState<HeatmapViewport>({
@@ -139,13 +153,25 @@ export function useHeatmapGestures(opts: HeatmapGestureOptions): HeatmapGestureR
 
     const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
+    // Pixel-fraction (0 = top) → Y value. Honours the log-freq toggle so a click
+    // on the log-painted spectrogram selects the frequency actually shown there
+    // (top = yHi). Falls back to linear when log is off or yLo ≤ 0.
+    const yFracToVal = (yFrac: number, vp: HeatmapViewport) => {
+      if (yLogRef.current && vp.yLo > 0 && vp.yHi > 0) {
+        const logHi = Math.log10(vp.yHi);
+        const logLo = Math.log10(vp.yLo);
+        return Math.pow(10, logHi - yFrac * (logHi - logLo));
+      }
+      return vp.yHi - yFrac * (vp.yHi - vp.yLo);
+    };
+
     const pxToCoords = (clientX: number, clientY: number, vp: HeatmapViewport) => {
       const r = drag.rect;
       const xFrac = clamp((clientX - r.left) / r.width, 0, 1);
       const yFrac = clamp((clientY - r.top) / r.height, 0, 1);
       return {
         x: vp.xLo + xFrac * (vp.xHi - vp.xLo),
-        y: vp.yHi - yFrac * (vp.yHi - vp.yLo), // top = yHi, bottom = yLo
+        y: yFracToVal(yFrac, vp), // top = yHi, bottom = yLo (log-aware)
       };
     };
 
@@ -209,7 +235,15 @@ export function useHeatmapGestures(opts: HeatmapGestureOptions): HeatmapGestureR
       canvas.style.cursor = toolRef.current === "pan" ? "grab" : "crosshair";
       selBox.style.display = "none";
 
-      if (!drag.moved) {
+      // Click vs. drag. Pan: any real move (>3px, drag.moved) pans, so only a
+      // still pointer selects. Zoom: tolerate up to CLICK_SLOP of travel so a
+      // slightly-jittery click still selects (and pins the freq/time cursor)
+      // instead of firing a tiny box-zoom. Deliberate drags (> CLICK_SLOP) zoom.
+      const upDx = Math.abs(e.clientX - drag.startX);
+      const upDy = Math.abs(e.clientY - drag.startY);
+      const isClick =
+        toolRef.current === "pan" ? !drag.moved : upDx <= CLICK_SLOP && upDy <= CLICK_SLOP;
+      if (isClick) {
         // Click — select coordinates
         const c = pxToCoords(e.clientX, e.clientY, viewportRef.current);
         if (Number.isFinite(c.x)) onSelectXRef.current?.(c.x);
@@ -289,7 +323,7 @@ export function useHeatmapGestures(opts: HeatmapGestureOptions): HeatmapGestureR
       const yFrac = (e.clientY - r.top) / r.height;
       if (xFrac < 0 || xFrac > 1 || yFrac < 0 || yFrac > 1) return;
       const time = vp.xLo + xFrac * (vp.xHi - vp.xLo);
-      const freq = vp.yHi - yFrac * (vp.yHi - vp.yLo); // top = yHi
+      const freq = yFracToVal(yFrac, vp); // top = yHi (log-aware)
       useHoverStore.setState({
         hoverTime: Number.isFinite(time) ? time : null,
         hoverFreq: Number.isFinite(freq) ? freq : null,

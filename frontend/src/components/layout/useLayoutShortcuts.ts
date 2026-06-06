@@ -8,6 +8,7 @@ import { useLayoutStore } from "../../store/layoutStore";
  *   Ctrl+B          Toggle sidebar
  *   Ctrl+Shift+B    Toggle inspector
  *   Ctrl+J          Toggle bottom panel
+ *   Ctrl+H          Toggle workspace header (tensor pills / view toggles)
  *   Ctrl+Shift+M    Exit maximize (if maximized)
  *   Escape          Exit maximize (if maximized)
  */
@@ -27,6 +28,9 @@ export function useLayoutShortcuts(): void {
       } else if (e.ctrlKey && !e.shiftKey && e.key === "j") {
         e.preventDefault();
         useLayoutStore.getState().toggleBottomPanel();
+      } else if (e.ctrlKey && !e.shiftKey && e.key === "h") {
+        e.preventDefault();
+        useLayoutStore.getState().toggleHeader();
       } else if (e.ctrlKey && e.shiftKey && e.key === "M") {
         e.preventDefault();
         const { maximizedView, setMaximizedView } = useLayoutStore.getState();

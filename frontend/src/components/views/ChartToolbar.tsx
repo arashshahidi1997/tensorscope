@@ -34,6 +34,9 @@ type ChartToolbarProps = {
   onReset: () => void;
   yMode: YMode;
   onSetYMode: (m: YMode) => void;
+  /** Raster display mode (channel×time heatmap) vs stacked traces. */
+  rasterMode?: boolean;
+  onToggleRaster?: () => void;
 };
 
 export function ChartToolbar({
@@ -44,6 +47,8 @@ export function ChartToolbar({
   onReset,
   yMode,
   onSetYMode,
+  rasterMode,
+  onToggleRaster,
 }: ChartToolbarProps) {
   const inspectors = useGestureStore((s) => s.inspectors);
   const toggleInspector = useGestureStore((s) => s.toggleInspector);
@@ -99,6 +104,19 @@ export function ChartToolbar({
         title="Fit — scale once to fit all channels, then hold"
         onClick={() => onSetYMode("fit")}
       >&#x21D5;</button>
+      {onToggleRaster && (
+        <>
+          <div className="ts-toolbar-sep" />
+          {/* Display mode — stacked traces vs channel×time raster heatmap. */}
+          <button
+            type="button"
+            className={`ts-tool${rasterMode ? " active" : ""}`}
+            title={`Raster ${rasterMode ? "ON" : "OFF"} — show all channels as a channel×time heatmap (shares this time axis)`}
+            aria-pressed={rasterMode}
+            onClick={onToggleRaster}
+          >&#x25A6;</button>
+        </>
+      )}
       <div className="ts-toolbar-sep" />
       {/* Reset action. */}
       <button

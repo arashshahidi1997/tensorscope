@@ -52,6 +52,9 @@ export type LayoutState = {
   inspectorCollapsed: boolean;
   bottomPanelHeight: number;
   bottomPanelCollapsed: boolean;
+  /** Collapse the workspace header chrome (tensor pills + metadata + view-pill
+   *  row + object strip) so the view grid reclaims that ~110px for the plots. */
+  headerCollapsed: boolean;
   viewGridLayout: ViewGridLayout | null;
   maximizedView: string | null;
   activePreset: string | null;
@@ -65,6 +68,7 @@ type LayoutActions = {
   toggleInspector: () => void;
   setBottomPanelHeight: (height: number) => void;
   toggleBottomPanel: () => void;
+  toggleHeader: () => void;
   setViewGridLayout: (layout: ViewGridLayout | null) => void;
   setMaximizedView: (viewId: string | null) => void;
   toggleMaximizeView: (viewId: string) => void;
@@ -109,6 +113,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
       inspectorCollapsed: false,
       bottomPanelHeight: 120,
       bottomPanelCollapsed: false,
+      headerCollapsed: false,
       viewGridLayout: null,
       maximizedView: null,
       activePreset: null,
@@ -126,6 +131,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
       toggleInspector: () => set((s) => ({ inspectorCollapsed: !s.inspectorCollapsed, activePreset: null })),
       setBottomPanelHeight: (height) => set({ bottomPanelHeight: clampBottom(height), activePreset: null }),
       toggleBottomPanel: () => set((s) => ({ bottomPanelCollapsed: !s.bottomPanelCollapsed, activePreset: null })),
+      toggleHeader: () => set((s) => ({ headerCollapsed: !s.headerCollapsed, activePreset: null })),
       setViewGridLayout: (layout) => set({ viewGridLayout: layout, activePreset: null }),
       setMaximizedView: (viewId) => set({ maximizedView: viewId }),
       toggleMaximizeView: (viewId) =>
@@ -166,6 +172,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
         inspectorCollapsed: state.inspectorCollapsed,
         bottomPanelHeight: state.bottomPanelHeight,
         bottomPanelCollapsed: state.bottomPanelCollapsed,
+        headerCollapsed: state.headerCollapsed,
         viewGridLayout: state.viewGridLayout,
         activePreset: state.activePreset,
         // Do NOT persist maximizedView — always start un-maximized

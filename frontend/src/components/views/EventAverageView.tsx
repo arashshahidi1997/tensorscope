@@ -12,7 +12,7 @@
  * registers as `event_average` in the slot layout and is rendered directly
  * from WorkspaceMain (the registry entry is a placeholder).
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   decodeArrowSlice,
   extractEventAverage,
@@ -313,16 +313,32 @@ export function EventAverageView({ tensorName, eventStreams }: EventAverageViewP
     );
   }
 
+  const controlLabel: CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    color: "var(--muted)",
+    fontSize: 12,
+    whiteSpace: "nowrap",
+  };
+
   return (
-    <div style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
-      <div className="ts-toolbar" style={{ flexWrap: "wrap" }}>
-        <label className="ts-tool" style={{ padding: "2px 6px" }}>
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+      {/* Controls sit above the plot, in document flow — not overlaid on the canvas. */}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: 10,
+          padding: "5px 8px",
+          borderBottom: "1px solid var(--border)",
+          flex: "0 0 auto",
+        }}
+      >
+        <label style={controlLabel}>
           stream
-          <select
-            value={streamName ?? ""}
-            onChange={(e) => setStreamName(e.target.value)}
-            style={{ marginLeft: 4 }}
-          >
+          <select value={streamName ?? ""} onChange={(e) => setStreamName(e.target.value)}>
             {eventStreams.map((s) => (
               <option key={s.name} value={s.name}>
                 {s.name} ({s.n_events})
@@ -330,7 +346,7 @@ export function EventAverageView({ tensorName, eventStreams }: EventAverageViewP
             ))}
           </select>
         </label>
-        <label className="ts-tool" style={{ padding: "2px 6px" }}>
+        <label style={controlLabel}>
           pre (s)
           <input
             type="number"
@@ -338,10 +354,10 @@ export function EventAverageView({ tensorName, eventStreams }: EventAverageViewP
             step={0.1}
             value={pre}
             onChange={(e) => setPre(Math.max(0.01, parseFloat(e.target.value) || 0))}
-            style={{ width: 56, marginLeft: 4 }}
+            style={{ width: 56 }}
           />
         </label>
-        <label className="ts-tool" style={{ padding: "2px 6px" }}>
+        <label style={controlLabel}>
           post (s)
           <input
             type="number"
@@ -349,22 +365,21 @@ export function EventAverageView({ tensorName, eventStreams }: EventAverageViewP
             step={0.1}
             value={post}
             onChange={(e) => setPost(Math.max(0.01, parseFloat(e.target.value) || 0))}
-            style={{ width: 56, marginLeft: 4 }}
+            style={{ width: 56 }}
           />
         </label>
-        <label className="ts-tool" style={{ padding: "2px 6px" }}>
+        <label style={controlLabel}>
           agg
           <select
             value={aggregate}
             onChange={(e) => setAggregate(e.target.value as EventAverageAggregate)}
-            style={{ marginLeft: 4 }}
           >
             {AGGREGATES.map((a) => (
               <option key={a} value={a}>{a}</option>
             ))}
           </select>
         </label>
-        <label className="ts-tool" style={{ padding: "2px 6px" }}>
+        <label style={controlLabel}>
           max ev
           <input
             type="number"
@@ -372,25 +387,26 @@ export function EventAverageView({ tensorName, eventStreams }: EventAverageViewP
             step={50}
             value={maxEvents}
             onChange={(e) => setMaxEvents(Math.max(1, parseInt(e.target.value) || 1))}
-            style={{ width: 64, marginLeft: 4 }}
+            style={{ width: 64 }}
           />
         </label>
         <button
           type="button"
           className={`ts-tool${poolChannels ? " active" : ""}`}
+          style={{ width: "auto", height: "auto", padding: "2px 10px" }}
           onClick={() => setPoolChannels((v) => !v)}
           title="Average across channels for a single pooled trace"
         >
           pool
         </button>
-        {traceQuery.isFetching && <span style={{ opacity: 0.6, marginLeft: 6 }}>computing…</span>}
+        {traceQuery.isFetching && <span style={{ opacity: 0.6 }}>computing…</span>}
         {traceQuery.isError && (
-          <span style={{ color: "#ef476f", marginLeft: 6 }}>
+          <span style={{ color: "#ef476f" }}>
             {String((traceQuery.error as Error)?.message ?? "error")}
           </span>
         )}
         {nEventsUsed != null && (
-          <span style={{ opacity: 0.7, marginLeft: 6, fontVariantNumeric: "tabular-nums" }}>
+          <span style={{ opacity: 0.7, fontVariantNumeric: "tabular-nums" }}>
             n = {nEventsUsed}{capped ? ` / ${nEventsTotal} (capped)` : ""}
           </span>
         )}

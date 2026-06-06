@@ -92,7 +92,8 @@ type AppStore = {
   bandCustom: [number, number];
   /**
    * First channel index visible in the timeseries view.
-   * `nVisible` is currently fixed at 32 (perf). See
+   * `nVisible` is currently fixed at 16 (NeuroScope2-style tall/few
+   * traces — see N_VISIBLE in TimeseriesSliceView). See
    * `docs/design/channel-viewport.md` G2.
    */
   tsFirstChannel: number;
@@ -104,6 +105,14 @@ type AppStore = {
    * another cell to swap, hit Escape to clear.
    */
   focusChannel: { ap: number; ml: number } | null;
+  /**
+   * Timeseries panel display mode. "traces" = stacked uPlot line traces
+   * (default). "raster" = an all-channel channel×time amplitude heatmap drawn
+   * inside the SAME uPlot plot area, so it shares the time x-axis (and cursor /
+   * event overlays) with the traces and lines up with the spectrogram. Global
+   * (not per-panel) so `useWorkspaceData` can gate the raster slice fetch on it.
+   */
+  timeseriesDisplayMode: "traces" | "raster";
   workspaceObjects: WorkspaceObject[];
   setWorkspaceObjects: (objs: WorkspaceObject[]) => void;
   setObjectVisible: (id: string, visible: boolean) => void;
@@ -143,6 +152,7 @@ type AppStore = {
   setTsFirstChannel: (idx: number) => void;
   /** Enter / leave focus-channel mode. Pass `null` to clear. */
   setFocusChannel: (coord: { ap: number; ml: number } | null) => void;
+  setTimeseriesDisplayMode: (mode: "traces" | "raster") => void;
 };
 
 /** View-grid layout id (Track C3 + the layout-redesign presets). */
@@ -190,6 +200,8 @@ export const useAppStore = create<AppStore>((set) => ({
   theme: getInitialTheme(),
   brainstateOverlay: true,
   trackVisibility: {},
+  timeseriesDisplayMode: "traces",
+  setTimeseriesDisplayMode: (mode) => set({ timeseriesDisplayMode: mode }),
   setSelectedTensor: (value) =>
     set((s) =>
       // In multi-probe mode the per-slot tensor map + fixed layout are the

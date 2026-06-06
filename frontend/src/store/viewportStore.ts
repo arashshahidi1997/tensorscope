@@ -8,10 +8,19 @@
  */
 import { create } from "zustand";
 
+/** uPlot plot-area insets (CSS px) of the timeseries panel, relative to its
+ *  own view root. Published by `TimeseriesSliceView` so other time-axis views
+ *  (the spectrogram) can match their data region to it — making the same time
+ *  land at the same x across vertically-stacked panels. Null when no timeseries
+ *  is mounted (e.g. the Spectral layout). */
+export type TimeAxisInset = { left: number; right: number };
+
 export type ViewportStore = {
   /** Measured timeseries panel width in CSS px, or null before first measure. */
   timeseriesWidthPx: number | null;
   setTimeseriesWidthPx: (px: number) => void;
+  timeAxisInset: TimeAxisInset | null;
+  setTimeAxisInset: (inset: TimeAxisInset | null) => void;
 };
 
 export const useViewportStore = create<ViewportStore>()((set) => ({
@@ -20,4 +29,15 @@ export const useViewportStore = create<ViewportStore>()((set) => ({
   // the same width doesn't notify subscribers (and rebuild the request key).
   setTimeseriesWidthPx: (px) =>
     set((s) => (s.timeseriesWidthPx === px ? s : { timeseriesWidthPx: px })),
+  timeAxisInset: null,
+  // Dedupe within 0.5px so uPlot's sub-pixel relayouts don't churn subscribers.
+  setTimeAxisInset: (inset) =>
+    set((s) => {
+      const a = s.timeAxisInset;
+      if (a === inset) return s;
+      if (a && inset && Math.abs(a.left - inset.left) < 0.5 && Math.abs(a.right - inset.right) < 0.5) {
+        return s;
+      }
+      return { timeAxisInset: inset };
+    }),
 }));

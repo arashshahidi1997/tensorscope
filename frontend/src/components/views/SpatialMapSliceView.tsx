@@ -3,9 +3,11 @@ import { decodeArrowSlice, extractSpatialCells, type SpatialCell } from "../../a
 import { buildRegionResolver } from "../../api/probeLayout";
 import { useProbeLayoutQuery } from "../../api/queries";
 import { useAppStore } from "../../store/appStore";
+import { useSelectionStore } from "../../store/selectionStore";
 import { useMaskStore } from "../../store/maskStore";
 import { ChannelGridRenderer } from "./ChannelGridRenderer";
 import { ColorBar } from "./ColorBar";
+import { CoordReadout, joinCoords } from "./CoordReadout";
 import { unmaskedCellRange } from "./colorRange";
 import type { SpatialCellWithId } from "./SpatialRenderer";
 import type { SliceViewProps } from "./viewTypes";
@@ -44,6 +46,11 @@ export function SpatialMapSliceView({
   const maskTensor = tensorName ?? globalTensor;
   const maskedArray = useMaskStore((s) => (maskTensor ? s.masks[maskTensor] : undefined));
   const maskedSet = maskedArray ? new Set(maskedArray) : undefined;
+
+  // Shared hovered electrode (set on hover via onHoverElectrode → store). Read
+  // it back so the cell under the cursor is highlighted — and so hovering one
+  // spatial panel highlights the same cell on the other (spatial_map ↔ psd_spatial).
+  const storeHovered = useSelectionStore((s) => s.spatial.hoveredId);
 
   // G7: per-electrode region annotations. Returns null when no sidecar is
   // loaded — the renderer treats `undefined` as "no overlay" so the
@@ -152,7 +159,7 @@ export function SpatialMapSliceView({
       nAP: nAPRef.current,
       nML: nMLRef.current,
       colorScale,
-      hoveredId: hoveredId ?? null,
+      hoveredId: hoveredId ?? storeHovered ?? null,
       selectedIds,
       minValue: minValueRef.current,
       maxValue: maxValueRef.current,
@@ -163,7 +170,7 @@ export function SpatialMapSliceView({
       regionByFlatId: regionResolver.regionByFlatId,
       regionPalette: regionResolver.palette,
     });
-  }, [slice, v2Cells, colorScale, hoveredId, selectedIds, maskedArray, regionResolver]);
+  }, [slice, v2Cells, colorScale, hoveredId, storeHovered, selectedIds, maskedArray, regionResolver]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -223,6 +230,19 @@ export function SpatialMapSliceView({
       <div className="axis-y-label">AP</div>
       <div className="axis-y-ticks" />
       <div className="axis-canvas-area" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+        {(() => {
+          const hovAp = storeHovered != null ? Math.floor(storeHovered / nML) : null;
+          const hovMl = storeHovered != null ? storeHovered % nML : null;
+          const hovering = storeHovered != null;
+          const ap = hovering ? hovAp : selection.ap;
+          const ml = hovering ? hovMl : selection.ml;
+          return (
+            <CoordReadout
+              muted={!hovering}
+              text={joinCoords([ap != null ? `AP ${ap}` : null, ml != null ? `ML ${ml}` : null])}
+            />
+          );
+        })()}
         <div
           ref={containerRef}
           style={{

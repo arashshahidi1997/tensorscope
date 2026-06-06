@@ -2,7 +2,6 @@ import type { ReactElement } from "react";
 import { PlaceholderSliceView } from "../components/views/PlaceholderSliceView";
 import { PSDSliceView } from "../components/views/PSDSliceView";
 import { DepthMapSliceView } from "../components/views/DepthMapSliceView";
-import { RasterView } from "../components/views/RasterView";
 import { SpatialMapSliceView } from "../components/views/SpatialMapSliceView";
 import { SpectrogramView } from "../components/views/SpectrogramView";
 import { TimeseriesSliceView } from "../components/views/TimeseriesSliceView";
@@ -36,10 +35,10 @@ export const VIEW_DESCRIPTORS: ViewDescriptor[] = [
   // are the minimum so the descriptor never appears for non-(time,channel)
   // tensors via the fallback path. See docs/design/neuropixels-multiprobe.md.
   { id: "depth_map",        label: "Depth Map",    requiredDims: ["time", "channel"],  priority: 2 },
-  // channel × time amplitude heatmap. Available for both grid (AP/ML flattened
-  // server-side) and linear (channel) tensors — gating comes from the server's
-  // available_views. See docs/design/neuropixels-multiprobe.md.
-  { id: "raster",           label: "Raster",       requiredDims: ["time"],             priority: 14 },
+  // NOTE: the channel×time raster is no longer a standalone view — it's an
+  // opt-in display mode of the timeseries panel (toggle on the traces toolbar),
+  // so it shares the time x-axis. See TimeseriesSliceView / appStore
+  // timeseriesDisplayMode and docs/design/neuropixels-multiprobe.md.
   { id: "trajectory",       label: "Trajectory",   requiredDims: ["time", "axis"],     priority: 15 },
 ];
 
@@ -95,7 +94,6 @@ export const viewRegistry: Record<string, (props: SliceViewProps) => ReactElemen
   psd_curve: PlaceholderSliceView,    // PSD panel views rendered directly in WorkspaceMain
   propagation_frame: SpatialMapSliceView,
   depth_map: DepthMapSliceView,
-  raster: RasterView,
   trajectory: TrajectoryView,
   table: PlaceholderSliceView,
   event_average: PlaceholderSliceView,  // rendered directly in WorkspaceMain
