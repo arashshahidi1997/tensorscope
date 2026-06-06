@@ -215,6 +215,47 @@ def test_planar_probe_advertises_spatial_map_view() -> None:
     assert "spatial_map" in state.tensor_meta("npx4").available_views
 
 
+def test_csd_along_depth_linear_probe() -> None:
+    """CSD view computes -d²V/dz² along a linear probe's depth axis (boundary
+    channels dropped), rendered as a depth×time image. A current sink localized
+    at one depth produces a positive CSD extremum at that channel."""
+    from tensorscope.io.assemble import prepare_linear_probe
+    n_ch, n_time = 12, 500
+    t = np.arange(n_time) / 500.0
+    # Depth-varying potential: a smooth profile with a sharp dip (sink) at ch 6.
+    z = np.arange(n_ch, dtype=float)
+    profile = -((z - 6.0) ** 2) * 0.0  # flat base
+    profile[6] = -4.0  # a localized potential well → CSD sink at depth 6
+    data = (profile[None, :] + 0.0 * t[:, None]).astype("float32")
+    da = prepare_linear_probe(
+        xr.DataArray(data, dims=("time", "channel"),
+                     coords={"time": t, "channel": np.arange(n_ch)}),
+        depth=z * 20.0, fs=500.0,
+    )
+    state = create_server_state(da, tensor_name="npx")
+    from tensorscope.server.state import apply_slice_request
+    out = apply_slice_request(
+        da, TensorSliceRequestDTO(view_type="csd", selection=SelectionDTO(time=0.5, freq=0.0, ap=0, ml=0),
+                                  time_range=(0.0, 1.0), max_points=2000, downsample="none"))
+    assert out.dims == ("channel", "time")
+    assert out.sizes["channel"] == n_ch - 2  # two boundary channels dropped
+    assert "depth" in out.coords
+    # The localized potential feature at original ch6 → the dominant CSD
+    # extremum at CSD channel index 5 (offset by the dropped boundary channel).
+    csd_profile = np.asarray(out.isel(time=0).values)
+    assert int(np.argmax(np.abs(csd_profile))) == 5
+    assert abs(csd_profile[5]) == float(np.max(np.abs(csd_profile)))
+
+
+def test_csd_requires_depth_coord() -> None:
+    from tensorscope.server.state import apply_slice_request
+    probe = prepare_planar_probe(_flat(100, 6), x=np.arange(6.0), y=np.zeros(6), fs=500.0)
+    with pytest.raises(ValueError, match="csd requires"):
+        apply_slice_request(
+            probe, TensorSliceRequestDTO(view_type="csd", selection=SelectionDTO(time=0.5, freq=0.0, ap=0, ml=0),
+                                         time_range=(0.0, 0.2), max_points=2000, downsample="none"))
+
+
 def test_planar_probe_advertises_and_serves_propagation() -> None:
     """Planar probes get propagation (movie/frame) — the same (channel,) frame
     and (time, channel) cube the grid uses, rendered as an animated scatter."""

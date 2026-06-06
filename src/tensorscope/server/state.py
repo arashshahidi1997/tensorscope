@@ -1404,7 +1404,11 @@ def apply_slice_request(
     # depth_map is the linear-probe (Neuropixels) framing of the same image,
     # windowed so a SWR / spindle event can be read across depth over time — NOT
     # an instantaneous profile. See docs/design/neuropixels-multiprobe.md.
-    if request.view_type in ("raster", "depth_map") and "time" in sliced.dims:
+    if request.view_type in ("raster", "depth_map", "csd") and "time" in sliced.dims:
+        if request.view_type == "csd":
+            # Current-source density along a linear probe's depth axis, rendered
+            # as the same depth×time image as depth_map (ADR-0010 Phase 3).
+            sliced = _compute_csd_depth(sliced)
         if "AP" in sliced.dims and "ML" in sliced.dims:
             # Row-major flatten to a plain (channel,) axis. `.stack` makes a
             # MultiIndex channel coord which doesn't serialize cleanly, so drop
@@ -1608,6 +1612,43 @@ def _has_ap_ml_coords(data: xr.DataArray) -> bool:
         )
     except Exception:  # noqa: BLE001
         return False
+
+
+def _compute_csd_depth(data: xr.DataArray) -> xr.DataArray:
+    """Current-source density along a linear probe's depth axis.
+
+    CSD ≈ -d²V/dz², approximated by the negative discrete second difference of
+    the depth-sorted channels (uniform-spacing approximation — appropriate for
+    the regular inter-site pitch of a linear/Neuropixels probe; the two boundary
+    channels are dropped). Requires ``(time, channel)`` with a per-channel
+    ``depth`` coord; output is ``(time, channel)`` with ``channel`` re-indexed and
+    a midpoint ``depth`` coord, so it flows through the depth_map/raster imaging
+    path unchanged. Sinks (current entering the tissue) are positive. Mirrors
+    ``cogpy.depth_probe.csd.compute_csd`` (2nd difference along depth) with the
+    standard neuroscience sign. See ADR-0010 Phase 3.
+    """
+    if "channel" not in data.dims or "depth" not in data.coords:
+        raise ValueError(
+            "csd requires a (time, channel) tensor with a per-channel 'depth' coord"
+        )
+    s = data.transpose("time", "channel")
+    depth = np.asarray(s.coords["depth"].values, dtype=float)
+    if depth.shape[0] < 3:
+        raise ValueError("csd needs at least 3 channels along depth")
+    order = np.argsort(depth)
+    arr = np.asarray(s.values, dtype=np.float64)[:, order]  # (time, ch) depth-sorted
+    csd = -(arr[:, :-2] - 2.0 * arr[:, 1:-1] + arr[:, 2:])  # (time, ch-2)
+    mid_depth = depth[order][1:-1]
+    return xr.DataArray(
+        csd,
+        dims=("time", "channel"),
+        coords={
+            "time": s.coords["time"].values,
+            "channel": np.arange(csd.shape[1]),
+            "depth": ("channel", mid_depth),
+        },
+        attrs=dict(s.attrs),
+    )
 
 
 def _median_spatial_flat(data: xr.DataArray, *, size: int = 3) -> xr.DataArray:

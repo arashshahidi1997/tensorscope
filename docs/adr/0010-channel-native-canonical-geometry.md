@@ -56,12 +56,12 @@ Consequences of the model:
 - Live-validated on a 4-shank probe (`bench/serve_planar_probe.py`): loads, scatter renders,
   spatial-median visibly cleans it. Backend 685 / frontend 450 / tsc clean.
 
-**Phase 2 — Parity (mostly DONE):** channel-native `psd_spatial` renders as a freq-selected
-position scatter — `PSDSpatialView` self-branches on geometry (`extractPSDSpatialChannelFrame`
-over the `(freq, channel)` cube → `ScatterMapView`), no WorkspaceMain change. Scatter
-interactions: mask greying (Phase 1) + hover tooltip (channel · value) DONE. **Remaining:**
-click-to-select-channel (needs a channel-focus path through WorkspaceMain) and region overlay
-(needs the probe-layout sidecar; inert without one).
+**Phase 2 — Parity (DONE):** channel-native `psd_spatial` renders as a freq-selected position
+scatter (`PSDSpatialView` self-branches; `extractPSDSpatialChannelFrame` over the `(freq, channel)`
+cube → `ScatterMapView`). Scatter interactions: mask greying, hover tooltip + cross-view highlight
+(`setHoveredElectrode`), region rings (probe-layout sidecar; inert without one), and
+click-to-select (`onPick` → scroll the timeseries to the electrode). Shared `scatterPaint` (opts
+API + `computeScatterLayout`).
 
 **Phase 3 — Propagation (DONE for planar):** `propagation_frame`/`propagation_movie` are
 advertised for planar probes (the same `(channel,)` frame / `(time, channel)` cube the grid uses).
@@ -69,9 +69,15 @@ The frontend plays them as an **animated position scatter**: a shared `paintScat
 used by ScatterMapView), `extractChannelFramesV2` (movie cube → per-frame channel values), a
 `ScatterMoviePlayer` (preload + RAF + cursor-sync + hover, mirroring the grid movie player), and
 `PropagationController` routing planar → a focused movie-only scatter controller. The grid
-imshow player is untouched. **Remaining:** dot-interpolated surface (currently discrete dots, no
-spatial interpolation between electrodes) and CSD-along-depth for linear probes (cogpy
-`depth_probe/csd`).
+imshow player is untouched. **Interpolated surface DONE:** a `• dots / ▦ fill` toggle on the
+scatter views renders a nearest-electrode (Voronoi) field (`computeNearestMap`, precomputed per
+size, recoloured O(W·H) per frame). **CSD-along-depth: backend DONE** — `csd` view computes
+-d²V/dz² along a linear probe's depth axis (`_compute_csd_depth`, sign + boundary-drop per
+neuroscience convention; mirrors `cogpy.depth_probe.csd`), returned as a depth×time image that
+flows through the existing raster/depth_map render. **Remaining (CSD frontend):** expose `csd` in
+linear-probe `available_views` + a depth_map↔csd toggle/slot (reuses `RasterView`); deferred
+pending a layout-slot decision and a linear-probe to verify against (the prototype probe is
+planar).
 
 **Out of scope (explicitly not this ADR):** the Zarr/on-disk chunked-multiscale storage format
 (a separate, complementary decision — channel-native is its natural chunk axis); editing cogpy's
