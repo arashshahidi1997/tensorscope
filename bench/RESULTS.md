@@ -57,3 +57,32 @@ For any non-rectangular / sparse probe, channel-native `(time, channel)` + geome
 **faster and smaller, proportional to the wasted grid cells (up to ~4–8× at 25% fill), with zero
 penalty on dense data.** The efficiency argument for making channel-native the canonical layout
 holds.
+
+---
+
+## Prototype outcome — design VALIDATED (live, 2026-06-06)
+
+The branch `prototype/channel-native-geometry` carried the proof above (efficiency) plus three
+implementation steps that make a non-grid probe a first-class citizen end-to-end:
+
+- **#1 Loadable & recognized** — `geometry_kind` (grid|planar|linear|flat), `channel_positions`,
+  relaxed `validate_and_normalize_grid` (no forced dense lattice), `prepare_planar_probe`, planar
+  `electrode_layout`. All flat views serve a non-grid probe. (tests: `test_geometry_channel_native.py`)
+- **#2 Analyzable** — `core/geometry.py`: positions → k-NN adjacency + `spatial_median_graph`;
+  `apply_processing` routes non-grid probes through the graph op; CMR already geometry-agnostic.
+  (tests: `test_geometry_adjacency.py`)
+- **#3 Viewable** — `GET /tensors/{name}/electrodes` (planar x/y) + `ScatterMapView` (canvas, one
+  circle per channel at its true position, aspect-equal); `useWorkspaceData` routes the spatial
+  slot by geometry (planar → scatter, grid → imshow fast path).
+
+**Success criterion met.** Launched a synthetic 4-shank planar probe (`bench/serve_planar_probe.py`,
+192 ch, geometry `planar`) in the live app and drove it via Playwright:
+- the non-grid probe loads and the position-driven scatter **renders** (4 shank columns, per-electrode
+  colour), and
+- toggling **Spatial median** (the graph op) **visibly cleans it**: the per-frame value range
+  collapsed `−0.120 – 3.07` → `−0.052 – 0.065` (speckle removed → smooth moving bump).
+
+Backend 685 tests / frontend 450 tests / tsc clean throughout. **Decision unblocked:** promote
+channel-native to the canonical spatial layout (the larger migration) or capture this as an ADR.
+Net new backend cost vs. grid is zero (faster, per the benchmark); the grid `imshow` stays a
+detected fast path for genuine dense lattices.
