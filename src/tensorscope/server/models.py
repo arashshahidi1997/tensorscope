@@ -130,10 +130,19 @@ class ElectrodeLayoutDTO(BaseModel):
 
     n_ap: int = Field(ge=1)
     n_ml: int = Field(ge=1)
-    geometry: str = "grid"  # "grid" | "probe" | "custom"
+    geometry: str = "grid"  # "grid" | "linear" | "planar" | "custom"
     ap_coords: list[float]  # sorted unique AP coordinate values
     ml_coords: list[float]  # sorted unique ML coordinate values
     n_electrodes: int = Field(ge=0)
+    # Per-channel positions for non-grid geometries (geometry == "planar"):
+    # arbitrary 2-D electrode layouts where the channels do NOT lie on a dense
+    # AP×ML lattice (4-shank Neuropixels, sparse/L-shaped ECoG, SEEG). Aligned
+    # to the tensor's channel order; None for grid/linear. The position-driven
+    # spatial renderer consumes these (scatter); ap/ml_coords stay populated
+    # with the sorted uniques as a fallback. See the channel-native geometry
+    # prototype (bench/RESULTS.md) + docs/design/neuropixels-multiprobe.md.
+    x_coords: list[float] | None = None
+    y_coords: list[float] | None = None
 
 
 class ElectrodeDTO(BaseModel):

@@ -15,7 +15,7 @@ from __future__ import annotations
 import numpy as np
 import xarray as xr
 
-__all__ = ["assemble_session", "prepare_linear_probe"]
+__all__ = ["assemble_session", "prepare_linear_probe", "prepare_planar_probe"]
 
 
 def prepare_linear_probe(
@@ -111,6 +111,95 @@ def _resolve_offset(
             raise ValueError("trim_samples requires fs to derive a time offset")
         return float(trim_samples) / float(fs)
     return None
+
+
+def prepare_planar_probe(
+    data: xr.DataArray,
+    *,
+    x: np.ndarray | list[float],
+    y: np.ndarray | list[float],
+    z: np.ndarray | list[float] | None = None,
+    shank: np.ndarray | list | None = None,
+    region: np.ndarray | list[str] | None = None,
+    fs: float | None = None,
+    trim_samples: int | None = None,
+    time_offset_s: float | None = None,
+) -> xr.DataArray:
+    """Normalize a probe with arbitrary 2-D electrode positions to the
+    channel-native contract.
+
+    The general case of :func:`prepare_linear_probe`: instead of a single
+    ``depth`` axis, geometry rides as per-channel ``x``/``y`` (and optional
+    ``z``, ``shank``) coords, so a non-rectangular layout — a 4-shank
+    Neuropixels, an L-shaped or sparse ECoG, SEEG — is stored as exactly
+    ``n_channels`` cells with no dense-lattice padding (faster + smaller; see
+    ``bench/RESULTS.md``). A regular ECoG grid is just the special case where
+    ``(x, y)`` land on a lattice.
+
+    Parameters
+    ----------
+    data
+        A ``(time, channel)`` array (``(channel, time)`` is transposed).
+    x, y
+        Per-channel electrode positions (any consistent unit, e.g. µm).
+        Lengths must equal the channel count.
+    z
+        Optional per-channel depth/elevation, stored as a ``z`` coord.
+    shank
+        Optional per-channel shank/group id (for per-group CMR later), stored
+        as a ``shank`` coord.
+    region
+        Optional per-channel anatomical label, stored as a ``region`` coord.
+    fs, trim_samples, time_offset_s
+        As in :func:`prepare_linear_probe` — ``fs`` attr and a
+        forward-compatible shared-clock offset.
+
+    Returns
+    -------
+    xr.DataArray
+        A ``(time, channel)`` array carrying ``x``/``y`` (and optional ``z``,
+        ``shank``, ``region``) coords, ``fs`` attr, and optional
+        ``time_offset_s`` attr. Recognised as ``geometry="planar"`` by the
+        server (``core.schema.geometry_kind``).
+    """
+    if not isinstance(data, xr.DataArray):
+        raise ValueError(f"data must be an xarray.DataArray, got {type(data)!r}")
+    dims = set(data.dims)
+    if dims != {"time", "channel"}:
+        raise ValueError(
+            f"planar probe must have dims {{'time','channel'}}, got {tuple(data.dims)}"
+        )
+    out = data.transpose("time", "channel")
+    n_ch = int(out.sizes["channel"])
+
+    def _per_channel(arr, label, dtype):
+        a = np.asarray(arr, dtype=dtype)
+        if a.shape != (n_ch,):
+            raise ValueError(f"{label} length {a.shape} must match channel count ({n_ch},)")
+        return a
+
+    coords = {
+        "x": ("channel", _per_channel(x, "x", float)),
+        "y": ("channel", _per_channel(y, "y", float)),
+    }
+    if z is not None:
+        coords["z"] = ("channel", _per_channel(z, "z", float))
+    if shank is not None:
+        coords["shank"] = ("channel", _per_channel(shank, "shank", object))
+    if region is not None:
+        coords["region"] = ("channel", _per_channel(region, "region", object))
+    out = out.assign_coords(coords)
+
+    attrs = dict(out.attrs)
+    if fs is not None:
+        attrs["fs"] = float(fs)
+    offset = _resolve_offset(time_offset_s, trim_samples, attrs.get("fs"))
+    if offset is not None:
+        attrs["time_offset_s"] = offset
+        if trim_samples is not None:
+            attrs["trim_samples"] = int(trim_samples)
+    out = out.assign_attrs(attrs)
+    return out
 
 
 def assemble_session(tensors: dict[str, xr.DataArray]) -> dict[str, xr.DataArray]:

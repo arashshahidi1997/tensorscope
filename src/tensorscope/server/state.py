@@ -315,6 +315,27 @@ class ServerState:
                 ml_coords=[0.0],
                 n_electrodes=int(depth_vals.size),
             )
+        # Planar probe: arbitrary 2-D electrode positions (4-shank Neuropixels,
+        # sparse/L-shaped ECoG, SEEG) ride as per-channel x/y coords — no dense
+        # AP×ML lattice. Report the true per-channel positions (x_coords/
+        # y_coords) for the position-driven renderer; ap/ml_coords carry the
+        # sorted uniques as a fallback. See core.schema.channel_positions +
+        # bench/RESULTS.md.
+        from tensorscope.core.schema import channel_positions
+
+        planar = channel_positions(data)
+        if planar is not None and ("AP" not in data.coords or "ML" not in data.coords):
+            x_vals, y_vals = planar
+            return ElectrodeLayoutDTO(
+                n_ap=max(1, int(np.unique(y_vals).size)),
+                n_ml=max(1, int(np.unique(x_vals).size)),
+                geometry="planar",
+                ap_coords=sorted(set(y_vals.tolist())),
+                ml_coords=sorted(set(x_vals.tolist())),
+                x_coords=x_vals.tolist(),
+                y_coords=y_vals.tolist(),
+                n_electrodes=int(x_vals.size),
+            )
         if "AP" not in data.coords or "ML" not in data.coords:
             raise ValueError(
                 f"Tensor '{name}' has no AP/ML coordinates — "

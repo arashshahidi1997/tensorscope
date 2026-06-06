@@ -17,7 +17,13 @@ from tensorscope.core.state import (
     TensorRegistry,
     TensorScopeState,
 )
-from tensorscope.core.schema import SchemaError, flatten_grid_to_channels, validate_and_normalize_grid
+from tensorscope.core.schema import (
+    SchemaError,
+    channel_positions,
+    flatten_grid_to_channels,
+    geometry_kind,
+    validate_and_normalize_grid,
+)
 from tensorscope.core.layout import LayoutManager, LayoutPreset
 from tensorscope.core.transforms import (
     DerivedTensor,
@@ -44,6 +50,8 @@ __all__ = [
     "SchemaError",
     "validate_and_normalize_grid",
     "flatten_grid_to_channels",
+    "channel_positions",
+    "geometry_kind",
     "DataModality",
     "GridLFPModality",
     "FlatLFPModality",
