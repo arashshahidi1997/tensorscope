@@ -1563,8 +1563,19 @@ def apply_processing(data: xr.DataArray, params: ProcessingParamsDTO) -> xr.Data
         size = int(params.spatial_median_size)
         if "AP" in out.dims and "ML" in out.dims:
             out = median_spatialx(out, size=size)
-        elif "channel" in out.dims and _has_ap_ml_coords(out):
-            out = _median_spatial_flat(out, size=size)
+        elif "channel" in out.dims:
+            # Dense AP×ML lattice → reconstruct-and-smooth fast path; any other
+            # geometry (planar x/y, sparse/non-rectangular AP/ML) → positions
+            # k-NN graph median, which works for non-grid probes. See
+            # core/geometry.py + bench/RESULTS.md.
+            from tensorscope.core.geometry import spatial_median_graph
+            from tensorscope.core.schema import _extract_ap_ml_optional, _is_dense_grid
+
+            ap_ml = _extract_ap_ml_optional(out)
+            if ap_ml is not None and _is_dense_grid(ap_ml[0], ap_ml[1], int(out.sizes["channel"])):
+                out = _median_spatial_flat(out, size=size)
+            else:
+                out = spatial_median_graph(out, size=size)
 
     if params.zscore and "time" in out.dims:
         out = zscorex(out, dim="time", robust=params.zscore_robust)

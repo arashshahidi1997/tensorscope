@@ -24,6 +24,11 @@ from tensorscope.core.schema import (
     geometry_kind,
     validate_and_normalize_grid,
 )
+from tensorscope.core.geometry import (
+    build_knn_adjacency,
+    resolve_positions,
+    spatial_median_graph,
+)
 from tensorscope.core.layout import LayoutManager, LayoutPreset
 from tensorscope.core.transforms import (
     DerivedTensor,
@@ -52,6 +57,9 @@ __all__ = [
     "flatten_grid_to_channels",
     "channel_positions",
     "geometry_kind",
+    "resolve_positions",
+    "build_knn_adjacency",
+    "spatial_median_graph",
     "DataModality",
     "GridLFPModality",
     "FlatLFPModality",
