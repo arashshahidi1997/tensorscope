@@ -1,20 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useProbeLayoutQuery } from "../../api/queries";
+import { buildRegionResolver } from "../../api/probeLayout";
 import { useAppStore } from "../../store/appStore";
 import { useMaskStore } from "../../store/maskStore";
+import { useSelectionStore } from "../../store/selectionStore";
 import { getColormapLUT } from "./colormaps";
-import { paintScatter } from "./scatterPaint";
+import { computeNearestMap, computeScatterLayout, paintScatter, type ScatterLayout } from "./scatterPaint";
 
 /**
  * ScatterMapView — position-driven spatial map for non-grid probes.
  *
  * The planar analogue of SpatialMapSliceView (grid imshow): instead of an
- * AP×ML lattice, it plots each channel as a filled circle at its true (x, y)
- * electrode position, coloured by the channel's value at the cursor time. Works
- * for any layout the dense grid can't represent — 4-shank Neuropixels, sparse /
- * L-shaped ECoG, SEEG. Positions come from GET /tensors/{name}/electrodes
- * (geometry "planar"); values from the per-channel spatial_map frame.
- * Aspect-equal so the probe's real shape is preserved. See bench/RESULTS.md +
- * docs/design/neuropixels-multiprobe.md.
+ * AP×ML lattice, it plots each channel at its true (x, y) electrode position,
+ * coloured by the channel's value. Works for any layout the dense grid can't
+ * represent — 4-shank Neuropixels, sparse / L-shaped ECoG, SEEG. Positions come
+ * from GET /tensors/{name}/electrodes (geometry "planar"); values from the
+ * per-channel frame. Aspect-equal so the probe's real shape is preserved.
+ *
+ * Parity with the grid spatial map: mask greying, region rings (probe-layout),
+ * cross-view hover highlight, click-to-select, plus an interpolated (nearest /
+ * Voronoi) surface toggle. See ADR-0010 + bench/RESULTS.md.
  */
 const LUT = getColormapLUT("viridis");
 
@@ -24,45 +29,62 @@ export function ScatterMapView({
   selectedTime,
   selectedFreq,
   tensorName,
+  onPick,
 }: {
   positions: { x: number[]; y: number[] };
   values: number[];
   selectedTime?: number | null;
-  /** Selected frequency (Hz) when this scatter is a psd_spatial frame. Shown in
-   * the caption instead of the time; mutually exclusive with selectedTime. */
   selectedFreq?: number | null;
-  /** Resolved tensor for this slot — used to grey its masked channels (Track C4
-   * parity with the grid spatial map). */
   tensorName?: string;
+  /** Click an electrode → its channel index (e.g. scroll the timeseries to it). */
+  onPick?: (channel: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  // Per-channel screen geometry (canvas px) captured during paint, for hover
-  // hit-testing. {cx, cy} aligned to channel index, plus the dot radius.
-  const geomRef = useRef<{ cx: number[]; cy: number[]; r: number }>({ cx: [], cy: [], r: 4 });
+  const geomRef = useRef<ScatterLayout>({ cx: [], cy: [], r: 4 });
+  const nearestCacheRef = useRef<{ key: string; map: Int32Array } | null>(null);
   const [hover, setHover] = useState<{ ch: number; sx: number; sy: number } | null>(null);
+  const [fill, setFill] = useState(false);
+  const [sizeTick, setSizeTick] = useState(0);
 
-  // Per-channel mask: grey out excluded channels, repainting in place when a
-  // sidebar toggle changes it (no slice refetch) — same store the grid view uses.
   const globalTensor = useAppStore((s) => s.selectedTensor);
   const maskTensor = tensorName ?? globalTensor;
   const maskedArray = useMaskStore((s) => (maskTensor ? s.masks[maskTensor] : undefined));
   const maskedSet = useMemo(() => (maskedArray ? new Set(maskedArray) : undefined), [maskedArray]);
 
-  // Finite, unmasked value range for the colormap.
+  // Region annotation rings (probe-layout sidecar). Inert when no sidecar.
+  const { data: probeLayout } = useProbeLayoutQuery();
+  const ringColors = useMemo(() => {
+    const r = buildRegionResolver(probeLayout, 0);
+    if (r.isEmpty) return undefined;
+    return values.map((_, i) => {
+      const region = r.regionByChannel.get(i);
+      return region ? (r.palette.get(region) ?? null) : null;
+    });
+  }, [probeLayout, values]);
+
+  // Cross-view hover highlight (shared with the grid spatial views).
+  const storeHovered = useSelectionStore((s) => s.spatial.hoveredId);
+  const setHoveredElectrode = useSelectionStore((s) => s.setHoveredElectrode);
+  const highlightId = hover?.ch ?? storeHovered ?? null;
+
   const [lo, hi] = useMemo(() => {
-    let mn = Infinity;
-    let mx = -Infinity;
+    let mn = Infinity, mx = -Infinity;
     for (let i = 0; i < values.length; i++) {
       if (maskedSet?.has(i)) continue;
       const v = values[i];
-      if (Number.isFinite(v)) {
-        if (v < mn) mn = v;
-        if (v > mx) mx = v;
-      }
+      if (Number.isFinite(v)) { if (v < mn) mn = v; if (v > mx) mx = v; }
     }
     return Number.isFinite(mn) ? [mn, mx] : [0, 1];
   }, [values, maskedSet]);
+
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const ro = new ResizeObserver(() => setSizeTick((t) => t + 1));
+    ro.observe(wrap);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -70,39 +92,55 @@ export function ScatterMapView({
     if (!canvas || !wrap) return;
     const n = Math.min(positions.x.length, positions.y.length, values.length);
     if (n === 0) return;
-
-    const rect = wrap.getBoundingClientRect();
-    const W = Math.max(1, Math.round(rect.width));
-    const H = Math.max(1, Math.round(rect.height));
+    const W = Math.max(1, Math.round(wrap.clientWidth));
+    const H = Math.max(1, Math.round(wrap.clientHeight));
     canvas.width = W;
     canvas.height = H;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    geomRef.current = paintScatter(ctx, W, H, positions, values, LUT, lo, hi, maskedSet);
-  }, [positions, values, maskedSet, lo, hi]);
+    let nearestMap: Int32Array | null = null;
+    if (fill) {
+      // Cache the per-pixel nearest-electrode map; positions are fixed per
+      // tensor, so only a resize (W/H) or channel-count change invalidates it.
+      const key = `${W}x${H}:${n}:${positions.x[0]},${positions.x[n - 1]}`;
+      if (nearestCacheRef.current?.key !== key) {
+        nearestCacheRef.current = { key, map: computeNearestMap(computeScatterLayout(positions, W, H), W, H) };
+      }
+      nearestMap = nearestCacheRef.current.map;
+    }
+    geomRef.current = paintScatter(ctx, W, H, positions, values, {
+      lut: LUT, lo, hi, maskedSet, ringColors, highlightId, nearestMap,
+    });
+  }, [positions, values, maskedSet, lo, hi, fill, ringColors, highlightId, sizeTick]);
 
-  // Hover hit-test: nearest electrode within ~1.6× the dot radius of the cursor.
-  const onMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  const pick = useCallback((e: React.MouseEvent<HTMLCanvasElement>): number => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas) return -1;
     const rect = canvas.getBoundingClientRect();
     const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
     const my = (e.clientY - rect.top) * (canvas.height / rect.height);
     const { cx, cy, r } = geomRef.current;
     let best = -1;
-    let bestD = (r * 1.6) ** 2;
+    let bestD = (Math.max(r * 1.6, 6)) ** 2;
     for (let i = 0; i < cx.length; i++) {
       const d = (cx[i] - mx) ** 2 + (cy[i] - my) ** 2;
       if (d < bestD) { bestD = d; best = i; }
     }
-    setHover(
-      best >= 0
-        ? { ch: best, sx: e.clientX - rect.left, sy: e.clientY - rect.top }
-        : null,
-    );
+    return best;
   }, []);
-  const onLeave = useCallback(() => setHover(null), []);
+
+  const onMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const best = pick(e);
+    const rect = canvasRef.current!.getBoundingClientRect();
+    setHover(best >= 0 ? { ch: best, sx: e.clientX - rect.left, sy: e.clientY - rect.top } : null);
+    setHoveredElectrode(best >= 0 ? best : null);
+  }, [pick, setHoveredElectrode]);
+  const onLeave = useCallback(() => { setHover(null); setHoveredElectrode(null); }, [setHoveredElectrode]);
+  const onClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const best = pick(e);
+    if (best >= 0) onPick?.(best);
+  }, [pick, onPick]);
 
   const n = Math.min(positions.x.length, positions.y.length, values.length);
   if (n === 0) {
@@ -122,6 +160,16 @@ export function ScatterMapView({
     <div style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column" }}>
       <div className="ts-toolbar" style={{ fontSize: 11, color: "#8b949e", gap: 8 }}>
         <span>scatter · {n} ch</span>
+        <button
+          type="button"
+          className={`ts-tool${fill ? " active" : ""}`}
+          title={fill ? "Interpolated surface (nearest electrode) — click for dots" : "Dots — click for an interpolated surface"}
+          onClick={() => setFill((f) => !f)}
+          data-testid="scatter-fill-toggle"
+          style={{ fontSize: 11 }}
+        >
+          {fill ? "▦ fill" : "• dots"}
+        </button>
         <span style={{ marginLeft: "auto" }} data-testid="scatter-range">
           {lo.toPrecision(3)} – {hi.toPrecision(3)}{atCaption}
         </span>
@@ -129,9 +177,10 @@ export function ScatterMapView({
       <div ref={wrapRef} style={{ flex: 1, minHeight: 0, position: "relative" }} data-testid="scatter-map">
         <canvas
           ref={canvasRef}
-          style={{ width: "100%", height: "100%", display: "block" }}
+          style={{ width: "100%", height: "100%", display: "block", cursor: onPick ? "pointer" : "default" }}
           onMouseMove={onMove}
           onMouseLeave={onLeave}
+          onClick={onClick}
         />
         {hover && Number.isFinite(values[hover.ch]) && (
           <div

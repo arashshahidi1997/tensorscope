@@ -14,7 +14,7 @@ import { type ChannelMovie, decodeLabeledTensor, extractChannelFramesV2 } from "
 import { useMaskStore } from "../../store/maskStore";
 import { ColorBar } from "./ColorBar";
 import { getColormapLUT, type ColormapName } from "./colormaps";
-import { paintScatter, type ScatterLayout } from "./scatterPaint";
+import { computeNearestMap, computeScatterLayout, paintScatter, type ScatterLayout } from "./scatterPaint";
 
 const CURSOR_SYNC_HZ = 15;
 
@@ -55,9 +55,11 @@ export function ScatterMoviePlayer({
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
+  const [fill, setFill] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const geomRef = useRef<ScatterLayout>({ cx: [], cy: [], r: 4 });
+  const nearestCacheRef = useRef<{ key: string; map: Int32Array } | null>(null);
 
   const electrodes = useElectrodesQuery(tensorName);
   const positions = useMemo(() => {
@@ -120,7 +122,20 @@ export function ScatterMoviePlayer({
     if (!ctx) return;
     const idx = Math.max(0, Math.min(frameIdx, movie.frames.length - 1));
     const frame = movie.frames[idx];
-    geomRef.current = paintScatter(ctx, W, H, positions, frame.values, lut, movie.min, movie.max, maskedSet);
+    let nearestMap: Int32Array | null = null;
+    if (fill) {
+      // Precompute the Voronoi assignment once per (size, probe); recolour
+      // per frame is then O(W·H), keeping playback smooth.
+      const np = positions.x.length;
+      const key = `${W}x${H}:${np}`;
+      if (nearestCacheRef.current?.key !== key) {
+        nearestCacheRef.current = { key, map: computeNearestMap(computeScatterLayout(positions, W, H), W, H) };
+      }
+      nearestMap = nearestCacheRef.current.map;
+    }
+    geomRef.current = paintScatter(ctx, W, H, positions, frame.values, {
+      lut, lo: movie.min, hi: movie.max, maskedSet, nearestMap,
+    });
 
     // Time overlay.
     const t = frame.time;
@@ -139,7 +154,7 @@ export function ScatterMoviePlayer({
         }
       }
     }
-  }, [movie, frameIdx, positions, lut, maskedSet, sizeTick]);
+  }, [movie, frameIdx, positions, lut, maskedSet, sizeTick, fill]);
 
   // RAF playback.
   useEffect(() => {
@@ -202,6 +217,15 @@ export function ScatterMoviePlayer({
           <input type="checkbox" checked={syncCursor} onChange={(e) => setSyncCursor(e.target.checked)} />
           <span>⌖ sync</span>
         </label>
+        <button
+          type="button"
+          className={`ts-tool${fill ? " active" : ""}`}
+          title={fill ? "Interpolated surface — click for dots" : "Dots — click for an interpolated surface"}
+          onClick={() => setFill((f) => !f)}
+          style={{ fontSize: 11 }}
+        >
+          {fill ? "▦" : "•"}
+        </button>
         <input
           type="range"
           className="propagation-movie-scrubber"

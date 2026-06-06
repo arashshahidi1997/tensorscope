@@ -126,6 +126,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     bandCustom,
     focusChannel,
     setFocusChannel,
+    setTsFirstChannel,
     timeseriesDisplayMode,
     workspaceObjects,
     setWorkspaceObjects,
@@ -542,6 +543,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
           values={v2ScatterValues}
           selectedTime={selectionDraft.time}
           tensorName={tensorForSlot("spatial_map")}
+          onPick={(ch) => setTsFirstChannel(ch)}
         />
       ) : (
         <div className="placeholder">Loading…</div>
