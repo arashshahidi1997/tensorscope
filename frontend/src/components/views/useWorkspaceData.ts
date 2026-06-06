@@ -7,14 +7,16 @@ import {
   makeTrajectoryRequest,
   useBrainstateIntervalsQuery,
   useBrainstateMetaQuery,
+  useElectrodesQuery,
   useSliceQuery,
+  useV2ChannelFrameQuery,
   useV2PSDAverageQuery,
   useV2PSDLiveQuery,
   useV2SpatialQuery,
   useV2SpectrogramQuery,
   useV2TimeseriesQuery,
 } from "../../api/queries";
-import type { CoordSummary, SelectionDTO, TensorSliceRequestDTO } from "../../api/types";
+import type { CoordSummary, ElectrodeLayoutDTO, SelectionDTO, TensorSliceRequestDTO } from "../../api/types";
 import { buildViewQueryStatusMaps } from "./viewQueryStatus";
 
 /**
@@ -143,9 +145,23 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
       : null,
     "Timeseries",
   );
+  // Electrode geometry for the spatial slot: grid → AP×ML imshow (worker
+  // SpatialCell[]); planar → position-driven scatter (channel-frame values +
+  // x/y positions). Fetched once (geometry is static) and used to route which
+  // spatial query/view fires, so a planar probe doesn't pay for the grid decode
+  // and vice-versa. See ScatterMapView / GET /tensors/{name}/electrodes.
+  const electrodesQuery = useElectrodesQuery(tensorFor("spatial_map"));
+  const spatialGeometry = electrodesQuery.data?.geometry ?? null;
+  const spatialReq = flags.hasSpatial
+    ? makeDefaultSliceRequest("spatial_map", selectionDraft, safeWindow)
+    : null;
   const spatialV2Query = useV2SpatialQuery(
     tensorFor("spatial_map"),
-    flags.hasSpatial ? makeDefaultSliceRequest("spatial_map", selectionDraft, safeWindow) : null,
+    spatialGeometry === "planar" ? null : spatialReq,
+  );
+  const spatialScatterQuery = useV2ChannelFrameQuery(
+    tensorFor("spatial_map"),
+    spatialGeometry === "planar" ? spatialReq : null,
   );
   // depth_map: linear-probe analogue of spatial_map (Neuropixels DV). Same
   // ±0.25 s instantaneous slice shape; server collapses time → (channel,)
@@ -293,6 +309,7 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
   const v2NavigatorData = useStickyData(navigatorV2Query.data);
   const v2BandpassData = useStickyData(timeseriesBandpassQuery.data, Boolean(activeBand));
   const v2SpatialData = useStickyData(spatialV2Query.data);
+  const v2ScatterValues = useStickyData(spatialScatterQuery.data);
   const v2PsdLiveData = useStickyData(psdLiveV2Query.data);
   const v2PsdAverageData = useStickyData(psdAverageV2Query.data);
   const v2TimeseriesNpxData = useStickyData(timeseriesNpxV2Query.data);
@@ -329,6 +346,10 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
     v2NavigatorData,
     v2BandpassData,
     v2SpatialData,
+    /** Planar-probe scatter: per-channel values (channel order) + geometry. */
+    v2ScatterValues,
+    electrodes: (electrodesQuery.data ?? null) as ElectrodeLayoutDTO | null,
+    spatialGeometry,
     v2PsdLiveData,
     v2PsdAverageData,
     v2TimeseriesNpxData,

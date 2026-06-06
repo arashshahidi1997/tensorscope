@@ -20,6 +20,7 @@ import {
   useTensorQuery,
 } from "../../api/queries";
 import { coincidenceIndicesByStream, extractEventTimes } from "../../api/coincidence";
+import { decodeArrowSlice, extractRaster } from "../../api/arrow";
 import { useEventStreamsStore } from "../../store/eventStreamsStore";
 import { useEventFilterStore } from "../../store/eventFilterStore";
 import { applyEventFilters } from "./eventFilterLogic";
@@ -42,6 +43,7 @@ import { PropagationController } from "./PropagationController";
 import { DepthMapSliceView } from "./DepthMapSliceView";
 import { HeatmapView } from "./HeatmapView";
 import { SpatialMapSliceView } from "./SpatialMapSliceView";
+import { ScatterMapView } from "./ScatterMapView";
 import { PSDSliceView } from "./PSDSliceView";
 import { SpatialEventView } from "./SpatialEventView";
 import { SpectrogramView } from "./SpectrogramView";
@@ -123,6 +125,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     bandCustom,
     focusChannel,
     setFocusChannel,
+    timeseriesDisplayMode,
     workspaceObjects,
     setWorkspaceObjects,
     setObjectVisible,
@@ -222,7 +225,10 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const hasTimeseries = effectiveActiveViews.includes("timeseries");
   const hasSpatial = effectiveActiveViews.includes("spatial_map");
   const hasDepthMap = effectiveActiveViews.includes("depth_map");
-  const hasRaster = effectiveActiveViews.includes("raster");
+  // Raster is now an opt-in display mode of the timeseries panel (not a
+  // standalone view) — fetch the channel×time raster slice only while a
+  // timeseries panel is showing it. Gates `rasterSliceQuery` in useWorkspaceData.
+  const hasRaster = hasTimeseries && timeseriesDisplayMode === "raster";
   const hasTrajectory = effectiveActiveViews.includes("trajectory");
   const hasPropagation = effectiveActiveViews.includes("propagation_frame");
   const hasPSD = effectiveActiveViews.includes("psd_average");
@@ -343,6 +349,9 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     v2NavigatorData,
     v2BandpassData,
     v2SpatialData,
+    v2ScatterValues,
+    electrodes,
+    spatialGeometry,
     v2PsdLiveData,
     v2PsdAverageData,
     depthMapSliceQuery,
@@ -385,6 +394,13 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     activeBand,
     timeseriesPixelWidth,
   });
+
+  // Decoded raster (channel×time) for the timeseries panel's raster display
+  // mode — fetched only while `hasRaster` (i.e. the panel is in raster mode).
+  const rasterData = useMemo(
+    () => (rasterSliceQuery.data ? extractRaster(decodeArrowSlice(rasterSliceQuery.data)) : null),
+    [rasterSliceQuery.data],
+  );
 
   // Multi-stream event window for the timeseries markers (G5). The
   // `pinnedStreams`/`eventsByStream` declarations live above (alongside the
@@ -504,13 +520,28 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         onTimeWindowChange={setTimeWindow}
         timeWindow={timeWindow}
         dataRange={dataRange}
+        rasterData={rasterData}
       />
     ) : (
       <div className="placeholder">Loading…</div>
     );
   }
 
-  if (hasSpatial) {
+  if (hasSpatial && spatialGeometry === "planar") {
+    // Non-grid probe → position-driven scatter (x/y from the electrodes
+    // endpoint, per-channel values from the channel-frame slice). The grid
+    // imshow path is skipped for planar (and vice-versa) in useWorkspaceData.
+    viewElements["spatial_map"] =
+      electrodes?.x_coords && electrodes?.y_coords && v2ScatterValues ? (
+        <ScatterMapView
+          positions={{ x: electrodes.x_coords, y: electrodes.y_coords }}
+          values={v2ScatterValues}
+          selectedTime={selectionDraft.time}
+        />
+      ) : (
+        <div className="placeholder">Loading…</div>
+      );
+  } else if (hasSpatial) {
     viewElements["spatial_map"] = v2SpatialData ? (
       <SpatialMapComponent
         v2Cells={v2SpatialData}
@@ -542,20 +573,6 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
           setFocusChannel({ ap, ml: 0 });
           onCommitSelection({ ...selectionDraft, ap, ml: 0, channel: null });
         }}
-      />
-    ) : (
-      <div className="placeholder">Loading…</div>
-    );
-  }
-
-  if (hasRaster) {
-    viewElements["raster"] = rasterSliceQuery.data ? (
-      <HeatmapView
-        slice={rasterSliceQuery.data}
-        viewId="raster"
-        defaultEncoding={{ x: "time", y: "channel" }}
-        colormap="viridis"
-        lockAxes
       />
     ) : (
       <div className="placeholder">Loading…</div>

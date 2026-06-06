@@ -18,10 +18,10 @@
  */
 import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
-import type { BrainstateIntervalDTO, BrainstateMetaDTO, CoordSummary, EventAverageParamsDTO, EventRecordDTO, MaskStateDTO, ProbeLayoutDTO, ProcessingParamsDTO, ScalarSeriesDTO, SelectionDTO, TensorSliceRequestDTO, TrackMetaDTO } from "./types";
+import type { BrainstateIntervalDTO, BrainstateMetaDTO, CoordSummary, ElectrodeLayoutDTO, EventAverageParamsDTO, EventRecordDTO, MaskStateDTO, ProbeLayoutDTO, ProcessingParamsDTO, ScalarSeriesDTO, SelectionDTO, TensorSliceRequestDTO, TrackMetaDTO } from "./types";
 import type { WorkspaceDAGDTO } from "../types/dag";
 import type { ColumnarTimeseries, PSDAvgData, SpatialCell, Spectrogram } from "./arrow";
-import type { LabeledTensor, PSDLiveDecoded } from "./v2-arrow";
+import { decodeLabeledTensor, type LabeledTensor, type PSDLiveDecoded } from "./v2-arrow";
 import { getArrowWorkerPool } from "./workerPool";
 
 export function useStateQuery() {
@@ -286,6 +286,53 @@ export function useProbeLayoutQuery() {
     queryKey: ["probe-layout"],
     queryFn: api.getProbeLayout,
     staleTime: Infinity,
+  });
+}
+
+/**
+ * Electrode geometry for a tensor (grid | linear | planar). Drives the choice
+ * of spatial renderer — planar probes route spatial_map to the scatter view,
+ * which reads the per-channel x/y from here. Cached (`staleTime: Infinity`):
+ * geometry is fixed for a tensor. Returns null on error (no geometry) so the
+ * caller falls back to the grid path.
+ */
+export function useElectrodesQuery(name: string | null) {
+  return useQuery<ElectrodeLayoutDTO | null>({
+    queryKey: ["electrodes", name],
+    queryFn: async () => {
+      try {
+        return await api.getElectrodes(name!);
+      } catch {
+        return null;
+      }
+    },
+    enabled: Boolean(name),
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
+/**
+ * Per-channel value frame for a planar spatial_map slice — a `(channel,)` cube
+ * decoded on the main thread (it is tiny: one value per channel). Returns the
+ * values in channel order; the ScatterMapView pairs them with positions from
+ * `useElectrodesQuery`. (The worker `useV2SpatialQuery` path decodes to
+ * `SpatialCell[]` keyed by AP/ML, which a planar probe lacks.)
+ */
+export function useV2ChannelFrameQuery(
+  name: string | null,
+  request: TensorSliceRequestDTO | null,
+) {
+  return useQuery<number[]>({
+    queryKey: ["slice-v2", "channel_frame", name, request],
+    queryFn: async ({ signal }) => {
+      const buf = await api.getTensorSliceV2(name!, request!, signal);
+      const decoded = decodeLabeledTensor(buf);
+      return Array.from(decoded.data as ArrayLike<number>);
+    },
+    enabled: Boolean(name && request),
+    placeholderData: keepPreviousData,
+    retry: false,
   });
 }
 

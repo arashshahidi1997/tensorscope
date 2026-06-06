@@ -4,6 +4,7 @@ import type {
   DetectRequestDTO,
   DetectResultDTO,
   DetectorDefinitionDTO,
+  ElectrodeLayoutDTO,
   EventDecisionBatchDTO,
   EventDecisionExportResponseDTO,
   EventDecisionListDTO,
@@ -125,6 +126,11 @@ export const api = {
 
   getLayout(): Promise<LayoutDTO> {
     return request<LayoutDTO>("/api/v1/layout");
+  },
+
+  /** Electrode geometry (grid | linear | planar) for a tensor. */
+  getElectrodes(name: string): Promise<ElectrodeLayoutDTO> {
+    return request<ElectrodeLayoutDTO>(`/api/v1/tensors/${name}/electrodes`);
   },
 
   updateLayout(body: LayoutUpdateDTO): Promise<LayoutDTO> {

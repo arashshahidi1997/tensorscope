@@ -112,6 +112,23 @@ export type EventAverageParamsDTO = {
   pool_channels?: boolean;
 };
 
+/**
+ * Electrode geometry for a tensor — GET /tensors/{name}/electrodes.
+ * `geometry` is "grid" (dense AP×ML), "linear" (depth strip), or "planar"
+ * (arbitrary 2-D positions). For planar, `x_coords`/`y_coords` carry the
+ * per-channel positions (channel order) the scatter spatial view plots.
+ */
+export type ElectrodeLayoutDTO = {
+  n_ap: number;
+  n_ml: number;
+  geometry: "grid" | "linear" | "planar" | "custom";
+  ap_coords: number[];
+  ml_coords: number[];
+  n_electrodes: number;
+  x_coords: number[] | null;
+  y_coords: number[] | null;
+};
+
 export type TensorSliceRequestDTO = {
   view_type: string;
   selection: SelectionDTO;
