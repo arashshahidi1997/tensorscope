@@ -1,6 +1,6 @@
 # ADR-0010: Channel-Native Canonical Geometry (positions, not a forced AP×ML grid)
 
-**Status:** Accepted (Phase 1 implemented; Phases 2–3 planned)
+**Status:** Accepted (Phases 1–3 implemented)
 **Date:** 2026-06-06
 **Supersedes (in part):** the "Grid data: (time, AP, ML)" canonical convention in
 `core/schema.py` and `CLAUDE.md`.
@@ -71,13 +71,19 @@ used by ScatterMapView), `extractChannelFramesV2` (movie cube → per-frame chan
 `PropagationController` routing planar → a focused movie-only scatter controller. The grid
 imshow player is untouched. **Interpolated surface DONE:** a `• dots / ▦ fill` toggle on the
 scatter views renders a nearest-electrode (Voronoi) field (`computeNearestMap`, precomputed per
-size, recoloured O(W·H) per frame). **CSD-along-depth: backend DONE** — `csd` view computes
--d²V/dz² along a linear probe's depth axis (`_compute_csd_depth`, sign + boundary-drop per
-neuroscience convention; mirrors `cogpy.depth_probe.csd`), returned as a depth×time image that
-flows through the existing raster/depth_map render. **Remaining (CSD frontend):** expose `csd` in
-linear-probe `available_views` + a depth_map↔csd toggle/slot (reuses `RasterView`); deferred
-pending a layout-slot decision and a linear-probe to verify against (the prototype probe is
-planar).
+size, recoloured O(W·H) per frame). **CSD-along-depth: DONE** — backend `csd` view computes -d²V/dz² along a linear probe's depth
+axis (`_compute_csd_depth`, sign + boundary-drop per neuroscience convention; mirrors
+`cogpy.depth_probe.csd`), returned as a depth×time image. Frontend: an **LFP↔CSD toggle on the
+depth panel** (`appStore.depthCsd` → switches the depth slice request's view_type in
+`useWorkspaceData`; `DepthMapSliceView` renders both through the same depth-sorted `RasterView`,
+since CSD carries a midpoint `depth` coord). No new layout slot — it's a display mode of
+`depth_map`, so `csd` is intentionally not in `available_views`. Verify with
+`bench/serve_linear_probe.py`.
+
+**ADR-0010 is fully implemented.** Channel-native is canonical; non-grid probes are first-class
+across `spatial_map` / `psd_spatial` / `propagation` (dots + interpolated Voronoi surface, with
+mask / region / hover / click parity) and linear probes get `depth_map` + CSD. The grid stays a
+detected lattice fast path.
 
 **Out of scope (explicitly not this ADR):** the Zarr/on-disk chunked-multiscale storage format
 (a separate, complementary decision — channel-native is its natural chunk axis); editing cogpy's

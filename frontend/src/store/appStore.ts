@@ -83,6 +83,13 @@ type AppStore = {
    */
   specNoverlapPct: number;
   /**
+   * Depth panel display mode: false = raw LFP depth×time (depth_map), true =
+   * current-source density along depth (the `csd` view). Session-local toggle on
+   * the linear-probe depth panel; flips the slice request's view_type. See
+   * ADR-0010 Phase 3.
+   */
+  depthCsd: boolean;
+  /**
    * Per-view bandpass overlay (timeseries view). Controls the
    * filtered-band feature from `docs/design/filtered-band-overlay.md`.
    * `preset === "off"` disables the overlay entirely.
@@ -141,6 +148,7 @@ type AppStore = {
   setSpecFmax: (value: number) => void;
   setSpecNpersegS: (value: number) => void;
   setSpecNoverlapPct: (value: number) => void;
+  toggleDepthCsd: () => void;
   setBandPreset: (preset: BandPreset) => void;
   setBandCustom: (lo: number, hi: number) => void;
   /**
@@ -276,6 +284,7 @@ export const useAppStore = create<AppStore>((set) => ({
   specFmax: 30,
   specNpersegS: 1.0,
   specNoverlapPct: 95,
+  depthCsd: false,
   setPsdFmax: (value) => set({ psdFmax: value }),
   setPsdNW: (value) => set({ psdNW: value }),
   setPsdWindowS: (value) => set({ psdWindowS: value }),
@@ -285,6 +294,7 @@ export const useAppStore = create<AppStore>((set) => ({
   setSpecFmax: (value) => set({ specFmax: value }),
   setSpecNpersegS: (value) => set({ specNpersegS: value }),
   setSpecNoverlapPct: (value) => set({ specNoverlapPct: value }),
+  toggleDepthCsd: () => set((s) => ({ depthCsd: !s.depthCsd })),
   bandPreset: "off",
   bandCustom: [11, 16],
   setBandPreset: (preset) => set({ bandPreset: preset }),

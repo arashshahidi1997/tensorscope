@@ -864,6 +864,10 @@ def available_views(data: xr.DataArray) -> list[str]:
     # per-tensor with no session-wide probe binding. See
     # docs/design/neuropixels-multiprobe.md.
     if dims == frozenset({"time", "channel"}) and "depth" in data.coords:
+        # The depth panel renders raw LFP (depth_map) or CSD along depth; CSD is a
+        # display-mode toggle on that panel (request view_type "csd"), not a
+        # standalone slotted view, so it is not advertised here. Both render
+        # through the raster/depth_map path.
         views = [*views, "depth_map"]
     # Planar geometry: a (time, channel) probe with arbitrary 2-D positions
     # (x/y coords — a 4-shank Neuropixels, sparse/L-shaped ECoG, SEEG) earns the

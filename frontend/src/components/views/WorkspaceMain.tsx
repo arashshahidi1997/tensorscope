@@ -127,6 +127,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     focusChannel,
     setFocusChannel,
     setTsFirstChannel,
+    depthCsd,
     timeseriesDisplayMode,
     workspaceObjects,
     setWorkspaceObjects,
@@ -398,6 +399,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     lockedEventTimeRange,
     activeBand,
     timeseriesPixelWidth,
+    depthCsd,
   });
 
   // Decoded raster (channel×time) for the timeseries panel's raster display

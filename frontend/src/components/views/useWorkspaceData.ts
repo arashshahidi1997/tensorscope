@@ -73,6 +73,8 @@ export type WorkspaceDataParams = {
   psd: { nw: number; fmax: number; windowS: number };
   /** Spectrogram-live freq range + window + overlap → spectrogram_live_params. */
   spec: { fmin: number; fmax: number; npersegS: number; noverlapPct: number };
+  /** Depth panel CSD toggle: request `csd` instead of `depth_map` (ADR-0010). */
+  depthCsd?: boolean;
   /** Event-locked PSD window ([t0,t1] extended by margin) or null. */
   lockedEventTimeRange: [number, number] | null;
   /** Active filtered-band preset ([lo,hi]) or null when the overlay is off. */
@@ -124,6 +126,7 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
     lockedEventTimeRange,
     activeBand,
     timeseriesPixelWidth,
+    depthCsd,
   } = params;
 
   // Per-slot tensor routing (Track C1): each query fetches against its panel's
@@ -168,7 +171,9 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
   // profile with the depth coord. No v2 extractor yet → stays v1.
   const depthMapSliceQuery = useSliceQuery(
     tensorFor("depth_map"),
-    flags.hasDepthMap ? makeDefaultSliceRequest("depth_map", selectionDraft, safeWindow) : null,
+    flags.hasDepthMap
+      ? makeDefaultSliceRequest(depthCsd ? "csd" : "depth_map", selectionDraft, safeWindow)
+      : null,
   );
   // raster: channel × time amplitude heatmap over the visible window. No v2
   // extractor yet → stays v1.
