@@ -77,7 +77,16 @@ function App() {
       // current window (pass it explicitly) — a late response must not re-center
       // and stomp a pan the user made while the PUT was in flight. See
       // docs/design/time-transport.md (Phase C).
-      initFromDTO(selection, useSelectionStore.getState().timeWindow);
+      const st = useSelectionStore.getState();
+      const liveFreq = st.freq;
+      initFromDTO(selection, st.timeWindow);
+      // `freq` is a client-local projection — handleSelectFreq never round-trips
+      // it (the spectrogram/PSD render the full freq range and place the cursor
+      // client-side). A click commits time (server) AND freq (local) in one go;
+      // without re-applying the live freq here, the time-commit's echo (carrying
+      // the pre-click freq) reverts it — so a single click's freq "didn't stick"
+      // until a second click. Preserve it like timeWindow / event.
+      useSelectionStore.getState().setFreq(liveFreq);
       queryClient.invalidateQueries({ queryKey: ["state"] });
     },
   });
