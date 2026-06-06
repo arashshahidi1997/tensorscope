@@ -1,12 +1,21 @@
 """
-Data schema validation and normalization for TensorScope.
+Data schema validation and geometry classification for TensorScope.
 
-Enforces canonical conventions:
-- Grid data: (time, AP, ML) dimension order
-- Flat data: (time, channel) with AP/ML coords
-- Row-major flattening: channel = ap * n_ml + ml
+Canonical spatial representation (ADR-0010): **channel-native** — ``(time,
+channel)`` with geometry carried as per-channel coordinates (``x``/``y`` [+
+``z``/``shank``/``region``], or ``depth`` for linear probes). Geometry is *data,
+not shape*, so non-rectangular probes (4-shank Neuropixels, sparse/L-shaped
+ECoG, SEEG) cost nothing extra.
 
-See the TensorScope design principles (§4.3, §4.4) for boundary validation rules.
+The dense ``(time, AP, ML)`` grid is a **detected fast path** for genuine dense
+lattices (regular ECoG), NOT a storage requirement:
+- ``geometry_kind(da)`` classifies ``grid | planar | linear | flat``.
+- ``validate_and_normalize_grid`` reshapes flat data to ``(time, AP, ML)`` ONLY
+  when it tiles a complete lattice; otherwise it stays channel-native.
+- ``to_channel_native(da)`` losslessly demotes a grid to the canonical form.
+- Row-major lattice flattening convention: ``channel = ap * n_ml + ml``.
+
+See ADR-0010 and the TensorScope design principles (§4.3, §4.4).
 """
 
 from __future__ import annotations
@@ -276,3 +285,44 @@ def flatten_grid_to_channels(data: xr.DataArray) -> xr.DataArray:
         )
 
     return flat
+
+
+def to_channel_native(data: xr.DataArray) -> xr.DataArray:
+    """Demote a spatial tensor to the canonical channel-native form (lossless).
+
+    ``(time, AP, ML)`` grid → ``(time, channel)`` in row-major order
+    (``channel = ap*n_ml + ml``), carrying plain per-channel ``AP``/``ML`` coords
+    (an integer ``channel`` index, NOT a MultiIndex — so it serialises cleanly).
+    A dense lattice is still detected as the grid fast path by
+    :func:`geometry_kind` and can be re-gridded with
+    :func:`validate_and_normalize_grid`; position-based spatial ops read
+    ``(x, y) = (ML, AP)`` via ``core.geometry.resolve_positions``.
+    Already-channel-native input is returned unchanged. See ADR-0010.
+    """
+    if not isinstance(data, xr.DataArray):
+        raise SchemaError(f"data must be an xarray.DataArray, got {type(data)!r}")
+    dims = set(str(d) for d in data.dims)
+    if "channel" in dims and "AP" not in dims and "ML" not in dims:
+        return data
+    if {"time", "AP", "ML"}.issubset(dims):
+        g = data.transpose("time", "AP", "ML")
+        n_ap = int(g.sizes["AP"])
+        n_ml = int(g.sizes["ML"])
+        ap_coord = np.asarray(g.coords["AP"].values) if "AP" in g.coords else np.arange(n_ap)
+        ml_coord = np.asarray(g.coords["ML"].values) if "ML" in g.coords else np.arange(n_ml)
+        vals = np.asarray(g.values).reshape(int(g.sizes["time"]), n_ap * n_ml)
+        return xr.DataArray(
+            vals,
+            dims=("time", "channel"),
+            coords={
+                "time": g.coords["time"].values,
+                "channel": np.arange(n_ap * n_ml),
+                "AP": ("channel", np.repeat(ap_coord, n_ml)),
+                "ML": ("channel", np.tile(ml_coord, n_ap)),
+            },
+            attrs=dict(g.attrs),
+            name=g.name,
+        )
+    raise SchemaError(
+        f"to_channel_native expects (time, AP, ML) or (time, channel); got {tuple(data.dims)}"
+    )

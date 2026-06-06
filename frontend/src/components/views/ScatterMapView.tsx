@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
+import { useAppStore } from "../../store/appStore";
+import { useMaskStore } from "../../store/maskStore";
 import { getColormapLUT } from "./colormaps";
 
 /**
@@ -25,16 +27,25 @@ function colorFor(v: number, lo: number, hi: number): string {
 export function ScatterMapView({
   positions,
   values,
-  maskedSet,
   selectedTime,
+  tensorName,
 }: {
   positions: { x: number[]; y: number[] };
   values: number[];
-  maskedSet?: Set<number>;
   selectedTime?: number | null;
+  /** Resolved tensor for this slot — used to grey its masked channels (Track C4
+   * parity with the grid spatial map). */
+  tensorName?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  // Per-channel mask: grey out excluded channels, repainting in place when a
+  // sidebar toggle changes it (no slice refetch) — same store the grid view uses.
+  const globalTensor = useAppStore((s) => s.selectedTensor);
+  const maskTensor = tensorName ?? globalTensor;
+  const maskedArray = useMaskStore((s) => (maskTensor ? s.masks[maskTensor] : undefined));
+  const maskedSet = useMemo(() => (maskedArray ? new Set(maskedArray) : undefined), [maskedArray]);
 
   // Finite, unmasked value range for the colormap.
   const [lo, hi] = useMemo(() => {

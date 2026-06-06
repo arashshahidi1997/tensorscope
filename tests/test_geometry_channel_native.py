@@ -12,10 +12,12 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from tensorscope.core.geometry import resolve_positions
 from tensorscope.core.schema import (
     SchemaError,
     channel_positions,
     geometry_kind,
+    to_channel_native,
     validate_and_normalize_grid,
 )
 from tensorscope.io.assemble import prepare_planar_probe
@@ -108,6 +110,40 @@ def test_planar_probe_accepted_channel_native() -> None:
 def test_plain_flat_accepted_channel_native() -> None:
     out = validate_and_normalize_grid(_flat(40, 8))
     assert out.dims == ("time", "channel")
+
+
+def test_to_channel_native_grid_lossless_and_regriddable() -> None:
+    """to_channel_native flattens a grid row-major (channel = ap*n_ml+ml) without
+    losing data; the result classifies as 'grid' (dense lattice fast path) and
+    re-grids exactly via validate_and_normalize_grid (round-trip)."""
+    grid = _grid(n_time=20, n_ap=2, n_ml=3)
+    cn = to_channel_native(grid)
+    assert cn.dims == ("time", "channel")
+    assert cn.sizes["channel"] == 6
+    # row-major channel order: channel = ap*n_ml + ml
+    np.testing.assert_array_equal(cn.coords["AP"].values, [0, 0, 0, 1, 1, 1])
+    np.testing.assert_array_equal(cn.coords["ML"].values, [0, 1, 2, 0, 1, 2])
+    # lossless: each channel equals its grid cell
+    g = grid.transpose("time", "AP", "ML").values
+    np.testing.assert_array_equal(cn.values, g.reshape(g.shape[0], -1))
+    # still a dense lattice → grid fast path, and re-grids exactly
+    assert geometry_kind(cn) == "grid"
+    regridded = validate_and_normalize_grid(cn)
+    assert regridded.dims == ("time", "AP", "ML")
+    np.testing.assert_array_equal(regridded.values, g)
+    # positions derivable as (x, y) = (ML, AP) without a separate coord
+    pos = resolve_positions(cn)
+    assert pos is not None
+    np.testing.assert_array_equal(pos[:, 0], [0, 1, 2, 0, 1, 2])  # x = ML
+    np.testing.assert_array_equal(pos[:, 1], [0, 0, 0, 1, 1, 1])  # y = AP
+
+
+def test_to_channel_native_passthrough_and_reject() -> None:
+    flat = _flat(20, 4)
+    assert to_channel_native(flat) is flat  # already channel-native → unchanged
+    non_spatial = xr.DataArray(np.zeros((3, 2)), dims=("time", "freq"))
+    with pytest.raises(SchemaError, match="expects"):
+        to_channel_native(non_spatial)
 
 
 def test_dense_flat_still_densifies_to_grid() -> None:

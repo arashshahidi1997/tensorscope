@@ -172,6 +172,7 @@ All four return `EventStream`s built from the cogpy `EventCatalog.df`.
 
 ## Key Conventions
 
+- **Spatial geometry is channel-native (ADR-0010).** Canonical spatial form is `(time, channel)` with geometry as per-channel coords (`x`/`y`[/`z`/`shank`/`region`], or `depth` for linear probes); the dense `(time, AP, ML)` grid is a *detected lattice fast path*, not required. Classify with `core.schema.geometry_kind` (`grid|planar|linear|flat`), read positions via `channel_positions`/`core.geometry.resolve_positions`, build neighbour ops on `core.geometry.build_knn_adjacency`. `validate_and_normalize_grid` only densifies a *complete* lattice; `to_channel_native` demotes a grid losslessly. Don't reintroduce forced AP×ML.
 - Server error mapping: `KeyError → 404`, `ValueError → 400` (structured `ApiErrorDTO`)
 - PSD views: `time_range` is optional; timeseries/navigator/spectrogram require it
 - `psd_live` requires `time` dimension; `psd_params` (NW, fmax) passed in request

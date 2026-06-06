@@ -22,6 +22,7 @@ from tensorscope.core.schema import (
     channel_positions,
     flatten_grid_to_channels,
     geometry_kind,
+    to_channel_native,
     validate_and_normalize_grid,
 )
 from tensorscope.core.geometry import (
@@ -57,6 +58,7 @@ __all__ = [
     "flatten_grid_to_channels",
     "channel_positions",
     "geometry_kind",
+    "to_channel_native",
     "resolve_positions",
     "build_knn_adjacency",
     "spatial_median_graph",

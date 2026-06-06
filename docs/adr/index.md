@@ -25,6 +25,7 @@ Related docs:
 - [ADR-0007: Unified Time-Transport (one cursor/window owner)](./0007-unified-time-transport.md)
 - [ADR-0008: Propagation Playback (preloaded movie, cursor-synced, perceptual colormap)](./0008-propagation-playback.md)
 - [ADR-0009: Navigation Ownership (client-authoritative, stateless slicer, async pairing projection)](./0009-navigation-ownership.md) — _Proposed_
+- [ADR-0010: Channel-Native Canonical Geometry (positions, not a forced AP×ML grid)](./0010-channel-native-canonical-geometry.md) — _Accepted (Phase 1)_
 
 ## Status guidance
 
