@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useSelectionStore, toSelectionDTO } from "./selectionStore";
+import { useSelectionStore, toSelectionDTO, MAX_WINDOW_S } from "./selectionStore";
 import type { SelectionDTO } from "../api/types";
 
 // Reset store to defaults between tests
@@ -64,6 +64,28 @@ describe("setTimeWindow", () => {
     getStore().setTimeWindow([3, 7]);
     expect(getStore().timeWindow).toEqual([3, 7]);
     expect(getStore().timeCursor).toBe(0); // unchanged
+  });
+});
+
+describe("bounded zoom (ADR-0011 / lazy memmap cap)", () => {
+  it("caps an over-wide window at MAX_WINDOW_S, centered on its midpoint", () => {
+    // The bug it fixes: on a 137-min file an unbounded window made views request
+    // the whole recording → server 400 / OOM. Width is clamped; macro is the navigator.
+    getStore().setTimeWindow([0, 8214]); // the whole session
+    const [lo, hi] = getStore().timeWindow;
+    expect(hi - lo).toBe(MAX_WINDOW_S);
+    expect((lo + hi) / 2).toBeCloseTo(4107, 0); // stayed centered on the requested midpoint
+  });
+
+  it("leaves a window already within the cap untouched", () => {
+    getStore().setTimeWindow([100, 130]); // 30 s ≤ cap
+    expect(getStore().timeWindow).toEqual([100, 130]);
+  });
+
+  it("caps setDuration too", () => {
+    getStore().setDuration(600); // ask for 10 min
+    const [lo, hi] = getStore().timeWindow;
+    expect(hi - lo).toBe(MAX_WINDOW_S);
   });
 });
 

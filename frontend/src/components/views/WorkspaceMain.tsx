@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   eventTimeRange,
+  computeChannelWindow,
   useProcessingQuery,
   useSetProcessing,
   PSD_EVENT_LOCK_MARGIN_S,
@@ -32,6 +33,7 @@ import { useViewportStore } from "../../store/viewportStore";
 import { useLayoutStore } from "../../store/layoutStore";
 import { useTimeNavigation } from "./useTimeNavigation";
 import { resolveTensorForSlot, useWorkspaceData } from "./useWorkspaceData";
+import { useSelectionStore } from "../../store/selectionStore";
 import { getAvailableViews, getOrthoPair, viewRegistry } from "../../registry/viewRegistry";
 import { layoutViewIds } from "./viewGridLayout";
 import { EventAverageView } from "./EventAverageView";
@@ -51,7 +53,7 @@ import { SpatialEventView } from "./SpatialEventView";
 import { SpectrogramView } from "./SpectrogramView";
 // PSDHeatmapView retired in the v2 cutover — psd_heatmap renders via the
 // encoding-driven HeatmapView (extractHeatmapNDV2) instead.
-import { TimeseriesSliceView } from "./TimeseriesSliceView";
+import { TimeseriesSliceView, N_VISIBLE } from "./TimeseriesSliceView";
 import { OrthoSlicerView } from "./OrthoSlicerView";
 import { TensorChooser } from "./TensorChooser";
 import { TensorOverview } from "./TensorOverview";
@@ -59,6 +61,11 @@ import { ViewGrid } from "./ViewGrid";
 import { ProcessingPanel } from "../controls/ProcessingPanel";
 
 const PSD_LIVE_EXPANSION = ["psd_heatmap", "psd_curve", "psd_spatial"];
+
+/** Views that keep a default grid slot but are OFF until toggled on (heavier /
+ *  rarely needed). `event_average` builds event-locked epochs over the full
+ *  tensor on mount — costly and seldom used mid-navigation, so it's opt-in. */
+const OPT_IN_VIEWS = new Set<string>(["event_average"]);
 
 /**
  * Replace server's "psd_live" with the frontend sub-view IDs.
@@ -227,7 +234,12 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
         // supports depth_map even though the global ecog tensor doesn't), so
         // don't gate the slotted views by the global tensor's availability.
         ? Array.from(gridSlotViews)
-        : availableViews.filter((v) => gridSlotViews.has(v))
+        // OPT_IN_VIEWS keep their grid slot but are OFF until the user toggles
+        // them on — event_average builds event-locked epochs over the FULL
+        // tensor (costly, rarely needed mid-navigation), so don't fetch it by
+        // default. Toggling it via the view pills adds it to `activeViews`,
+        // which takes the explicit branch below and renders it in its slot.
+        : availableViews.filter((v) => gridSlotViews.has(v) && !OPT_IN_VIEWS.has(v))
       : activeViews.filter((v) => availableViews.includes(v));
   const hasTimeseries = effectiveActiveViews.includes("timeseries");
   const hasSpatial = effectiveActiveViews.includes("spatial_map");
@@ -255,6 +267,24 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   const orthoPair = getOrthoPair(tensorDims);
 
   const timeCoord = tensorQuery.data?.coords.find((c) => c.name === "time");
+
+  // ADR-0011 Phase 1 channel-window: DISABLED. Windowing the FETCH to the visible
+  // 16 channels turned instant client-side channel scroll ([ / ]) into a per-scroll
+  // server refetch — a regression (the full set used to be fetched once and sliced
+  // client-side). The server primitive + helper + tests stay; the proper re-enable
+  // is channel OVERSCAN (fetch a wider band, slice the visible 16 client-side).
+  // See docs/design/timeseries-perf-plan.md.
+  const CHANNEL_WINDOW_ENABLED = false;
+  const tsFirstChannel = useAppStore((s) => s.tsFirstChannel);
+  const tsChannelCount =
+    tensorQuery.data?.coords.find((c) => c.name === "channel")?.length ?? null;
+  const channelWindow = useMemo(
+    () =>
+      CHANNEL_WINDOW_ENABLED
+        ? computeChannelWindow(tsChannelCount, tsFirstChannel, N_VISIBLE)
+        : null,
+    [tsChannelCount, tsFirstChannel],
+  );
 
   // Time / cursor navigation controller — owns the live window, the debounced +
   // data-bounds-clamped fetch window, the memoised selection draft, and the
@@ -351,6 +381,12 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   // falls back to a sensible constant in that gap.
   const timeseriesPixelWidth = useViewportStore((s) => s.timeseriesWidthPx) ?? undefined;
 
+  // Inspect-event mode (additive): when on, the timeseries fetch uses a
+  // full-resolution `downsample:"none"` request over the (tight) visible window
+  // so a detected event shows individual oscillation cycles. Off = unchanged
+  // decimated LOD navigation.
+  const inspectMode = useSelectionStore((s) => s.inspectMode);
+
   // Per-view data layer — every slice query (v2 + the not-yet-migrated v1
   // views), the brainstate metadata/intervals fetch, the sticky "last good
   // slice" pins, and the derived per-view status maps. See ./useWorkspaceData.
@@ -407,6 +443,8 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
     activeBand,
     timeseriesPixelWidth,
     depthCsd,
+    channelWindow,
+    inspectMode,
   });
 
   // Decoded raster (channel×time) for the timeseries panel's raster display
@@ -520,6 +558,7 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
       <TimeseriesSliceView
         v2Data={v2TimeseriesData}
         v2BandpassData={v2BandpassData}
+        channelWindow={channelWindow}
         bandPreset={bandPreset}
         bandActive={activeBand}
         focusChannel={focusChannel}

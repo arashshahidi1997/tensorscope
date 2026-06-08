@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { EventRecordDTO, EventStreamMetaDTO } from "../../api/types";
 import { toNumber } from "../../api/arrow";
 import {
@@ -21,6 +21,12 @@ import {
 } from "./AnnotationPopover";
 import { ExportDecisionsControls } from "./ExportDecisionsControls";
 import { EventFilterPanel } from "./EventFilterPanel";
+import {
+  nextSortState,
+  sortEventRecords,
+  type EventTableSort,
+} from "./eventTableSort";
+import { eventTimeRange } from "../../api/queries";
 
 const NOTES_PREVIEW_LEN = 30;
 
@@ -70,6 +76,18 @@ type Props = {
    * The caller should update selectionStore.event AND commit the time cursor.
    */
   onSelectEvent?: (eventId: string | number, streamName: string, t: number) => void;
+  /**
+   * Inspect an event at full resolution in a tight clamped window (additive
+   * "inspect one detected event" feature). `span` is the event's `[t0, t1]`
+   * start/stop if the record carries one (else null → point event). The caller
+   * re-frames the timeseries and switches it to `downsample:"none"`.
+   */
+  onInspectEvent?: (
+    eventId: string | number,
+    streamName: string,
+    t: number,
+    span?: [number, number] | null,
+  ) => void;
   onPrev: () => void;
   onNext: () => void;
   onActivateStream: (name: string) => void;
@@ -105,6 +123,7 @@ export function EventTableView({
   selectedEventId,
   onSelectTime,
   onSelectEvent,
+  onInspectEvent,
   onPrev,
   onNext,
   onActivateStream,
@@ -113,6 +132,7 @@ export function EventTableView({
   onCoincidenceWindowChange,
 }: Props) {
   const [filter, setFilter] = useState<StatusFilter>("all");
+  const [sort, setSort] = useState<EventTableSort>({ column: null, direction: "asc" });
   const [popoverEventId, setPopoverEventId] = useState<string | number | null>(null);
   // Channel scope for the window list (1b). Default "all": per-channel
   // streams have few/no events on the default (0,0) cell, which used to
@@ -229,6 +249,111 @@ export function EventTableView({
     [streams, pinnedStreams],
   );
 
+  // Filtered + sorted visible rows. Filtering is by review status; sorting is by
+  // the clicked column header (additive — `sort.column` null = natural order).
+  // We sort a decorated record array (each carrying its original index, so the
+  // coincidence-ring lookup and React keys stay intact) via the pure, unit-tested
+  // `sortEventRecords`. `__idx` is a private decoration the sort never targets.
+  const visibleEvents = useMemo(() => {
+    if (!streamMeta) return [] as Array<{ ev: EventRecordDTO; idx: number }>;
+    const filtered = events
+      .map((ev, idx) => ({ ev, idx }))
+      .filter(({ ev }) => {
+        if (filter === "all") return true;
+        const id = (ev.record as Record<string, unknown>)[streamMeta.id_col] as
+          | string
+          | number
+          | undefined;
+        const status = id != null ? idToStatus.get(id) : undefined;
+        if (filter === "pending") return status === undefined;
+        return status === filter;
+      });
+    if (!sort.column) return filtered;
+    const decorated = filtered.map(({ ev, idx }) => ({
+      ...(ev.record as Record<string, unknown>),
+      __idx: idx,
+    }));
+    const sorted = sortEventRecords(decorated, sort);
+    return sorted.map(
+      (d) => filtered.find((e) => e.idx === (d.__idx as number))!,
+    );
+  }, [events, streamMeta, filter, idToStatus, sort]);
+
+  // Resolve a row's (eventId, t, span) for the inspect action. `span` is the
+  // event's [t0, t1] if the record carries start/stop (or duration); else null.
+  const resolveInspectTarget = useCallback(
+    (record: Record<string, unknown>) => {
+      if (!streamMeta) return null;
+      const t = toNumber(record.t ?? record[streamMeta.time_col]);
+      const eventId = record[streamMeta.id_col];
+      if (t === null || eventId == null) return null;
+      const span = eventTimeRange(record, streamMeta.time_col);
+      // A zero-width span (point event) → null, so inspectWindowFor pads it.
+      const useSpan = span && span[1] > span[0] ? span : null;
+      return { eventId: eventId as string | number, t, span: useSpan };
+    },
+    [streamMeta],
+  );
+
+  // Inspect a specific visible row by its position in the (sorted) list.
+  const inspectByPosition = useCallback(
+    (pos: number) => {
+      if (!streamMeta || !onInspectEvent) return;
+      const entry = visibleEvents[pos];
+      if (!entry) return;
+      const target = resolveInspectTarget(entry.ev.record as Record<string, unknown>);
+      if (!target) return;
+      onInspectEvent(target.eventId, streamMeta.name, target.t, target.span);
+    },
+    [streamMeta, onInspectEvent, visibleEvents, resolveInspectTarget],
+  );
+
+  // Position of the active event within the sorted visible list (−1 if none).
+  const activePos = useMemo(() => {
+    if (!streamMeta || selectedEventId == null) return -1;
+    return visibleEvents.findIndex(
+      ({ ev }) =>
+        (ev.record as Record<string, unknown>)[streamMeta.id_col] === selectedEventId,
+    );
+  }, [visibleEvents, streamMeta, selectedEventId]);
+
+  // Step prev/next through the sorted list, re-framing the inspect window each
+  // step. Wraps to the first/last when nothing is selected yet.
+  const inspectStep = useCallback(
+    (dir: -1 | 1) => {
+      if (visibleEvents.length === 0) return;
+      const base = activePos < 0 ? (dir === 1 ? -1 : visibleEvents.length) : activePos;
+      const next = Math.min(visibleEvents.length - 1, Math.max(0, base + dir));
+      inspectByPosition(next);
+    },
+    [visibleEvents.length, activePos, inspectByPosition],
+  );
+
+  // Hotkeys: Enter inspects the active row at full resolution; "," / "." step
+  // prev/next through the sorted list (each re-framing the tight window).
+  // [ and ] are taken by channel-scroll, j/k by event review — so we use , / .
+  // Bails inside inputs and when nothing actionable is selected.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (!streamMeta || !onInspectEvent) return;
+      if (e.key === "Enter") {
+        if (activePos < 0) return;
+        e.preventDefault();
+        inspectByPosition(activePos);
+      } else if (e.key === ",") {
+        e.preventDefault();
+        inspectStep(-1);
+      } else if (e.key === ".") {
+        e.preventDefault();
+        inspectStep(1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [streamMeta, onInspectEvent, activePos, inspectByPosition, inspectStep]);
+
   if (streams.length === 0) {
     return (
       <div className="control-stack">
@@ -257,22 +382,6 @@ export function EventTableView({
     }
     setPopoverEventId(null);
   };
-
-  // Filter events by review status. "pending" = no decision recorded.
-  const visibleEvents = streamMeta
-    ? events
-        .map((ev, idx) => ({ ev, idx }))
-        .filter(({ ev }) => {
-          if (filter === "all") return true;
-          const id = (ev.record as Record<string, unknown>)[streamMeta.id_col] as
-            | string
-            | number
-            | undefined;
-          const status = id != null ? idToStatus.get(id) : undefined;
-          if (filter === "pending") return status === undefined;
-          return status === filter;
-        })
-    : [];
 
   return (
     <div className="control-stack">
@@ -398,6 +507,41 @@ export function EventTableView({
             </button>
           </div>
 
+          {/* Inspect-at-full-resolution nav (additive). Steps through the
+              sorted list, re-framing a tight (≤ 8 s) full-res window each step. */}
+          {onInspectEvent && (
+            <div className="event-inspect-nav" data-testid="event-inspect-nav">
+              <button
+                type="button"
+                className="nav-btn"
+                onClick={() => inspectStep(-1)}
+                disabled={visibleEvents.length === 0}
+                title="Inspect previous event at full resolution"
+              >
+                ‹ Inspect (,)
+              </button>
+              <button
+                type="button"
+                className="nav-btn"
+                data-testid="inspect-current-btn"
+                onClick={() => inspectByPosition(activePos < 0 ? 0 : activePos)}
+                disabled={visibleEvents.length === 0}
+                title="Inspect the selected event at full resolution (Enter)"
+              >
+                ⤢ Inspect (Enter)
+              </button>
+              <button
+                type="button"
+                className="nav-btn"
+                onClick={() => inspectStep(1)}
+                disabled={visibleEvents.length === 0}
+                title="Inspect next event at full resolution"
+              >
+                Inspect (.) ›
+              </button>
+            </div>
+          )}
+
           <div className="event-filter">
             <label htmlFor="event-status-filter" className="muted">Filter:&nbsp;</label>
             <select
@@ -473,8 +617,36 @@ export function EventTableView({
                 <thead>
                   <tr>
                     <th aria-label="Review status" />
-                    {cols.map((col) => <th key={col}>{col}</th>)}
+                    {cols.map((col) => {
+                      const isSorted = sort.column === col;
+                      const arrow = isSorted
+                        ? sort.direction === "asc"
+                          ? " ▲"
+                          : " ▼"
+                        : "";
+                      return (
+                        <th
+                          key={col}
+                          className={`sortable-col${isSorted ? " sorted" : ""}`}
+                          data-testid={`event-col-${col}`}
+                          aria-sort={
+                            isSorted
+                              ? sort.direction === "asc"
+                                ? "ascending"
+                                : "descending"
+                              : "none"
+                          }
+                          onClick={() => setSort((s) => nextSortState(s, col))}
+                          style={{ cursor: "pointer", userSelect: "none" }}
+                          title="Click to sort"
+                        >
+                          {col}
+                          {arrow}
+                        </th>
+                      );
+                    })}
                     <th>notes</th>
+                    {onInspectEvent && <th aria-label="Inspect" />}
                   </tr>
                 </thead>
                 <tbody>
@@ -557,13 +729,38 @@ export function EventTableView({
                           >
                             {notesPreview}
                           </td>
+                          {onInspectEvent && (
+                            <td className="inspect-cell">
+                              <button
+                                type="button"
+                                className="inspect-row-btn"
+                                data-testid={`inspect-btn-${idx}`}
+                                aria-label="Inspect at full resolution"
+                                title="Inspect at full resolution"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (t === null || eventId == null) return;
+                                  const span = eventTimeRange(record, streamMeta.time_col);
+                                  const useSpan = span && span[1] > span[0] ? span : null;
+                                  onInspectEvent(
+                                    eventId as string | number,
+                                    streamMeta.name,
+                                    t,
+                                    useSpan,
+                                  );
+                                }}
+                              >
+                                ⤢
+                              </button>
+                            </td>
+                          )}
                         </tr>
                         {popoverOpen && eventId != null && (
                           <tr
                             className="annotation-popover-row"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <td colSpan={cols.length + 2}>
+                            <td colSpan={cols.length + 2 + (onInspectEvent ? 1 : 0)}>
                               <AnnotationPopover
                                 initial={{
                                   status: status ?? "pending",
