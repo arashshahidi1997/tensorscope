@@ -274,9 +274,12 @@ export function EventTableView({
       __idx: idx,
     }));
     const sorted = sortEventRecords(decorated, sort);
-    return sorted.map(
-      (d) => filtered.find((e) => e.idx === (d.__idx as number))!,
-    );
+    // Map back to the { ev, idx } entries via an index → entry lookup (O(n)); a
+    // per-row `filtered.find` is O(n²) and stalls on a night of thousands of
+    // detected events. `__idx` values come straight from `filtered`, so every
+    // lookup hits.
+    const byIdx = new Map(filtered.map((e) => [e.idx, e]));
+    return sorted.map((d) => byIdx.get(d.__idx as number)!);
   }, [events, streamMeta, filter, idToStatus, sort]);
 
   // Resolve a row's (eventId, t, span) for the inspect action. `span` is the
