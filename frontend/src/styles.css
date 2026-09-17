@@ -1566,6 +1566,14 @@ code, pre, .topbar-chip, .meta-row, .val, .coord-row {
   text-transform: uppercase;
   flex-shrink: 0;
 }
+.view-panel-header .panel-time-chip {
+  /* Shared-playhead readout (probe lanes): tabular digits so the number
+     doesn't jitter as the cursor moves. */
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  color: var(--text-muted, #8b949e);
+  border: 1px solid rgba(139, 148, 158, 0.35);
+}
 .view-panel-header .panel-badge--error {
   background: rgba(239, 68, 68, 0.18);
   color: #f87171;
