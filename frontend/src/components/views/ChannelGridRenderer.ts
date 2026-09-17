@@ -66,6 +66,17 @@ export class ChannelGridRenderer implements SpatialRendererBackend {
     this.height = height;
   }
 
+  /**
+   * ImageData byte offset for grid cell (apIdx, mlIdx). The value image is
+   * laid out width = nML, height = nAP — so a fixed DISPLAY COLUMN is a
+   * fixed ML (x = ml, y = ap). This is a display offset, NOT the flat
+   * channel id. Exposed as the seam for the G1 geometry regression guard
+   * (spatialOrientation.test.ts); `render()` below uses it verbatim.
+   */
+  static cellPixelOffset(apIdx: number, mlIdx: number, nML: number): number {
+    return (apIdx * nML + mlIdx) * 4;
+  }
+
   render(cells: SpatialCellWithId[], options: SpatialRenderOptions): void {
     if (!this.ctx || !this.canvas) return;
 
@@ -132,7 +143,7 @@ export class ChannelGridRenderer implements SpatialRendererBackend {
         const flatId = ap * nML + ml;
         const isMasked = maskSet ? maskSet.has(flatId) : false;
         const cell = cellByPos.get(flatId);
-        const px = (ap * nML + ml) * 4;
+        const px = ChannelGridRenderer.cellPixelOffset(ap, ml, nML);
         if (isMasked) {
           // Solid neutral fill so a smoothing blit doesn't leak data colour
           // into the masked footprint; the hatched overlay paints on top.
