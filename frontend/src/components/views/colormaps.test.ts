@@ -104,3 +104,18 @@ describe("colormaps — golden LUT samples (N3)", () => {
     expect([lut[0], lut[1], lut[2], lut[3]]).toEqual([r, g, b, a]);
   });
 });
+
+
+describe("RdBu_r diverging colormap (D2)", () => {
+  it("is blue at the low end (sink), white at midpoint (zero), red at the high end (source)", () => {
+    const [rLo, gLo, bLo] = colormapAt("RdBu_r", 0);
+    expect(bLo).toBeGreaterThan(rLo); // deep blue
+    const [rMid, gMid, bMid] = colormapAt("RdBu_r", 0.5);
+    // near-white midpoint: channels close together and bright
+    expect(Math.min(rMid, gMid, bMid)).toBeGreaterThan(230);
+    expect(Math.max(rMid, gMid, bMid) - Math.min(rMid, gMid, bMid)).toBeLessThan(10);
+    const [rHi, gHi, bHi] = colormapAt("RdBu_r", 1);
+    expect(rHi).toBeGreaterThan(bHi); // deep red
+    expect(gHi).toBeLessThan(60);
+  });
+});

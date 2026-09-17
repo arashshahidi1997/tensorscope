@@ -366,3 +366,41 @@ def test_pair_context_set_viewport_and_follow() -> None:
     # Bad input — neither form supplied
     with pytest.raises(Exception):
         ctx.set_viewport()  # raises 400 → httpx HTTPStatusError
+
+
+def test_run_detector_publishes_events_added() -> None:
+    """POST /events/detect must announce the new stream on the bus (E1).
+
+    The frontend refreshes the Events tab only on an "events_added" SSE
+    message (api/pairingStream.ts) — post_event_stream published it but
+    run_detector didn't, so freshly-detected streams stayed invisible until
+    a manual reload (npix-event-tooling-plan.md, Track E1).
+    """
+    app = _app(pair_mode=True)
+    client = TestClient(app)
+    client.get("/api/v1/state")
+    state = app.state.session_manager._records["pair"].state  # type: ignore[attr-defined]
+    tensor_name = client.get("/api/v1/tensors").json()[0]["name"]
+
+    async def _run():
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        sub = state.subscribe(queue, loop)
+        try:
+            resp = client.post(
+                "/api/v1/events/detect",
+                json={
+                    "detector_name": "threshold",
+                    "tensor_name": tensor_name,
+                    "stream_name": "detected_via_api",
+                    "params": {"threshold": 10.0, "direction": "above"},
+                },
+            )
+            assert resp.status_code == 200
+            msg = await asyncio.wait_for(queue.get(), timeout=2.0)
+            assert msg["type"] == "events_added"
+            assert msg["payload"]["name"] == "detected_via_api"
+        finally:
+            state.unsubscribe(sub)
+
+    asyncio.run(_run())

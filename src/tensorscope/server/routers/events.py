@@ -100,6 +100,12 @@ def run_detector(body: DetectRequestDTO, session: SessionState = SessionStateDep
     # Register in event registry
     state.events.register(stream)
 
+    # Announce it exactly like post_event_stream does: the frontend only
+    # invalidates ["state"] on an "events_added" SSE message, so without this
+    # publish a freshly-detected stream never shows in the Events tab until a
+    # manual reload (npix-event-tooling-plan.md E1).
+    state.publish("events_added", event_stream_meta(stream).model_dump())
+
     return DetectResultDTO(
         stream_name=stream.name,
         n_events=len(stream),

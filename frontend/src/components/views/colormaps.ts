@@ -17,7 +17,7 @@
  * of matplotlib's published ramps for these maps.
  */
 
-export type ColormapName = "jet" | "viridis" | "inferno" | "cividis" | "sequential";
+export type ColormapName = "jet" | "viridis" | "inferno" | "cividis" | "sequential" | "RdBu_r";
 
 type RGB = [number, number, number];
 
@@ -87,6 +87,26 @@ const CIVIDIS = buildLUT([
   [1.0, [1.0, 0.928044, 0.337386]],
 ]);
 
+// ── RdBu_r (matplotlib/ColorBrewer diverging, reversed): blue → white → red.
+// The canonical map for SIGNED sink/source quantities (CSD): blue = sink
+// (negative), white = zero, red = source (positive) — matches pixecog's CSD
+// figures (`cmap="RdBu_r", vmin=-v, vmax=v`). Anchors = the 11-class
+// ColorBrewer RdBu palette, reversed. Use with a SYMMETRIC ±max range so the
+// midpoint (white) sits exactly at zero. ────────────────────────────────
+const RDBU_R = buildLUT([
+  [0.0, [0.019608, 0.188235, 0.380392]],  // #053061 deep blue (strong sink)
+  [0.1, [0.129412, 0.4, 0.674510]],       // #2166ac
+  [0.2, [0.262745, 0.576471, 0.764706]],  // #4393c3
+  [0.3, [0.572549, 0.772549, 0.870588]],  // #92c5de
+  [0.4, [0.819608, 0.898039, 0.941176]],  // #d1e5f0
+  [0.5, [0.968627, 0.968627, 0.968627]],  // #f7f7f7 white (zero)
+  [0.6, [0.992157, 0.858824, 0.780392]],  // #fddbc7
+  [0.7, [0.956863, 0.647059, 0.509804]],  // #f4a582
+  [0.8, [0.839216, 0.376471, 0.301961]],  // #d6604d
+  [0.9, [0.698039, 0.094118, 0.168627]],  // #b2182b
+  [1.0, [0.403922, 0.0, 0.121569]],       // #67001f deep red (strong source)
+]);
+
 // ── "sequential" — preserves the prior HSL ramp for back-compat with views
 // that hadn't migrated yet. ────────────────────────────────────────────
 function buildSequentialLUT(): Uint8ClampedArray {
@@ -118,6 +138,7 @@ const SEQUENTIAL = buildSequentialLUT();
 
 const REGISTRY: Record<ColormapName, Uint8ClampedArray> = {
   jet: JET,
+  RdBu_r: RDBU_R,
   viridis: VIRIDIS,
   inferno: INFERNO,
   cividis: CIVIDIS,
