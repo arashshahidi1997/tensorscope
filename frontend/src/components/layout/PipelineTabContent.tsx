@@ -401,6 +401,16 @@ function NumericInput({
 type AddActivity = (entry: ActivityEntry) => void;
 type UpdateActivity = (id: string, patch: Partial<Omit<ActivityEntry, "id">>) => void;
 
+/**
+ * Detectors that need NO global threshold (E2, npix-event-tooling-plan.md):
+ * cogpy_burst finds h-maxima blobs on the multitaper spectrogram and
+ * cogpy_slowwave uses adaptive percentile gates — both adapt to the local
+ * signal, so they work on heterogeneous recordings where a single global
+ * threshold (the other group) mis-fires. Grouping the dropdown makes that
+ * discoverable instead of tribal knowledge.
+ */
+const LOCAL_ADAPTIVE_DETECTORS = new Set(["cogpy_burst", "cogpy_slowwave"]);
+
 /** Detector section — lets the user pick a detector, configure params, and run it. */
 function DetectorSection({ tensorName, addActivity, updateActivity }: {
   tensorName: string;
@@ -479,9 +489,16 @@ function DetectorSection({ tensorName, addActivity, updateActivity }: {
           style={{ display: "block", width: "100%", fontSize: 12, marginTop: 2 }}
         >
           <option value="">-- select --</option>
-          {detectors.map((d) => (
-            <option key={d.name} value={d.name}>{d.name}</option>
-          ))}
+          <optgroup label="local/adaptive (no global threshold)">
+            {detectors.filter((d) => LOCAL_ADAPTIVE_DETECTORS.has(d.name)).map((d) => (
+              <option key={d.name} value={d.name}>{d.name}</option>
+            ))}
+          </optgroup>
+          <optgroup label="threshold">
+            {detectors.filter((d) => !LOCAL_ADAPTIVE_DETECTORS.has(d.name)).map((d) => (
+              <option key={d.name} value={d.name}>{d.name}</option>
+            ))}
+          </optgroup>
         </select>
       </label>
 
