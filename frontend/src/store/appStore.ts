@@ -19,6 +19,9 @@ function getInitialTheme(): ThemeId {
   return THEME_IDS.includes(saved as ThemeId) ? (saved as ThemeId) : "plotly-dark";
 }
 
+/** Channel scope for event-window fetches ("all channels" vs the selected cell). */
+export type EventChannelScope = "all" | "channel";
+
 type AppStore = {
   selectedTensor: string | null;
   /** Set of view types the user has toggled ON. Empty = use defaults (all available). */
@@ -27,6 +30,14 @@ type AppStore = {
   theme: ThemeId;
   /** Whether to show brainstate color overlay on timeseries/navigator. */
   brainstateOverlay: boolean;
+  /**
+   * Channel scope for the event-window fetches (review list + overlays).
+   * "all" (default) lists every in-window event; "channel" scopes the list to
+   * the selected AP/ML cell. The default MUST be "all": per-channel detection
+   * streams have few/no events on the default (0,0) cell, which used to leave
+   * the whole review workflow (list, j/k, inspect) silently empty.
+   */
+  eventChannelScope: EventChannelScope;
   /**
    * Per-track lane visibility in the context-track stack (brainstate band,
    * speed lane, …). Keyed by track name; a missing key means visible (lanes
@@ -137,6 +148,7 @@ type AppStore = {
   setLayoutDraft: (value: LayoutDTO) => void;
   setTheme: (value: ThemeId) => void;
   toggleBrainstateOverlay: () => void;
+  setEventChannelScope: (scope: EventChannelScope) => void;
   /** Flip a context-track lane's visibility (defaults to visible). */
   toggleTrackVisible: (name: string) => void;
   setPsdFmax: (value: number) => void;
@@ -207,6 +219,7 @@ export const useAppStore = create<AppStore>((set) => ({
   layoutDraft: null,
   theme: getInitialTheme(),
   brainstateOverlay: true,
+  eventChannelScope: "all",
   trackVisibility: {},
   timeseriesDisplayMode: "traces",
   setTimeseriesDisplayMode: (mode) => set({ timeseriesDisplayMode: mode }),
@@ -260,6 +273,7 @@ export const useAppStore = create<AppStore>((set) => ({
     set({ theme: value });
   },
   toggleBrainstateOverlay: () => set((s) => ({ brainstateOverlay: !s.brainstateOverlay })),
+  setEventChannelScope: (scope) => set({ eventChannelScope: scope }),
   toggleTrackVisible: (name) =>
     set((s) => ({
       // Missing key = visible, so the first toggle hides it.

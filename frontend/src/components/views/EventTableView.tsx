@@ -12,6 +12,9 @@ import {
   useEventReviewStore,
   type EventReviewStatus,
 } from "../../store/eventReviewStore";
+import { useAppStore } from "../../store/appStore";
+import { useSelectionStore } from "../../store/selectionStore";
+import { EVENT_WINDOW_HALF_S } from "../../api/queries";
 import {
   AnnotationPopover,
   type AnnotationPopoverValue,
@@ -111,6 +114,13 @@ export function EventTableView({
 }: Props) {
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [popoverEventId, setPopoverEventId] = useState<string | number | null>(null);
+  // Channel scope for the window list (1b). Default "all": per-channel
+  // streams have few/no events on the default (0,0) cell, which used to
+  // leave the review list (and j/k/inspect) silently empty.
+  const eventChannelScope = useAppStore((s) => s.eventChannelScope);
+  const setEventChannelScope = useAppStore((s) => s.setEventChannelScope);
+  const scopeAp = useSelectionStore((s) => s.spatial.ap);
+  const scopeMl = useSelectionStore((s) => s.spatial.ml);
   const decisions = useEventReviewStore((s) => s.decisions);
   const setDecisionAction = useEventReviewStore((s) => s.setDecision);
   const clearDecisionAction = useEventReviewStore((s) => s.clearDecision);
@@ -368,6 +378,26 @@ export function EventTableView({
             <button type="button" className="nav-btn" onClick={onNext}>Next (j) →</button>
           </div>
 
+          <div className="event-scope" data-testid="event-scope" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span className="muted">Scope:&nbsp;</span>
+            <button
+              type="button"
+              className={eventChannelScope === "all" ? "pill active" : "pill"}
+              onClick={() => setEventChannelScope("all")}
+              title="List every event in the window, regardless of detecting channel"
+            >
+              All channels
+            </button>
+            <button
+              type="button"
+              className={eventChannelScope === "channel" ? "pill active" : "pill"}
+              onClick={() => setEventChannelScope("channel")}
+              title="Only events detected on the selected grid cell"
+            >
+              @ AP {scopeAp} · ML {scopeMl}
+            </button>
+          </div>
+
           <div className="event-filter">
             <label htmlFor="event-status-filter" className="muted">Filter:&nbsp;</label>
             <select
@@ -412,11 +442,31 @@ export function EventTableView({
           )}
 
           {visibleEvents.length === 0 ? (
-            <p className="muted">
-              {events.length === 0
-                ? "No events in current window."
-                : `No ${filter} events in current window.`}
-            </p>
+            <div className="muted event-empty" data-testid="event-empty">
+              {events.length === 0 ? (
+                <>
+                  <p>
+                    No {streamMeta.name} events within ±{EVENT_WINDOW_HALF_S} s of the
+                    cursor
+                    {eventChannelScope === "channel"
+                      ? ` on cell AP ${scopeAp} · ML ${scopeMl}`
+                      : ""}
+                    .
+                  </p>
+                  <p>
+                    The stream has {streamMeta.n_events} events over{" "}
+                    {(streamMeta.time_range[0] ?? 0).toFixed(0)}–{(streamMeta.time_range[1] ?? 0).toFixed(0)} s
+                    — use Next (j) / Prev (k) to jump to one
+                    {eventChannelScope === "channel"
+                      ? ", or switch the scope to All channels"
+                      : ""}
+                    .
+                  </p>
+                </>
+              ) : (
+                <p>{`No ${filter} events in current window.`}</p>
+              )}
+            </div>
           ) : (
             <div className="event-table-wrap">
               <table className="event-table">

@@ -15,6 +15,7 @@ import {
   useProcessingQuery,
   useSetProcessing,
   PSD_EVENT_LOCK_MARGIN_S,
+  EVENT_WINDOW_HALF_S,
   useEventWindowQueries,
   useStateQuery,
   useTensorQuery,
@@ -283,7 +284,13 @@ export function WorkspaceMain({ onCommitSelection, renderNavigator }: WorkspaceM
   // in sync with whatever the table/timeline shows.
   const eventStreamsList = stateQuery.data?.events ?? [];
   const { pinnedStreams, coincidenceWindow } = useEventStreamsStore();
-  const eventsByStream = useEventWindowQueries(pinnedStreams, selectionDraft, 2);
+  const eventChannelScope = useAppStore((s) => s.eventChannelScope);
+  const eventsByStream = useEventWindowQueries(
+    pinnedStreams,
+    selectionDraft,
+    EVENT_WINDOW_HALF_S,
+    eventChannelScope,
+  );
   // E1: filter once at the data seam — the overlay, coincidence, and counts
   // all read the surviving population. The raw `eventsByStream` is kept for the
   // PSD-lock ID lookup below (a selected-then-filtered event must still lock).

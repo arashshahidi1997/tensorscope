@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
-import { useEventWindowQueries, useStateQuery } from "./api/queries";
+import { EVENT_WINDOW_HALF_S, useEventWindowQueries, useStateQuery } from "./api/queries";
 import { usePairingStream } from "./api/pairingStream";
 import type { EventRecordDTO, SelectionDTO } from "./api/types";
 import { coincidenceIndicesByStream, extractEventTimes } from "./api/coincidence";
@@ -132,8 +132,14 @@ function App() {
 
   // Parallel window fetch for every pinned stream. Shared query keys mean
   // WorkspaceMain's parallel call hits the same cache entries (React Query
-  // dedupes by ["events-window", name, selection, halfWindow]).
-  const eventsByStream = useEventWindowQueries(pinnedStreams, selectionDraft, 2);
+  // dedupes by ["events-window", name, selection, halfWindow, scope]).
+  const eventChannelScope = useAppStore((s) => s.eventChannelScope);
+  const eventsByStream = useEventWindowQueries(
+    pinnedStreams,
+    selectionDraft,
+    EVENT_WINDOW_HALF_S,
+    eventChannelScope,
+  );
   // E1: apply the per-stream property filters once. The table, coincidence,
   // and counts all read the surviving population; the raw map stays available
   // for the filter UI's distribution histograms (E2).
@@ -179,11 +185,20 @@ function App() {
           ? String(Math.max(0, selectionState.timeCursor - 0.001))
           : String(meta.time_range[1] ?? selectionState.timeCursor + 100),
       });
+      // Honor the channel scope: "all" (default) jumps across every channel's
+      // events; "channel" restricts to the selected cell, like the table.
+      if (eventChannelScope === "channel") {
+        params.set("ap", String(selectionDraft.ap ?? 0));
+        params.set("ml", String(selectionDraft.ml ?? 0));
+      }
       api.getEventWindow(activeStreamName, params).then((evs: EventRecordDTO[]) => {
         const ev = direction === "prev" ? evs[evs.length - 1] : evs[0];
         if (!ev) return;
         const record = ev.record as Record<string, unknown>;
-        const t = Number(record.t ?? NaN);
+        // Manifest streams key time by their declared time_col (e.g. t_peak);
+        // only the demo fixtures use a literal `t` — same fallback the table
+        // rows use, without which j/k silently no-ops on real streams.
+        const t = Number(record.t ?? record[meta.time_col] ?? NaN);
         if (!Number.isFinite(t)) return;
         const eventId = record[meta.id_col] as string | number | undefined;
         if (eventId != null) eventNav.selectEvent(eventId, activeStreamName);
@@ -197,7 +212,7 @@ function App() {
         commitSelection({ ...selectionDraft, time: t });
       });
     },
-    [activeStreamName, eventStreams, selectionState.timeCursor, selectionDraft, eventNav], // eslint-disable-line react-hooks/exhaustive-deps
+    [activeStreamName, eventStreams, selectionState.timeCursor, selectionDraft, eventNav, eventChannelScope], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   // Global keyboard shortcuts for event review (j/k prev/next, y/n/m/u

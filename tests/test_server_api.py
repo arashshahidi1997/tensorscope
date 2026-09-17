@@ -120,6 +120,31 @@ def test_event_endpoints_and_missing_event() -> None:
     assert missing.json()["code"] == "not_found"
 
 
+def test_event_window_channel_scope() -> None:
+    """AP/ML params are optional channel scoping — omitted means ALL channels.
+
+    The frontend's default scope is "all channels" (it omits ap/ml): a
+    per-channel detection stream has few/no events on any single cell, so a
+    channel-scoped default rendered the whole review list silently empty
+    while in-window events existed (Pass-B finding, fable5-gui-ideation.md).
+    This locks the contract both ways.
+    """
+    client = _client()
+
+    unscoped = client.get("/api/v1/events/ripples/window", params={"t0": 0.0, "t1": 1.5})
+    scoped = client.get(
+        "/api/v1/events/ripples/window", params={"t0": 0.0, "t1": 1.5, "ap": 1, "ml": 2}
+    )
+    empty_cell = client.get(
+        "/api/v1/events/ripples/window", params={"t0": 0.0, "t1": 1.5, "ap": 0, "ml": 0}
+    )
+
+    assert unscoped.status_code == 200
+    assert len(unscoped.json()) == 3  # every in-window event, all channels
+    assert [e["record"]["event_id"] for e in scoped.json()] == [2]
+    assert empty_cell.json() == []  # the old default scope — silently empty
+
+
 def test_tensor_metadata_and_missing_tensor() -> None:
     client = _client()
 
