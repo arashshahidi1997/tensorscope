@@ -1,3 +1,4 @@
+import type { ColormapName } from "./colormaps";
 /**
  * Renderer abstraction for spatial electrode views. M3 addition.
  *
@@ -45,7 +46,7 @@ export type SpatialRenderOptions = {
    * legacy HSL ramp when unset for back-compat with views still on the old
    * "sequential" path.
    */
-  colormap?: "jet" | "viridis" | "inferno" | "cividis" | "sequential";
+  colormap?: ColormapName;
   /**
    * Audit A2: when true, use bilinear smoothing on the canvas blit so
    * neighbouring channels blend continuously. When false (default), upscale
