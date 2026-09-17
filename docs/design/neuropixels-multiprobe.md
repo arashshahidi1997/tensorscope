@@ -218,6 +218,32 @@ correctly; the crosshair aligns ECoG and NP even at different sample rates.
 **Outcome of Phase 3:** ECoG and NP visible at once, one time cursor,
 aligned crosshair — `/goal` met.
 
+**Phase 3 status (2026-09-17, `feat/npix-viewer`):** the viewer half is
+implemented and live-verified on real sub-01/ses-04 data (both probes):
+
+- Per-slot routing was already honoured end-to-end (Track C1–C5 on master);
+  re-verified per panel on a live dual-probe session — every `_npx` lane
+  resolves to `neuropixels`, paints, and shows no error badge.
+- **Clock alignment comes from the loader, not the slice path:** pixecog
+  `utils.io.load_aligned()` returns both streams on one shared TTL clock
+  (`time_offset_s = 0.0` = "no residual offset"), so lanes are physically
+  aligned with **no server change**. Acceptance: cursor at a strong NPX
+  ripple's manifest `t_peak` shows the ripple under the cursor in the NPX
+  lane and the concurrent ECoG physiology in the cortical lane (before the
+  loader fix the NPX lane was ~27.84 s off with identical axes).
+- A shared-playhead chip (`⌖ <t> s`, `CursorTimeChip`) on every time-axis
+  lane panel makes the shared clock legible.
+- Viewer blockers fixed on the same branch: all-channels event-review scope
+  (per-channel streams no longer list empty), bounds-aware session init
+  (non-zero-origin recordings no longer open on an empty t=0 window), and
+  the inspect-event v1 + bounded-zoom port.
+
+**Still open (the general fix, next milestone):** consuming a per-tensor
+`time_offset_s` in `apply_slice_request` (translate request → local clock,
+re-stamp the returned coord) for sessions NOT loaded via `load_aligned`,
+plus a per-probe sync/nudge popover for sub-ms refinement
+(`utils.clock_align.ecog_npix_group_delay`). §4's recipe stands.
+
 ## 6. Out of scope (deferred, with hooks left in)
 
 - **Per-region CMR.** NP spans regions; global CMR mixes them. The slim
