@@ -81,6 +81,19 @@ function App() {
     if (!initialized) initFromDTO(stateQuery.data.selection);
   }, [layoutDraft, selectedTensor, initialized, setLayoutDraft, setSelectedTensor, initFromDTO, stateQuery.data]);
 
+  // Bounds-aware init (1c): the server's default selection is t=0, so a
+  // recording whose time coord starts elsewhere opened on an empty window
+  // (spatial-map ERROR badge, every view slicing a void). Once the tensor
+  // meta is known, snap the transport into the data's real extent — a no-op
+  // whenever the current cursor/window already intersects the data, so URL
+  // restore, pair echo, and user navigation are never stomped. Gated on
+  // `initialized` so the server-selection bootstrap above runs first.
+  useEffect(() => {
+    const [lo, hi] = timeBounds;
+    if (!initialized || lo == null || hi == null) return;
+    useSelectionStore.getState().applyTimeBounds([lo, hi]);
+  }, [initialized, timeBounds]);
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);

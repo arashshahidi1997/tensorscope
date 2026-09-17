@@ -33,6 +33,12 @@ type SelectionStore = SelectionState & {
    * already inside the current window.
    */
   recenterWindowOn: (t: number) => void;
+  /**
+   * Snap the cursor + window into the data's real time extent when they fall
+   * entirely outside it (first contact on a non-zero-origin recording).
+   * No-op when the current transport already intersects the data.
+   */
+  applyTimeBounds: (bounds: [number, number]) => void;
   setSpatial: (s: SpatialSelection) => void;
   patchSpatial: (p: Partial<SpatialSelection>) => void;
   /**
@@ -117,6 +123,39 @@ function centeredWindow(t: number, width: number): TimeWindow {
   return [lo, lo + w];
 }
 
+/** First-contact window width (s) when the current window is degenerate. */
+const INIT_WINDOW_S = 10;
+
+/**
+ * Bounds-aware transport correction (1c). The server's default selection is
+ * `time = 0`, so a recording whose time coord starts elsewhere (e.g. a
+ * session-clock slab at t = 1080 s) opened on an empty window: every view
+ * sliced a void and the spatial map showed an ERROR badge until the user
+ * typed a valid time by hand.
+ *
+ * Returns the corrected `{timeCursor, timeWindow}` when the current cursor
+ * or window falls outside the data's real time extent, or `null` when the
+ * current transport already intersects the data (never stomps a real
+ * position — URL restore, pair echo, and user navigation win).
+ */
+export function boundsAwareTransport(
+  cursor: number,
+  window: TimeWindow,
+  bounds: [number, number],
+): { timeCursor: number; timeWindow: TimeWindow } | null {
+  const [lo, hi] = bounds;
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return null;
+  const cursorIn = cursor >= lo && cursor <= hi;
+  const intersects = window[1] > lo && window[0] < hi;
+  if (cursorIn && intersects) return null;
+  const currentWidth = windowDuration(window);
+  const width = Math.min(
+    clampWidth(currentWidth > 0 && Number.isFinite(currentWidth) ? currentWidth : INIT_WINDOW_S),
+    hi - lo,
+  );
+  return { timeCursor: lo, timeWindow: [lo, lo + width] };
+}
+
 export const useSelectionStore = create<SelectionStore>((set) => ({
   ...DEFAULT_STATE,
   hasInitialized: false,
@@ -143,6 +182,9 @@ export const useSelectionStore = create<SelectionStore>((set) => ({
 
   recenterWindowOn: (t) =>
     set((s) => ({ timeWindow: centeredWindow(t, windowDuration(s.timeWindow)) })),
+
+  applyTimeBounds: (bounds) =>
+    set((s) => boundsAwareTransport(s.timeCursor, s.timeWindow, bounds) ?? {}),
 
   setSpatial: (spatial) => set({ spatial }),
 

@@ -350,3 +350,46 @@ describe("event-centric navigation", () => {
     expect(getStore().timeCursor).toBe(8);       // updated
   });
 });
+
+describe("boundsAwareTransport / applyTimeBounds (1c bounds-aware init)", () => {
+  it("snaps the default t=0 transport into a non-zero-origin recording", () => {
+    getStore().applyTimeBounds([1080, 1680]);
+    const s = getStore();
+    expect(s.timeCursor).toBe(1080);
+    expect(s.timeWindow[0]).toBe(1080);
+    // default [0,1] width (1 s) is preserved
+    expect(s.timeWindow[1]).toBeCloseTo(1081);
+  });
+
+  it("is a no-op when the transport already intersects the data", () => {
+    useSelectionStore.setState({ timeCursor: 1200, timeWindow: [1195, 1205] });
+    getStore().applyTimeBounds([1080, 1680]);
+    expect(getStore().timeCursor).toBe(1200);
+    expect(getStore().timeWindow).toEqual([1195, 1205]);
+  });
+
+  it("snaps when the cursor is inside but the window is disjoint", () => {
+    useSelectionStore.setState({ timeCursor: 1200, timeWindow: [10, 20] });
+    getStore().applyTimeBounds([1080, 1680]);
+    expect(getStore().timeCursor).toBe(1080);
+    expect(getStore().timeWindow).toEqual([1080, 1090]);
+  });
+
+  it("caps the snapped width at the data extent and MAX_WINDOW_S", () => {
+    useSelectionStore.setState({ timeCursor: 0, timeWindow: [0, 500] });
+    getStore().applyTimeBounds([1000, 1004]);
+    expect(getStore().timeWindow).toEqual([1000, 1004]); // extent-capped
+    useSelectionStore.setState({ timeCursor: 0, timeWindow: [0, 500] });
+    getStore().applyTimeBounds([1000, 9000]);
+    const w = getStore().timeWindow;
+    expect(w[1] - w[0]).toBeLessThanOrEqual(MAX_WINDOW_S);
+  });
+
+  it("ignores degenerate bounds", () => {
+    useSelectionStore.setState({ timeCursor: 3, timeWindow: [2, 4] });
+    getStore().applyTimeBounds([5, 5]);
+    expect(getStore().timeCursor).toBe(3);
+    getStore().applyTimeBounds([NaN, 10]);
+    expect(getStore().timeCursor).toBe(3);
+  });
+});
