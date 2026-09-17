@@ -1,6 +1,8 @@
 # Neuropixels viewer — depth rendering, event tooling & coupling views
 
-**Status:** Proposed · **Branch:** `feat/npix-viewer` · 2026-09-17
+**Status:** Phase 1 SHIPPED (`feat/npix-event-tooling-p1`, 2026-09-17); Phases 2–3 gated on [DECISION]s · **Branch:** `feat/npix-viewer` · 2026-09-17
+
+**Phase-1 landings:** G1 ✅ (guard test `spatialOrientation.test.ts` + AP-major-vs-ADR-0012 note; merge [DECISION] still open) · G2 ✅ (label "Depth (µm)" + real extents; **verify result: deepest renders at the TOP** — the served coord is electrodes `y` = µm from tip, so the plan's "deepest at bottom" premise was wrong for this launcher; true DV depth lands with G3) · E1 ✅ (`run_detector` publishes `events_added`; no-reload verified live) · E2 ✅ (`cogpy_slowwave` was ALREADY registered on this branch — detectors.py:418; dropdown grouped local/adaptive vs threshold) · D2-colormap ✅ (RdBu_r + symmetric ±max + "CSD (µA/mm³)" colorbar; diverging default taken per recommendation).
 **Follows:** the simultaneous ECoG⇄NPX viewer (PR #1) + `load_aligned` (pixecog).
 Owner decisions flagged **[DECISION]**; cross-project (pixecog) work flagged **[pixecog]**.
 
