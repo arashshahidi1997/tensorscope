@@ -245,10 +245,20 @@ function measureContainer(el: HTMLDivElement): MeasuredSize | null {
   return { width: Math.round(width), height: Math.round(height) };
 }
 
+/**
+ * Visible channel count for the stacked timeseries. 16 gives each trace enough
+ * vertical px to show structure; scroll with `[` / `]` to page the rest. Also the
+ * width of the channel-windowed fetch (ADR-0011 Phase 1) — exported so the request
+ * layer (WorkspaceMain → useWorkspaceData) windows to the same band the view draws.
+ * See `docs/design/channel-viewport.md`.
+ */
+export const N_VISIBLE = 16;
+
 export function TimeseriesSliceView({
   slice,
   v2Data,
   v2BandpassData,
+  channelWindow,
   focusChannel,
   onClearFocusChannel,
   bandPreset,
@@ -274,6 +284,14 @@ export function TimeseriesSliceView({
   dataRange?: [number, number];
   v2Data?: ColumnarTimeseries | null;
   v2BandpassData?: ColumnarTimeseries | null;
+  /**
+   * Visible channel band (ADR-0011 Phase 1). When set, `v2Data` already holds
+   * ONLY these channels (the server windowed the fetch), so the view renders
+   * them directly and uses `.total` for the "X of N" chrome + scroll clamp
+   * instead of inferring the total from the fetched count. Null ⇒ legacy path:
+   * fetch all channels, slice to N_VISIBLE in-view (grid / small tensors).
+   */
+  channelWindow?: { start: number; total: number; channels: number[] } | null;
   bandPreset?: BandPreset;
   bandActive?: [number, number] | null;
   /**
@@ -441,7 +459,6 @@ export function TimeseriesSliceView({
   // 16 channels + the taller signal row (viewGridLayout) give each trace
   // enough px to show structure. Scroll with [ / ] to page through the rest.
   // See `docs/design/channel-viewport.md`.
-  const N_VISIBLE = 16;
   const tsFirstChannel = useAppStore((s) => s.tsFirstChannel);
   // We don't yet know totalChannels at this point in the hook order — the
   // shortcut handler uses the slice's series length when it fires.
@@ -456,20 +473,24 @@ export function TimeseriesSliceView({
     // user toggles the band on/off. NS2-equivalent "filtered view" — full
     // raw + filtered overlay is v0.1 work.
     const raw = v2Data ?? (slice ? extractTimeseriesColumnarFast(slice) : { times: [], series: [] });
-    const total = raw.series.length;
-    // Infer the grid's ML width from the FULL (uncapped) channel set. The
-    // flat-id mapping (ap*nML+ml) used for region lookup must match the
-    // backend's, which is keyed on the whole tensor — deriving nML from only
-    // the visible 32-channel window mislabels regions whenever the viewport
-    // is scrolled past the column that holds the max ML index.
+    // ADR-0011 Phase 1: when `channelWindow` is set the server already returned
+    // ONLY the visible band, so `raw.series` IS the window — render it directly
+    // and take the real total + start from the window (the fetched count is only
+    // N_VISIBLE, so it can't tell us the total or the offset). Otherwise (grid /
+    // small tensors that fetch everything) keep slicing the full set in-view.
+    const total = channelWindow ? channelWindow.total : raw.series.length;
+    // Infer the grid's ML width from the channel keys. Only grid tensors carry
+    // `ap-…-ml-…` keys and those are NEVER channel-windowed (grid has no
+    // `channel` dim → the server ignores `channels`), so `raw.series` here holds
+    // the full grid and the inference stays correct.
     let inferredNML = 0;
     for (const s of raw.series) {
       const m = /^ap-\d+-ml-(\d+)$/.exec(s.key);
       if (m) inferredNML = Math.max(inferredNML, Number(m[1]) + 1);
     }
     const maxStart = Math.max(0, total - N_VISIBLE);
-    const start = Math.min(maxStart, Math.max(0, tsFirstChannel));
-    const cap = raw.series.slice(start, start + N_VISIBLE);
+    const start = channelWindow ? channelWindow.start : Math.min(maxStart, Math.max(0, tsFirstChannel));
+    const cap = channelWindow ? raw.series : raw.series.slice(start, start + N_VISIBLE);
     if (bandActive && v2BandpassData) {
       // Filter is keyed to the same time-window query, so the channel
       // ordering matches. Substitute values, keep keys/labels.
@@ -498,7 +519,7 @@ export function TimeseriesSliceView({
       inferredNML,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [v2Data, slice?.payload, v2BandpassData, bandActive?.[0], bandActive?.[1], tsFirstChannel]);
+  }, [v2Data, slice?.payload, v2BandpassData, bandActive?.[0], bandActive?.[1], tsFirstChannel, channelWindow?.start, channelWindow?.total]);
 
   // Register channel-viewport keyboard shortcuts ( [ / ] ) on the page.
   // Active whenever a timeseries view is mounted (one per workspace).

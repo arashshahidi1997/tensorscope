@@ -18,6 +18,7 @@ import {
 } from "../../api/queries";
 import type { CoordSummary, ElectrodeLayoutDTO, SelectionDTO, TensorSliceRequestDTO } from "../../api/types";
 import { buildViewQueryStatusMaps } from "./viewQueryStatus";
+import { makeInspectTimeseriesRequest, MAX_INSPECT_WIDTH_S } from "./inspectWindow";
 
 /**
  * Resolve the tensor a given panel/slot should fetch against (Track C1).
@@ -81,6 +82,18 @@ export type WorkspaceDataParams = {
   activeBand: [number, number] | null;
   /** Measured timeseries panel width (CSS px) → viewport-derived point budget (P6). */
   timeseriesPixelWidth?: number;
+  /** Visible channel band for the timeseries fetch (ADR-0011 Phase 1), or null to
+   *  fetch all channels. When set, the main timeseries + its bandpass overlay ask
+   *  the server for only these channels (the npx lane still fetches all, C5). */
+  channelWindow?: { start: number; total: number; channels: number[] } | null;
+  /**
+   * Inspect-event mode (additive). When true the main timeseries fetch uses an
+   * un-decimated full-resolution request (`downsample:"none"`) over the visible
+   * window so a detected event shows individual oscillation cycles. The window
+   * is already clamped tight (≤ 8 s) by the inspect action before this fires.
+   * Leaves every other view — and normal (non-inspect) navigation — untouched.
+   */
+  inspectMode?: boolean;
 };
 
 /**
@@ -127,7 +140,15 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
     activeBand,
     timeseriesPixelWidth,
     depthCsd,
+    channelWindow,
+    inspectMode,
   } = params;
+
+  // ADR-0011 Phase 1: when the tensor has more channels than the viewport draws,
+  // fetch only the visible band. `channels` is a no-op server-side for grid
+  // (time, AP, ML) tensors (they have no `channel` dim), so this is safe to send
+  // unconditionally; it only takes effect for channel-native tensors.
+  const tsChannels = channelWindow?.channels ?? null;
 
   // Per-slot tensor routing (Track C1): each query fetches against its panel's
   // resolved tensor (`panelTensorOverrides[slot] ?? selectedTensor`). With no
@@ -137,14 +158,35 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
   const tensorFor = (slotId: string) =>
     resolveTensorForSlot(panelTensorOverrides, selectedTensor, slotId);
 
+  // Base timeseries request. Inspect-event mode (additive) swaps the decimated
+  // LOD request for a full-resolution `downsample:"none"` request over the
+  // (already tight, ≤ 8 s) visible window — every sample, so fast oscillations
+  // show individual cycles. Normal navigation (`inspectMode` false) takes the
+  // unchanged decimated path. `safeWindow` is the visible, data-clamped window;
+  // the inspect action has already narrowed it, so no LOD-tile overscan snap is
+  // wanted (we want exactly the visible samples, raw).
+  //
+  // Guard: only take the full-res path while the window is within the ≤ 8 s cap.
+  // If the user zooms back out while inspect mode is still on, the un-decimated
+  // fetch would risk the server's 60 k-sample cap (a 400); falling back to the
+  // decimated path keeps the panel correct (the action clamps to ≤ 8 s, so this
+  // only triggers on a deliberate widen — a small epsilon absorbs FP drift).
+  const inspectWindowOk =
+    inspectMode && safeWindow[1] - safeWindow[0] <= MAX_INSPECT_WIDTH_S + 1e-6;
+  const timeseriesBaseReq =
+    inspectWindowOk
+      ? makeInspectTimeseriesRequest(selectionDraft, safeWindow)
+      : makeDefaultSliceRequest("timeseries", selectionDraft, timeseriesFetchWindow, timeseriesPixelWidth);
+
   // Contract-v2 is the only data path. Each view's query returns the
   // pre-extracted shape the view consumes directly (no v1 long-format decode).
   const timeseriesV2Query = useV2TimeseriesQuery(
     tensorFor("timeseries"),
     flags.hasTimeseries
-      ? withFocus(
-          makeDefaultSliceRequest("timeseries", selectionDraft, timeseriesFetchWindow, timeseriesPixelWidth),
-        )
+      ? withFocus({
+          ...timeseriesBaseReq,
+          ...(tsChannels ? { channels: tsChannels } : {}),
+        })
       : null,
     "Timeseries",
   );
@@ -261,8 +303,9 @@ export function useWorkspaceData(params: WorkspaceDataParams) {
   const bandpassRequest =
     flags.hasTimeseries && activeBand
       ? withFocus({
-          ...makeDefaultSliceRequest("timeseries", selectionDraft, timeseriesFetchWindow, timeseriesPixelWidth),
+          ...timeseriesBaseReq,
           bandpass: { lo_hz: activeBand[0], hi_hz: activeBand[1] },
+          ...(tsChannels ? { channels: tsChannels } : {}),
         })
       : null;
   const timeseriesBandpassQuery = useV2TimeseriesQuery(

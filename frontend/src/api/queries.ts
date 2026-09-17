@@ -19,6 +19,7 @@
 import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type { BrainstateIntervalDTO, BrainstateMetaDTO, CoordSummary, ElectrodeLayoutDTO, EventAverageParamsDTO, EventRecordDTO, MaskStateDTO, ProbeLayoutDTO, ProcessingParamsDTO, ScalarSeriesDTO, SelectionDTO, TensorSliceRequestDTO, TrackMetaDTO } from "./types";
+import type { EventChannelScope } from "../store/appStore";
 import type { WorkspaceDAGDTO } from "../types/dag";
 import type { ColumnarTimeseries, PSDAvgData, SpatialCell, Spectrogram } from "./arrow";
 import { decodeLabeledTensor, type LabeledTensor, type PSDLiveDecoded } from "./v2-arrow";
@@ -214,22 +215,45 @@ export function useV2SpatialQuery(
   });
 }
 
+/**
+ * Half-width (s) of the event-window fetch around the cursor. Shared by the
+ * review-table + overlay call sites and the table's empty-state copy, so the
+ * message can't drift from what was actually fetched.
+ */
+export const EVENT_WINDOW_HALF_S = 2;
+
+/**
+ * Build the `/events/{name}/window` query params. Channel scope matters:
+ * with `"channel"` the server filters events to the selected AP/ML cell,
+ * which for per-channel detection streams silently empties the review list
+ * on the default (0,0) selection — so callers default to `"all"` (omit
+ * ap/ml) unless the user explicitly scoped to the selected cell.
+ */
+export function eventWindowParams(
+  selection: SelectionDTO,
+  halfWindow: number,
+  channelScope: EventChannelScope,
+): URLSearchParams {
+  const params = new URLSearchParams({
+    t0: String(Math.max(0, (selection.time ?? 0) - halfWindow)),
+    t1: String((selection.time ?? 0) + halfWindow),
+  });
+  if (channelScope === "channel") {
+    params.set("ap", String(selection.ap ?? 0));
+    params.set("ml", String(selection.ml ?? 0));
+  }
+  return params;
+}
+
 export function useEventWindowQuery(
   name: string | null,
   selection: SelectionDTO | null,
   halfWindow = 1,
+  channelScope: EventChannelScope = "all",
 ) {
   return useQuery({
-    queryKey: ["events-window", name, selection, halfWindow],
-    queryFn: () => {
-      const params = new URLSearchParams({
-        t0: String(Math.max(0, (selection?.time ?? 0) - halfWindow)),
-        t1: String((selection?.time ?? 0) + halfWindow),
-      });
-      if ((selection?.ap ?? null) !== null) params.set("ap", String(selection?.ap ?? 0));
-      if ((selection?.ml ?? null) !== null) params.set("ml", String(selection?.ml ?? 0));
-      return api.getEventWindow(name!, params);
-    },
+    queryKey: ["events-window", name, selection, halfWindow, channelScope],
+    queryFn: () => api.getEventWindow(name!, eventWindowParams(selection!, halfWindow, channelScope)),
     enabled: Boolean(name && selection),
   });
 }
@@ -250,20 +274,13 @@ export function useEventWindowQueries(
   names: string[],
   selection: SelectionDTO | null,
   halfWindow = 1,
+  channelScope: EventChannelScope = "all",
 ): Map<string, EventRecordDTO[]> {
   const enabled = Boolean(selection) && names.length > 0;
   const results = useQueries({
     queries: names.map((name) => ({
-      queryKey: ["events-window", name, selection, halfWindow],
-      queryFn: () => {
-        const params = new URLSearchParams({
-          t0: String(Math.max(0, (selection?.time ?? 0) - halfWindow)),
-          t1: String((selection?.time ?? 0) + halfWindow),
-        });
-        if ((selection?.ap ?? null) !== null) params.set("ap", String(selection?.ap ?? 0));
-        if ((selection?.ml ?? null) !== null) params.set("ml", String(selection?.ml ?? 0));
-        return api.getEventWindow(name, params);
-      },
+      queryKey: ["events-window", name, selection, halfWindow, channelScope],
+      queryFn: () => api.getEventWindow(name, eventWindowParams(selection!, halfWindow, channelScope)),
       enabled,
     })),
   });
@@ -527,6 +544,27 @@ export function snapWindowToLodTiles(window: [number, number]): [number, number]
   const start = Math.max(0, Math.floor(t0 / tile) * tile);
   const nTiles = Math.ceil(duration / tile) + 1;
   return [start, start + nTiles * tile];
+}
+
+/**
+ * Channel-window the timeseries fetch (ADR-0011 Phase 1). The view draws only
+ * `nVisible` channels but the server historically shipped all of them; this
+ * derives the visible `[start … start+nVisible)` band so the request can carry
+ * `channels` and the server slices + decimates only those. Returns `null` when
+ * windowing is pointless (no/unknown channel count, or the tensor has ≤ nVisible
+ * channels) — the caller then fetches the whole (small) channel set unchanged.
+ * `start` is clamped to `[0, total − nVisible]` so the band is always full and
+ * in-range even if the stored scroll offset is stale.
+ */
+export function computeChannelWindow(
+  totalChannels: number | null | undefined,
+  firstChannel: number,
+  nVisible: number,
+): { start: number; total: number; channels: number[] } | null {
+  if (typeof totalChannels !== "number" || totalChannels <= nVisible) return null;
+  const start = Math.min(Math.max(0, Math.floor(firstChannel)), totalChannels - nVisible);
+  const channels = Array.from({ length: nVisible }, (_, i) => start + i);
+  return { start, total: totalChannels, channels };
 }
 
 /**

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   clampWindow,
+  computeChannelWindow,
   eventTimeRange,
   lodTileSeconds,
   makeDefaultSliceRequest,
@@ -16,6 +17,34 @@ import type { CoordSummary, SelectionDTO } from "./types";
 
 const SEL: SelectionDTO = { time: 10, freq: 0, ap: 0, ml: 0, channel: null };
 const TIME_COORD: CoordSummary = { name: "time", dtype: "float64", length: 100, min: 0, max: 50 };
+
+describe("computeChannelWindow (ADR-0011 Phase 1)", () => {
+  it("returns null when windowing is pointless (few/unknown channels)", () => {
+    expect(computeChannelWindow(undefined, 0, 16)).toBeNull();
+    expect(computeChannelWindow(null, 0, 16)).toBeNull();
+    expect(computeChannelWindow(16, 0, 16)).toBeNull(); // exactly nVisible → no win
+    expect(computeChannelWindow(8, 0, 16)).toBeNull();
+  });
+
+  it("derives the visible band of exactly nVisible channels", () => {
+    const w = computeChannelWindow(256, 0, 16);
+    expect(w).toEqual({ start: 0, total: 256, channels: Array.from({ length: 16 }, (_, i) => i) });
+    const w2 = computeChannelWindow(256, 40, 16);
+    expect(w2?.start).toBe(40);
+    expect(w2?.channels).toEqual(Array.from({ length: 16 }, (_, i) => 40 + i));
+  });
+
+  it("clamps the start so the band stays in-range at the bottom", () => {
+    // total 256, nVisible 16 → max start is 240; a stale offset past it clamps.
+    const w = computeChannelWindow(256, 999, 16);
+    expect(w?.start).toBe(240);
+    expect(w?.channels[15]).toBe(255);
+  });
+
+  it("clamps a negative offset to 0", () => {
+    expect(computeChannelWindow(256, -5, 16)?.start).toBe(0);
+  });
+});
 
 describe("clampWindow", () => {
   it("clamps to the provided bounds", () => {

@@ -23,6 +23,13 @@ type EventsTabContentProps = {
   selectedEventId: string | number | null;
   onSelectTime: (t: number) => void;
   onSelectEvent: (eventId: string | number, streamName: string) => void;
+  /** Inspect an event at full resolution in a tight window (additive). */
+  onInspectEvent: (
+    eventId: string | number,
+    streamName: string,
+    t: number,
+    span?: [number, number] | null,
+  ) => void;
   onPrev: () => void;
   onNext: () => void;
   onActivateStream: (name: string) => void;
@@ -44,6 +51,7 @@ export function EventsTabContent({
   selectedEventId,
   onSelectTime,
   onSelectEvent,
+  onInspectEvent,
   onPrev,
   onNext,
   onActivateStream,
@@ -65,6 +73,7 @@ export function EventsTabContent({
       selectedEventId={selectedEventId}
       onSelectTime={onSelectTime}
       onSelectEvent={onSelectEvent}
+      onInspectEvent={onInspectEvent}
       onPrev={onPrev}
       onNext={onNext}
       onActivateStream={onActivateStream}

@@ -12,6 +12,15 @@ import type { SelectionDTO } from "../api/types";
 type SelectionStore = SelectionState & {
   /** True once the store has been bootstrapped from a server selection DTO. */
   hasInitialized: boolean;
+  /**
+   * Inspect-event mode (additive, "inspect one detected event at full
+   * resolution"). When true, the timeseries fetch switches to an un-decimated
+   * `downsample:"none"` request over the (already tight, ≤ 8 s) visible window
+   * so fast oscillations show individual cycles. Normal navigation leaves this
+   * false and is unchanged. Toggling it off restores the decimated LOD path.
+   */
+  inspectMode: boolean;
+  setInspectMode: (on: boolean) => void;
   /** Set the visible-window width (s), centered on the current cursor. */
   setDuration: (seconds: number) => void;
   setTimeCursor: (t: number) => void;
@@ -24,6 +33,12 @@ type SelectionStore = SelectionState & {
    * already inside the current window.
    */
   recenterWindowOn: (t: number) => void;
+  /**
+   * Snap the cursor + window into the data's real time extent when they fall
+   * entirely outside it (first contact on a non-zero-origin recording).
+   * No-op when the current transport already intersects the data.
+   */
+  applyTimeBounds: (bounds: [number, number]) => void;
   setSpatial: (s: SpatialSelection) => void;
   patchSpatial: (p: Partial<SpatialSelection>) => void;
   /**
@@ -77,17 +92,76 @@ export const windowDuration = (w: TimeWindow): number => w[1] - w[0];
 const within = (t: number, w: TimeWindow): boolean => t >= w[0] && t <= w[1];
 
 /**
+ * Maximum visible-window width (seconds) — bounded zoom (ADR-0011). The high-res
+ * trace is for oscillation timescales (≤ ~1 min); the whole session is the
+ * navigator's job (via its coarse overview). Crucially this also keeps every
+ * view's FETCH window under the server's memmap read cap — a long memory-mapped
+ * `.lfp` cannot be read whole, so an unbounded window would 400 ("zoom in").
+ */
+export const MAX_WINDOW_S = 60;
+
+/** Cap a width at `MAX_WINDOW_S` (lower bound left free so you can zoom in to ms). */
+const clampWidth = (width: number): number => Math.min(MAX_WINDOW_S, Math.max(0, width));
+
+/** Cap a window's width at `MAX_WINDOW_S`, keeping it centered on its midpoint. */
+function clampWindowWidth(w: TimeWindow): TimeWindow {
+  const width = w[1] - w[0];
+  if (width <= MAX_WINDOW_S) return w;
+  const center = (w[0] + w[1]) / 2;
+  const lo = Math.max(0, center - MAX_WINDOW_S / 2);
+  return [lo, lo + MAX_WINDOW_S];
+}
+
+/**
  * A window of the given width centered on `t`, clamped so it never starts
- * before 0. Width is preserved exactly even at the t=0 edge.
+ * before 0 and never wider than `MAX_WINDOW_S`. Width is preserved exactly
+ * (after the cap) even at the t=0 edge.
  */
 function centeredWindow(t: number, width: number): TimeWindow {
-  const lo = Math.max(0, t - width / 2);
-  return [lo, lo + width];
+  const w = clampWidth(width);
+  const lo = Math.max(0, t - w / 2);
+  return [lo, lo + w];
+}
+
+/** First-contact window width (s) when the current window is degenerate. */
+const INIT_WINDOW_S = 10;
+
+/**
+ * Bounds-aware transport correction (1c). The server's default selection is
+ * `time = 0`, so a recording whose time coord starts elsewhere (e.g. a
+ * session-clock slab at t = 1080 s) opened on an empty window: every view
+ * sliced a void and the spatial map showed an ERROR badge until the user
+ * typed a valid time by hand.
+ *
+ * Returns the corrected `{timeCursor, timeWindow}` when the current cursor
+ * or window falls outside the data's real time extent, or `null` when the
+ * current transport already intersects the data (never stomps a real
+ * position — URL restore, pair echo, and user navigation win).
+ */
+export function boundsAwareTransport(
+  cursor: number,
+  window: TimeWindow,
+  bounds: [number, number],
+): { timeCursor: number; timeWindow: TimeWindow } | null {
+  const [lo, hi] = bounds;
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return null;
+  const cursorIn = cursor >= lo && cursor <= hi;
+  const intersects = window[1] > lo && window[0] < hi;
+  if (cursorIn && intersects) return null;
+  const currentWidth = windowDuration(window);
+  const width = Math.min(
+    clampWidth(currentWidth > 0 && Number.isFinite(currentWidth) ? currentWidth : INIT_WINDOW_S),
+    hi - lo,
+  );
+  return { timeCursor: lo, timeWindow: [lo, lo + width] };
 }
 
 export const useSelectionStore = create<SelectionStore>((set) => ({
   ...DEFAULT_STATE,
   hasInitialized: false,
+  inspectMode: false,
+
+  setInspectMode: (on) => set({ inspectMode: on }),
 
   // Width is the single source of truth: setting a duration recenters the
   // window on the current cursor; nothing stores a second "viewportDuration".
@@ -104,10 +178,13 @@ export const useSelectionStore = create<SelectionStore>((set) => ({
         : centeredWindow(t, windowDuration(s.timeWindow)),
     })),
 
-  setTimeWindow: (timeWindow) => set({ timeWindow }),
+  setTimeWindow: (timeWindow) => set({ timeWindow: clampWindowWidth(timeWindow) }),
 
   recenterWindowOn: (t) =>
     set((s) => ({ timeWindow: centeredWindow(t, windowDuration(s.timeWindow)) })),
+
+  applyTimeBounds: (bounds) =>
+    set((s) => boundsAwareTransport(s.timeCursor, s.timeWindow, bounds) ?? {}),
 
   setSpatial: (spatial) => set({ spatial }),
 
@@ -149,7 +226,7 @@ export const useSelectionStore = create<SelectionStore>((set) => ({
   patch: (p) =>
     set((s) => ({
       timeCursor: p.timeCursor ?? s.timeCursor,
-      timeWindow: p.timeWindow ?? s.timeWindow,
+      timeWindow: p.timeWindow ? clampWindowWidth(p.timeWindow) : s.timeWindow,
       spatial: p.spatial ? { ...s.spatial, ...p.spatial } : s.spatial,
       freq: p.freq ? { ...s.freq, ...p.freq } : s.freq,
       event: p.event ? { ...s.event, ...p.event } : s.event,
@@ -189,7 +266,7 @@ export const useSelectionStore = create<SelectionStore>((set) => ({
       // 3. otherwise preserve the current window.
       let nextWindow: TimeWindow;
       if (timeWindow) {
-        nextWindow = timeWindow;
+        nextWindow = clampWindowWidth(timeWindow);
       } else if (!s.hasInitialized || !within(dto.time, s.timeWindow)) {
         nextWindow = centeredWindow(dto.time, windowDuration(s.timeWindow));
       } else {

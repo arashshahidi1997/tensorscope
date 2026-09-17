@@ -6,6 +6,7 @@
  * The view component is rendered as children and is not modified.
  */
 import type { ReactNode } from "react";
+import { CursorTimeChip } from "./CursorTimeChip";
 
 type ViewPanelProps = {
   viewId: string;
@@ -35,6 +36,9 @@ type ViewPanelProps = {
    *  isFetching: distinguishes "loading initial data" from "loading new
    *  window, showing previous". */
   isStale?: boolean;
+  /** Show the shared-playhead time chip (multi-probe lanes): the cursor's
+   *  absolute session-clock time, identical in every lane. */
+  showTimeChip?: boolean;
   children: ReactNode;
 };
 
@@ -51,12 +55,14 @@ export function ViewPanel({
   isFetching = false,
   isError = false,
   isStale = false,
+  showTimeChip = false,
   children,
 }: ViewPanelProps) {
   return (
     <div className="view-panel">
       <div className="view-panel-header">
         <span className="panel-title">{label}</span>
+        {showTimeChip && <CursorTimeChip />}
         {isError && (
           <span
             className="panel-badge panel-badge--error"

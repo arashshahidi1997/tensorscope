@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { decodeArrowSlice, extractSpatialCells, type SpatialCell } from "../../api/arrow";
 import { buildRegionResolver } from "../../api/probeLayout";
+import { deriveSpatialGrid } from "./spatialGrid";
 import { useProbeLayoutQuery } from "../../api/queries";
 import { useAppStore } from "../../store/appStore";
 import { useSelectionStore } from "../../store/selectionStore";
@@ -8,7 +9,6 @@ import { useMaskStore } from "../../store/maskStore";
 import { ChannelGridRenderer } from "./ChannelGridRenderer";
 import { ColorBar } from "./ColorBar";
 import { CoordReadout, joinCoords } from "./CoordReadout";
-import { unmaskedCellRange } from "./colorRange";
 import type { SpatialCellWithId } from "./SpatialRenderer";
 import type { SliceViewProps } from "./viewTypes";
 
@@ -65,42 +65,36 @@ export function SpatialMapSliceView({
     { x: number; y: number; region: string; label: string | null } | null
   >(null);
 
-  // Decode slice data once per slice prop change.
+  // Decode + derive render inputs once per data/mask change (pure logic in
+  // spatialGrid.ts). Hover-only renders no longer re-run the Arrow decode or
+  // write refs mid-render — the loop-prone pattern class behind the
+  // "Maximum update depth exceeded" cascade (see WorkspaceMain's navigator
+  // render-prop note).
+  const derived = useMemo(() => {
+    const decoded = !v2Cells && slice ? decodeArrowSlice(slice) : null;
+    const rawCells = v2Cells ?? (decoded ? extractSpatialCells(decoded) : []);
+    return deriveSpatialGrid(rawCells, maskedArray ? new Set(maskedArray) : undefined);
+  }, [slice, v2Cells, maskedArray]);
+
+  // Refs mirror the memoised value so the ResizeObserver closure (mounted
+  // once) always repaints with current data.
   const cellsRef = useRef<SpatialCellWithId[]>([]);
   const nAPRef = useRef(0);
   const nMLRef = useRef(0);
   const minValueRef = useRef(0);
   const maxValueRef = useRef(1);
-
-  // Decode and transform SpatialCell[] → SpatialCellWithId[] outside of JSX.
-  // v2 supplies the cells pre-extracted; v1 decodes the long-format slice.
-  const decoded = !v2Cells && slice ? decodeArrowSlice(slice) : null;
-  const rawCells = v2Cells ?? (decoded ? extractSpatialCells(decoded) : []);
-
-  if (rawCells.length > 0) {
-    const nML = Math.max(...rawCells.map((c) => c.ml)) + 1;
-    nMLRef.current = nML;
-    nAPRef.current = Math.max(...rawCells.map((c) => c.ap)) + 1;
-    // Color range excludes masked channels so a bad channel doesn't wash out
-    // the colormap for the rest.
-    [minValueRef.current, maxValueRef.current] = unmaskedCellRange(rawCells, nML, maskedSet);
-    cellsRef.current = rawCells.map((c) => ({
-      id: c.ap * nML + c.ml,
-      apIdx: c.ap,
-      mlIdx: c.ml,
-      value: c.value,
-    }));
-  } else {
-    cellsRef.current = [];
-    nAPRef.current = 0;
-    nMLRef.current = 0;
-  }
+  cellsRef.current = derived.cells;
+  nAPRef.current = derived.nAP;
+  nMLRef.current = derived.nML;
+  minValueRef.current = derived.minValue;
+  maxValueRef.current = derived.maxValue;
 
   // Resolve the probe layout against the current grid width. Memoising
-  // here avoids rebuilding the Map on hover-only renders.
+  // here avoids rebuilding the Map on hover-only renders (keyed on the
+  // derived width, not a ref — a ref in a dep array never retriggers).
   const regionResolver = useMemo(
-    () => buildRegionResolver(probeLayout, nMLRef.current),
-    [probeLayout, nMLRef.current],
+    () => buildRegionResolver(probeLayout, derived.nML),
+    [probeLayout, derived.nML],
   );
 
   // Initialize renderer when canvas mounts, and handle resize via ResizeObserver.

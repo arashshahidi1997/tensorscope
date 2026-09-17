@@ -35,6 +35,10 @@ function getViewLabel(viewId: string): string {
   return desc?.label ?? viewId;
 }
 
+/** Views with a time axis — in the probe-lanes layout their panels carry the
+ *  shared-playhead chip so cross-probe alignment is legible at a glance. */
+const TIME_AXIS_VIEWS = new Set(["timeseries", "depth_map", "spectrogram_live"]);
+
 export function ViewGrid({
   viewElements,
   fetchingByView,
@@ -133,6 +137,7 @@ export function ViewGrid({
                         isFetching={fetchingByView?.[key] ?? false}
                         isError={erroredByView?.[key] ?? false}
                         isStale={staleByView?.[key] ?? false}
+                        showTimeChip={gridLayout === "probe_lanes" && TIME_AXIS_VIEWS.has(slot.viewId)}
                       >
                         {el}
                       </ViewPanel>

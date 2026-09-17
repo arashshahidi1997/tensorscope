@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api/client";
-import { useEventWindowQueries, useStateQuery } from "./api/queries";
+import { EVENT_WINDOW_HALF_S, useEventWindowQueries, useStateQuery, useTensorQuery } from "./api/queries";
 import { usePairingStream } from "./api/pairingStream";
 import type { EventRecordDTO, SelectionDTO } from "./api/types";
 import { coincidenceIndicesByStream, extractEventTimes } from "./api/coincidence";
@@ -15,7 +15,9 @@ import { ExploreTabContent } from "./components/layout/ExploreTabContent";
 import { EventsTabContent } from "./components/layout/EventsTabContent";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
 import { useEventNavigation } from "./components/views/useEventNavigation";
+import { inspectWindowFor } from "./components/views/inspectWindow";
 import { useEventReviewShortcuts } from "./components/views/useEventReviewShortcuts";
+import { useTimeCursorShortcuts } from "./components/views/useTimeCursorShortcuts";
 import { useGestureShortcuts } from "./components/views/useGestureShortcuts";
 import { buildStreamColorMap } from "./components/views/eventStreamColors";
 import { useAppStore } from "./store/appStore";
@@ -50,6 +52,27 @@ function App() {
   // Event-centric navigation — updates selectionStore.event on row/marker click
   const eventNav = useEventNavigation();
 
+  // Active tensor metadata — used to derive the smallest time unit (sample
+  // period) for arrow-key cursor nudging.
+  const tensorMeta = useTensorQuery(selectedTensor);
+  const { timeStep, timeBounds } = useMemo(() => {
+    const tc = tensorMeta.data?.coords.find((c) => c.name === "time");
+    const lo = tc ? Number(tc.min) : NaN;
+    const hi = tc ? Number(tc.max) : NaN;
+    const n = tc?.length ?? 0;
+    const step =
+      n > 1 && Number.isFinite(lo) && Number.isFinite(hi)
+        ? (hi - lo) / (n - 1)
+        : null;
+    return {
+      timeStep: step,
+      timeBounds: [
+        Number.isFinite(lo) ? lo : null,
+        Number.isFinite(hi) ? hi : null,
+      ] as [number | null, number | null],
+    };
+  }, [tensorMeta.data]);
+
   // Bootstrap stores from the first API response
   useEffect(() => {
     if (!stateQuery.data) return;
@@ -57,6 +80,19 @@ function App() {
     if (!layoutDraft) setLayoutDraft(stateQuery.data.layout);
     if (!initialized) initFromDTO(stateQuery.data.selection);
   }, [layoutDraft, selectedTensor, initialized, setLayoutDraft, setSelectedTensor, initFromDTO, stateQuery.data]);
+
+  // Bounds-aware init (1c): the server's default selection is t=0, so a
+  // recording whose time coord starts elsewhere opened on an empty window
+  // (spatial-map ERROR badge, every view slicing a void). Once the tensor
+  // meta is known, snap the transport into the data's real extent — a no-op
+  // whenever the current cursor/window already intersects the data, so URL
+  // restore, pair echo, and user navigation are never stomped. Gated on
+  // `initialized` so the server-selection bootstrap above runs first.
+  useEffect(() => {
+    const [lo, hi] = timeBounds;
+    if (!initialized || lo == null || hi == null) return;
+    useSelectionStore.getState().applyTimeBounds([lo, hi]);
+  }, [initialized, timeBounds]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -132,8 +168,14 @@ function App() {
 
   // Parallel window fetch for every pinned stream. Shared query keys mean
   // WorkspaceMain's parallel call hits the same cache entries (React Query
-  // dedupes by ["events-window", name, selection, halfWindow]).
-  const eventsByStream = useEventWindowQueries(pinnedStreams, selectionDraft, 2);
+  // dedupes by ["events-window", name, selection, halfWindow, scope]).
+  const eventChannelScope = useAppStore((s) => s.eventChannelScope);
+  const eventsByStream = useEventWindowQueries(
+    pinnedStreams,
+    selectionDraft,
+    EVENT_WINDOW_HALF_S,
+    eventChannelScope,
+  );
   // E1: apply the per-stream property filters once. The table, coincidence,
   // and counts all read the surviving population; the raw map stays available
   // for the filter UI's distribution histograms (E2).
@@ -179,11 +221,20 @@ function App() {
           ? String(Math.max(0, selectionState.timeCursor - 0.001))
           : String(meta.time_range[1] ?? selectionState.timeCursor + 100),
       });
+      // Honor the channel scope: "all" (default) jumps across every channel's
+      // events; "channel" restricts to the selected cell, like the table.
+      if (eventChannelScope === "channel") {
+        params.set("ap", String(selectionDraft.ap ?? 0));
+        params.set("ml", String(selectionDraft.ml ?? 0));
+      }
       api.getEventWindow(activeStreamName, params).then((evs: EventRecordDTO[]) => {
         const ev = direction === "prev" ? evs[evs.length - 1] : evs[0];
         if (!ev) return;
         const record = ev.record as Record<string, unknown>;
-        const t = Number(record.t ?? NaN);
+        // Manifest streams key time by their declared time_col (e.g. t_peak);
+        // only the demo fixtures use a literal `t` — same fallback the table
+        // rows use, without which j/k silently no-ops on real streams.
+        const t = Number(record.t ?? record[meta.time_col] ?? NaN);
         if (!Number.isFinite(t)) return;
         const eventId = record[meta.id_col] as string | number | undefined;
         if (eventId != null) eventNav.selectEvent(eventId, activeStreamName);
@@ -197,7 +248,33 @@ function App() {
         commitSelection({ ...selectionDraft, time: t });
       });
     },
-    [activeStreamName, eventStreams, selectionState.timeCursor, selectionDraft, eventNav], // eslint-disable-line react-hooks/exhaustive-deps
+    [activeStreamName, eventStreams, selectionState.timeCursor, selectionDraft, eventNav, eventChannelScope], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  // Inspect-event action (additive): re-frame the timeseries to a TIGHT window
+  // around the event and switch the timeseries fetch to full resolution
+  // (downsample:"none") so fast oscillations (ripples/spindles) show individual
+  // cycles. The window is clamped to ≤ MAX_INSPECT_WIDTH_S so the un-decimated
+  // fetch can't trip the server's 60 k-sample cap. Distinct from a plain row
+  // click (which only moves the cursor / window): inspect ALSO flips the store's
+  // `inspectMode` so `useWorkspaceData` swaps in the full-res request.
+  const inspectEvent = useCallback(
+    (
+      eventId: string | number,
+      streamName: string,
+      t: number,
+      span?: [number, number] | null,
+    ) => {
+      if (!Number.isFinite(t)) return;
+      const win = inspectWindowFor(t, span ?? null);
+      eventNav.selectEvent(eventId, streamName);
+      const st = useSelectionStore.getState();
+      st.setInspectMode(true);
+      st.setTimeWindow(win);
+      st.setTimeCursor(t);
+      commitSelection({ ...selectionDraft, time: t });
+    },
+    [eventNav, selectionDraft], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   // Global keyboard shortcuts for event review (j/k prev/next, y/n/m/u
@@ -214,6 +291,21 @@ function App() {
   // Bokeh-style gesture shortcuts: p/b/s switch the active drag tool,
   // w toggles wheel-zoom, c toggles the crosshair inspector.
   useGestureShortcuts();
+
+  // Arrow keys nudge the time cursor by one sample period (the smallest unit);
+  // Shift+arrows step by 5× the sample period. Local-only (no server commit):
+  // matches the movie/animation cursor drivers — the cursor-windowed views
+  // refetch off the live store cursor anyway, and a per-keypress PUT + state
+  // refetch would be pure overhead during held-down stepping.
+  const nudgeCursor = useCallback(
+    (t: number) => useSelectionStore.getState().setTimeCursor(t),
+    [],
+  );
+  useTimeCursorShortcuts({
+    step: timeStep,
+    bounds: timeBounds,
+    commit: nudgeCursor,
+  });
 
   if (stateQuery.isLoading || !stateQuery.data || !layoutDraft) {
     return <div className="empty-state">Connecting to TensorScope API…</div>;
@@ -257,7 +349,13 @@ function App() {
                 selectedTime={selectionState.timeCursor}
                 selectedEventId={eventNav.selectedEventId}
                 onSelectTime={(t) => commitSelection({ ...selectionDraft, time: t })}
-                onSelectEvent={(eventId, streamName) => eventNav.selectEvent(eventId, streamName)}
+                onSelectEvent={(eventId, streamName) => {
+                  // A plain row click is normal navigation: leave inspect mode
+                  // (so the timeseries returns to the decimated LOD path).
+                  useSelectionStore.getState().setInspectMode(false);
+                  eventNav.selectEvent(eventId, streamName);
+                }}
+                onInspectEvent={inspectEvent}
                 onPrev={() => goToEvent("prev")}
                 onNext={() => goToEvent("next")}
                 onActivateStream={setActiveStream}
