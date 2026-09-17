@@ -97,11 +97,38 @@ export function RasterView({ slice, tensorName }: SliceViewProps & { tensorName?
     return <div className="placeholder">No raster data</div>;
   }
 
+  // G2 (npix-event-tooling-plan.md): real µm extents on the depth axis. Row 0
+  // renders at the TOP of the image, so the top tick is depths[0]. NOTE the
+  // served coord is electrodes `y` = µm FROM THE TIP (ascending sort ⇒ tip =
+  // anatomically deepest at the TOP) — flagged in the plan's G2 verify; a true
+  // dorsoventral µm depth arrives with G3's [pixecog] loader work.
+  const depthTicks = raster.depths
+    ? { top: raster.depths[0], bottom: raster.depths[raster.depths.length - 1] }
+    : null;
+
   return (
     <div style={{ display: "flex", width: "100%", height: "100%", gap: 4 }}>
       <div className="axis-canvas-wrap" style={{ flex: 1, minHeight: 0 }}>
-        <div className="axis-y-label">{raster.depths ? "Depth" : "Channel"}</div>
-        <div className="axis-y-ticks" />
+        <div className="axis-y-label">{raster.depths ? "Depth (µm)" : "Channel"}</div>
+        <div className="axis-y-ticks" data-testid="depth-axis-ticks">
+          {depthTicks && (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "space-between",
+                height: "100%",
+                fontSize: 10,
+                color: "#8b949e",
+                textAlign: "right",
+                fontVariantNumeric: "tabular-nums",
+              }}
+            >
+              <span>{Math.round(depthTicks.top)}</span>
+              <span>{Math.round(depthTicks.bottom)}</span>
+            </div>
+          )}
+        </div>
         <div className="axis-canvas-area" ref={containerRef} style={{ position: "relative" }}>
           <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />
         </div>
